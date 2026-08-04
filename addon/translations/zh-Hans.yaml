@@ -1,0 +1,35 @@
+---
+configuration:
+  access_mode:
+    name: 画面访问范围
+    description: >-
+      谁可以访问本加载项。选 “local” 时一切都留在本机 —— Home Assistant
+      与它同机所以能读取画面，局域网上的其他设备访问不到，也不需要任何密码。选 “lan” 会把画面和本加载项的页面一起发布到整个局域网，供 Frigate
+      等软件拉取；此时 RTSP 用户名、RTSP 密码和网页密码全部变为必填，缺任何一项加载项都不会启动。
+  rtsp_username:
+    name: RTSP 用户名
+    description: >-
+      画面访问范围为 “lan” 时必填。局域网中任何知道用户名和密码的人，都能看到你的摄像头画面。
+  rtsp_password:
+    name: RTSP 密码
+    description: >-
+      画面访问范围为 “lan” 时必填。一个没有密码保护、端口又众所周知的摄像头画面，几秒钟就会被局域网扫描发现。
+  web_password:
+    name: 网页密码
+    description: >-
+      保护本加载项的页面 —— 那个页面能看到你的摄像头画面，也能解绑你的小米账号。画面访问范围为 “lan”
+      时必填，因为那会把页面放到局域网上。其他情况下可以不填；但只要你设置了，任何部署方式下都会强制校验，通过 Home Assistant 面板进入时也一样。
+  video_quality:
+    name: 画质
+    description: >-
+      向摄像头本身请求的画质。它改变的是所有软件读取的那路视频流（包括录像），而不只是本加载项页面上的画面。“low”
+      用于仪表盘缩略图已经足够，对网络和本机的占用最小；“high” 细节更多，但占用更多带宽，解码方也更吃力。
+  enable_audio:
+    name: 包含声音
+    description: >-
+      把摄像头的麦克风声音一并传输。除非你用的软件确实会播放，否则建议关闭：开着就会占用带宽。
+  log_level:
+    name: 日志级别
+    description: >-
+      本加载项写入日志的详细程度。日常使用保持 “info” 即可；反馈问题前调到 “debug”，这也会让 go2rtc 一并输出它的运行情况。“trace”
+      更详细，而 “warning”“error”“fatal” 依次更安静。

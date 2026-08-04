@@ -1,0 +1,17 @@
+# Editors
+.DS_Store
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv311/
+
+# The vendor's streaming library is fetched at build time and is not ours to
+# redistribute -- see the licence note in the README.
+libs/
+*.so
+*.dylib
+*.dll

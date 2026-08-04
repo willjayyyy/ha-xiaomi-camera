@@ -1,0 +1,7 @@
+---
+# Home Assistant add-on repository metadata. Adding this repository's URL under
+# Settings -> Add-ons -> Add-on Store -> Repositories makes the bridge
+# installable; the integration can then install it automatically.
+name: Xiaomi Camera
+url: https://github.com/willjayyyy/ha-xiaomi-camera
+maintainer: willjayyyy

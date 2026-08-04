@@ -1,0 +1,17 @@
+target-version = "py311"
+line-length = 88
+
+[lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "SIM",  # simplify
+    "RUF",  # ruff-specific
+]
+
+[lint.per-file-ignores]
+# Tests deliberately assert on literal protocol values.
+"tests/*" = ["S101"]

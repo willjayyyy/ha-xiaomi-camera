@@ -1,0 +1,47 @@
+---
+configuration:
+  access_mode:
+    name: Stream access
+    description: >-
+      Who may reach this add-on. "local" keeps everything on this machine — Home
+      Assistant reads the streams because it shares that machine, nothing else on
+      your network can, and no passwords are needed. "lan" publishes the streams and
+      this add-on's page to your whole network so software such as Frigate can pull
+      them, and then the RTSP username, the RTSP password and the web page password
+      all become required: the add-on will not start without them.
+  rtsp_username:
+    name: RTSP username
+    description: >-
+      Required when stream access is "lan". Anyone on your network who knows this
+      and the password can watch your cameras.
+  rtsp_password:
+    name: RTSP password
+    description: >-
+      Required when stream access is "lan". An unprotected camera stream on a well-
+      known port is found by a scan within seconds.
+  web_password:
+    name: Web page password
+    description: >-
+      Protects this add-on's page, which can view your cameras and unlink your
+      Xiaomi account. Required when stream access is "lan", because that puts the
+      page on your network. Optional otherwise — but if you set it, it is always
+      asked for, in every deployment and through the Home Assistant panel as well.
+  video_quality:
+    name: Video quality
+    description: >-
+      What to ask the camera itself for, which changes the stream everything reads —
+      recordings included — not just the picture on this add-on's page. "low" is
+      enough for a dashboard tile and the lightest on your network and this machine;
+      "high" gives more detail for more bandwidth and more decoding work.
+  enable_audio:
+    name: Include audio
+    description: >-
+      Carry the camera's microphone alongside the video. Leave it off unless
+      something you use actually plays it: it costs bandwidth either way.
+  log_level:
+    name: Log level
+    description: >-
+      How much this add-on writes to its log. "info" suits normal use; turn it up to
+      "debug" before reporting a problem, which also makes go2rtc report what it is
+      doing. "trace" adds more still, and "warning", "error" and "fatal"
+      progressively quieten it.

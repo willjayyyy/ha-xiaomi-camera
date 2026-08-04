@@ -1,0 +1,14 @@
+# Checksums for the go2rtc release pinned as GO2RTC_VERSION in the Dockerfile.
+#
+# Verified at build time. Pinning the version alone still trusts whatever the
+# release URL serves; a re-pointed tag or a replaced asset would otherwise be
+# undetectable, and this binary runs alongside the closed-source streaming
+# library on the host network.
+#
+# Regenerate when bumping GO2RTC_VERSION:
+#   for a in amd64 arm64; do
+#     curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v<VERSION>/go2rtc_linux_$a" \
+#       | sha256sum | sed "s|-$|go2rtc_linux_$a|"
+#   done
+aca941066c816cd69f4d689bf556f924057f5087449c2fdd7d5854d9aaec8ea9 go2rtc_linux_amd64
+d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867f38d2777a go2rtc_linux_arm64

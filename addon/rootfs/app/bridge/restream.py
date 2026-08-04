@@ -1,0 +1,290 @@
+"""go2rtc supervision.
+
+The SDK hands over an Annex-B elementary stream, which no player can consume
+directly: it carries no container, no timestamps a decoder can seek on, and no
+transport. go2rtc adds all three, and speaks RTSP, WebRTC and HLS so the same
+session serves Home Assistant, a browser and an external NVR alike.
+
+Streams are pulled from this bridge's own HTTP endpoint rather than pushed,
+which keeps go2rtc's supervision (retry, backoff, client tracking) in charge of
+the connection lifetime.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from pathlib import Path
+from urllib.parse import quote
+
+import yaml
+
+from .config import Options
+from .const import (
+    API_PORT,
+    GO2RTC_API_PORT,
+    LOOPBACK,
+    RTSP_PORT,
+    SRTP_PORT,
+    WEBRTC_PORT,
+)
+from .redact import safe_error
+
+_LOGGER = logging.getLogger(__name__)
+
+_CONFIG_PATH = Path("/data/go2rtc.yaml")
+_BINARY = "/usr/local/bin/go2rtc"
+
+#: Restart delay if go2rtc exits unexpectedly. Long enough to avoid a hot loop,
+#: short enough that a transient failure self-heals before anyone notices.
+_RESTART_DELAY_SECONDS = 5.0
+
+
+#: Our log levels mapped onto go2rtc's, which names them differently and has
+#: no equivalent for the ones in between. Default `info` rather than `warn`:
+#: go2rtc reports a source it cannot start there, and that is the failure this
+#: add-on most needs explained.
+_GO2RTC_LOG_LEVELS = {
+    "trace": "trace",
+    "debug": "debug",
+    "info": "info",
+    "notice": "info",
+    "warning": "warn",
+    "error": "error",
+    "fatal": "fatal",
+}
+
+
+#: How go2rtc should encode H.264. Its own default is `-c:v libx264`, which is
+#: GPL and therefore absent from the LGPL ffmpeg this image ships. openh264 is
+#: Cisco's BSD-licensed encoder and is present in that build; the Dockerfile
+#: checks for it so a build that lost it fails there rather than here.
+#:
+#: The x264-only knobs go with it: `-preset` and `-tune` are not openh264
+#: options. A bitrate takes their place, because openh264 targets one rather
+#: than a quality level.
+#: `-g 25` rather than go2rtc's default of 50: a keyframe roughly every second
+#: at these frame rates. Home Assistant's live view is HLS, which cannot begin
+#: at anything else and buffers a segment or two first, so the keyframe
+#: interval is most of the wait before a picture appears. Halving it halves
+#: that wait, and more keyframes at a fixed bitrate costs a little detail --
+#: worth it for a view someone is waiting on.
+_H264_ENCODER = "-c:v libopenh264 -g 25 -profile:v high -b:v 2M -pix_fmt:v yuv420p"
+
+
+def stream_name(did: str) -> str:
+    """Stable go2rtc stream name for a camera.
+
+    Device identifiers are numeric, and go2rtc stream names appear in URLs, so
+    they are prefixed to keep them readable and collision-free.
+    """
+    return f"camera_{did}"
+
+
+def h264_stream_name(did: str) -> str:
+    """Name of the camera's compatibility stream.
+
+    A separate stream rather than a second source on the same one. Offering
+    both codecs under one name leaves the choice to whatever connects, so an
+    NVR that accepts either could end up recording a re-encode of a stream it
+    could have copied. Two names mean each URL says exactly what it carries.
+    """
+    return f"{stream_name(did)}_h264"
+
+
+def build_config(options: Options, dids: list[str]) -> dict:
+    """Render the go2rtc configuration.
+
+    ``#video=copy`` matters: the elementary stream is repackaged without
+    re-encoding. Cameras deliver H.265, and transcoding it would cost more CPU
+    than most Home Assistant hosts have to spare. Clients that cannot decode
+    H.265 are handled by go2rtc negotiating per client, not by transcoding
+    everything up front.
+
+    There is deliberately no MJPEG source here. An earlier version added one so
+    the add-on page could show a preview, which meant ffmpeg re-encoding H.265
+    for a picture the vendor SDK was already decoding to JPEG on its own. The
+    page now reads those frames directly and go2rtc is left to the job it is
+    good at.
+    """
+    bind = options.bind_address
+    streams: dict[str, str] = {}
+    for did in dids:
+        streams[stream_name(did)] = (
+            f"ffmpeg:http://{LOOPBACK}:{API_PORT}/api/stream/{did}#video=copy"
+        )
+        # Names the stream above rather than repeating the URL, so the two
+        # share one session on the camera instead of opening a second.
+        streams[h264_stream_name(did)] = f"ffmpeg:{stream_name(did)}#video=h264"
+
+    config: dict = {
+        # Quiet by default, but follows the add-on's own level when raised.
+        # Diagnosing a stream that will not start means reading what go2rtc
+        # says about it, and the troubleshooting instructions tell users to
+        # turn the level up before reporting a problem.
+        "log": {"level": _GO2RTC_LOG_LEVELS.get(options.log_level, "info")},
+        "api": {"listen": f"{LOOPBACK}:{GO2RTC_API_PORT}"},
+        "rtsp": {"listen": f"{bind}:{RTSP_PORT}"},
+        "webrtc": {"listen": f"{bind}:{WEBRTC_PORT}"},
+        # Every listener go2rtc offers is pinned explicitly. Modules left out of
+        # the configuration fall back to go2rtc's own defaults, several of which
+        # bind all interfaces -- srtp on :8443 among them -- which would quietly
+        # contradict the loopback-only guarantee of `local` mode.
+        "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
+        "streams": streams,
+        "ffmpeg": {"h264": _H264_ENCODER},
+    }
+
+    if options.requires_credentials:
+        config["rtsp"]["username"] = options.rtsp_username
+        config["rtsp"]["password"] = options.rtsp_password
+
+    return config
+
+
+class Restreamer:
+    """Runs go2rtc and keeps its configuration in sync with the camera list."""
+
+    def __init__(self, options: Options) -> None:
+        self._options = options
+        self._process: asyncio.subprocess.Process | None = None
+        self._supervisor: asyncio.Task[None] | None = None
+        self._dids: list[str] = []
+
+    @property
+    def requires_credentials(self) -> bool:
+        return self._options.requires_credentials
+
+    def rtsp_url(self, did: str) -> str:
+        """RTSP URL for a camera, always without embedded credentials.
+
+        Home Assistant shares the host network namespace, so loopback reaches
+        the listener even when it is bound to all interfaces.
+
+        The password is deliberately not interpolated here. A URL carrying
+        ``user:password@`` is copied into Home Assistant's config entry state,
+        its diagnostics downloads and debug logs, and is rendered verbatim in
+        this add-on's own UI -- it leaks by construction. Consumers that need
+        credentials read them from the add-on configuration.
+        """
+        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did)}"
+
+    def rtsp_url_h264(self, did: str) -> str:
+        """RTSP URL for the H.264 version of a camera's stream."""
+        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{h264_stream_name(did)}"
+
+    def internal_rtsp_url(self, did: str) -> str:
+        """RTSP URL for this process's own use, credentials included.
+
+        Separate from :meth:`rtsp_url` on purpose. That one is handed to Home
+        Assistant and rendered in this add-on's page, so it must never carry a
+        password; this one is read by ffmpeg inside the container and never
+        leaves it. Two callers with genuinely different requirements, rather
+        than one URL compromising for both.
+        """
+        if not self.requires_credentials:
+            return self.rtsp_url(did)
+        credentials = (
+            f"{quote(self._options.rtsp_username, safe='')}:"
+            f"{quote(self._options.rtsp_password, safe='')}@"
+        )
+        return f"rtsp://{credentials}{LOOPBACK}:{RTSP_PORT}/{stream_name(did)}"
+
+    async def async_apply(self, dids: list[str]) -> None:
+        """Write the configuration and (re)start go2rtc if the set changed."""
+        # Compare as a set: the cloud does not guarantee a stable device order,
+        # and treating a reordering as a change would restart go2rtc -- dropping
+        # every live viewer -- on an unrelated refresh.
+        if set(dids) == set(self._dids) and self._process is not None:
+            return
+        self._dids = sorted(dids)
+        _CONFIG_PATH.write_text(
+            yaml.safe_dump(build_config(self._options, self._dids), sort_keys=False),
+            encoding="utf-8",
+        )
+        _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._dids))
+        await self.async_restart()
+
+    async def async_start(self) -> None:
+        if self._supervisor is None:
+            self._supervisor = asyncio.create_task(self._supervise())
+
+    async def async_restart(self) -> None:
+        await self._async_terminate()
+        await self.async_start()
+
+    async def async_stop(self) -> None:
+        if self._supervisor is not None:
+            self._supervisor.cancel()
+            self._supervisor = None
+        await self._async_terminate()
+
+    async def _supervise(self) -> None:
+        """Keep go2rtc running, restarting it if it exits."""
+        while True:
+            try:
+                # Shielded so a cancellation landing mid-spawn cannot leave a
+                # process running that nothing holds a handle to -- it would
+                # keep the RTSP port bound and make every later start fail with
+                # "address already in use".
+                self._process = await asyncio.shield(
+                    asyncio.create_subprocess_exec(
+                        _BINARY,
+                        "-config",
+                        str(_CONFIG_PATH),
+                        # Merged rather than captured separately: go2rtc
+                        # writes its log to stdout by default -- and says in
+                        # its own source that it means to move it to stderr
+                        # one day -- so reading either one alone is a bet on
+                        # which. Taking both leaves nothing to lose.
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                )
+                _LOGGER.info("go2rtc started (pid %s)", self._process.pid)
+                await self._relay_output(self._process)
+                code = await self._process.wait()
+                if code != 0:
+                    _LOGGER.error("go2rtc exited with code %s", code)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                _LOGGER.error("Could not start go2rtc: %s", safe_error(err))
+            self._process = None
+            await asyncio.sleep(_RESTART_DELAY_SECONDS)
+
+    @staticmethod
+    async def _relay_output(process: asyncio.subprocess.Process) -> None:
+        """Forward go2rtc's output into this add-on's log as it appears.
+
+        Buffering it until the process exits hid every problem that does not
+        also kill go2rtc -- a transcode that cannot start, a source it refuses
+        -- which is exactly the class of failure worth seeing, and left the
+        user looking at a preview that never appeared with nothing to explain
+        it. It also risked filling the pipe and blocking go2rtc outright.
+
+        Its own level lives in the generated configuration, so what arrives
+        here is already filtered; it is logged as-is rather than re-parsed.
+        """
+        stream = process.stdout
+        if stream is None:
+            return
+        while True:
+            line = await stream.readline()
+            if not line:
+                return
+            text = line.decode(errors="replace").strip()
+            if text:
+                _LOGGER.info("go2rtc: %s", text)
+
+    async def _async_terminate(self) -> None:
+        process = self._process
+        if process is None or process.returncode is not None:
+            return
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+        self._process = None

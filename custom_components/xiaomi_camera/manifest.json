@@ -1,0 +1,18 @@
+{
+  "domain": "xiaomi_camera",
+  "name": "Xiaomi Camera",
+  "after_dependencies": [
+    "hassio"
+  ],
+  "codeowners": [
+    "@willjayyyy"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/willjayyyy/ha-xiaomi-camera",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/willjayyyy/ha-xiaomi-camera/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "1.0.0"
+}

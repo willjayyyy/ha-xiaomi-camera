@@ -1,0 +1,1012 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xiaomi Camera Bridge</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #16181c;
+    --muted: #71767e;
+    --line: #e8eaed;
+    /* Orange is a highlight, not a fill. It marks the one action a screen
+       wants you to take -- anything else wearing it competes with that. */
+    --accent: #ff6900;
+    --accent-soft: #fff3ea;
+    /* Where technical content sits: a step off the card, no hue of its own. */
+    --surface: #f6f7f9;
+    --ok: #12873c;
+    --warn: #b45309;
+    --err: #c2261c;
+    --shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.04);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013; --card: #191c21; --text: #e8eaec; --muted: #9aa1aa;
+      --line: #262a30; --accent-soft: #2a1a0d; --surface: #21252b;
+      --ok: #4ade80; --warn: #fbbf24; --err: #f87171;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 48px; background: var(--bg); color: var(--text);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  main[hidden], #signin[hidden] { display: none; }
+
+  /* Its own screen rather than a dialog over a page the viewer cannot use
+     yet. One field, because there is one thing to know -- an add-on has no
+     accounts, and a username box would be a question with no answer. */
+  #signin {
+    min-height: 78vh; display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .signin-card {
+    width: 100%; max-width: 400px; text-align: center;
+    background: var(--card); border: 1px solid var(--line); border-radius: 24px;
+    padding: 44px 36px 36px; box-shadow: var(--shadow);
+  }
+  .signin-mark {
+    width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
+    background: var(--accent-soft); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .signin-mark svg { width: 32px; height: 32px; fill: currentColor; }
+  .signin-card h1 { font-size: 1.32rem; margin: 0 0 10px; }
+  .signin-card .sub { margin: 0 0 28px; font-size: .9rem; line-height: 1.6; }
+  /* The field and the button carry the same weight: matching height, radius
+     and width, so the pair reads as one control rather than as a small box
+     next to a large one. */
+  .signin-card input { margin-bottom: 16px; }
+  .signin-card button {
+    width: 100%; padding: 14px 16px; border-radius: 14px;
+    font-size: .95rem; font-weight: 600;
+  }
+  .signin-error {
+    color: var(--err); font-size: .85rem; margin: 0 0 14px; min-height: 1em;
+  }
+  .signin-error[hidden] { display: none; }
+
+  header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; }
+  h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -.02em; margin: 0 0 6px; }
+  .sub { color: var(--muted); margin: 0; font-size: .95rem; }
+  .lang { margin-left: auto; font-size: .85rem; color: var(--muted); white-space: nowrap; }
+  .lang button {
+    background: none; border: 0; color: var(--muted); cursor: pointer;
+    font: inherit; padding: 4px 6px; border-radius: 6px;
+  }
+  .lang button[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    padding: 24px 26px; margin-bottom: 20px; box-shadow: var(--shadow);
+  }
+  .card h2 {
+    font-size: .82rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); margin: 0 0 18px;
+  }
+
+  button.primary, button.ghost {
+    font: inherit; font-weight: 500; padding: 11px 22px; border-radius: 12px;
+    border: 0; background: var(--accent); color: #fff; cursor: pointer;
+    transition: filter .15s ease, background .15s ease;
+  }
+  button.primary:hover { filter: brightness(1.07); }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button.ghost:hover { background: var(--bg); }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
+
+  /* Every field, not only text ones. Naming a single input type left the
+     password field on the sign-in screen unstyled -- a native box beside a
+     styled button, which is exactly where the mismatch shows most. */
+  input[type=text], input[type=password] {
+    font: inherit; width: 100%; padding: 14px 16px; border-radius: 14px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  input[type=text]:focus, input[type=password]:focus {
+    outline: none; border-color: var(--accent); background: var(--card);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  input::placeholder { color: var(--muted); opacity: 1; }
+
+  ol { padding-left: 22px; margin: 0 0 18px; }
+  ol li { margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  /* On a card the state is a label, not a headline: a pill at the size of the
+     caption beside it, rather than coloured text competing with the name. */
+  .cam .status {
+    font-size: .78rem; padding: 4px 10px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--line);
+  }
+  .ok .dot { background: var(--ok); } .ok { color: var(--ok); }
+  .warn .dot { background: var(--warn); } .warn { color: var(--warn); }
+  .err .dot { background: var(--err); } .err { color: var(--err); }
+
+  /* Camera grid ---------------------------------------------------------- */
+  .grid {
+    display: grid; gap: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  }
+  .cam {
+    background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+    overflow: hidden; box-shadow: var(--shadow);
+    transition: box-shadow .2s ease, transform .2s ease;
+  }
+  .cam:hover { transform: translateY(-2px); box-shadow: 0 2px 4px rgba(0,0,0,.05), 0 14px 32px rgba(0,0,0,.07); }
+  .cam { position: relative; }
+  .preview {
+    position: relative; aspect-ratio: 16 / 9; background: #0b0d10;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* Overlaid rather than laid out, so the placeholder stays visible behind the
+     image until the first picture arrives and the card does not resize when it
+     does. */
+  .preview img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; display: block; opacity: 0; transition: opacity .2s ease;
+  }
+  .preview img.visible { opacity: 1; }
+  .preview .placeholder {
+    color: #8b929c; font-size: .85rem; line-height: 1.5;
+    text-align: center; padding: 0 22px; max-width: 100%;
+  }
+  .cam-body { padding: 18px 20px 20px; }
+  .cam-head { display: flex; align-items: center; gap: 10px; margin-bottom: 2px; }
+  .cam-name { font-weight: 600; font-size: 1.05rem; letter-spacing: -.01em; }
+  .cam-model { color: var(--muted); font-size: .78rem; margin-bottom: 14px; }
+  .cam-foot { display: flex; align-items: center; gap: 8px; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem;
+    background: var(--surface); color: var(--muted);
+    border: 1px solid var(--line);
+    padding: 8px 11px; border-radius: 10px;
+    flex: 1; min-width: 0;
+    /* One line that scrolls, rather than a wrap that breaks a device id in
+       half. The whole value is one token to a reader even where it is not one
+       to the browser. */
+    white-space: nowrap; overflow-x: auto;
+  }
+  code::-webkit-scrollbar { height: 0; }
+  .copy {
+    font: inherit; font-size: .78rem; padding: 8px 14px; border-radius: 10px;
+    border: 1px solid var(--line); background: var(--card); color: var(--muted);
+    cursor: pointer; white-space: nowrap; flex: none;
+    transition: border-color .15s ease, color .15s ease, background .15s ease;
+  }
+  .copy:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+  .hint { color: var(--muted); font-size: .88rem; margin: 10px 0 0; }
+
+  /* The preview settings sit with the previews they change, not on a
+     configuration screen: they alter nothing about exposure, they apply the
+     moment they are set, and the right value is whatever looks good on the
+     machine doing the watching. */
+  .section-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+  .section-head h2 {
+    font-size: .82rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); margin: 0;
+  }
+  /* Sits over the picture it changes and stays out of the way until wanted:
+     on a wall display nobody is hovering, and a control that is always there
+     becomes furniture. */
+  .pref { position: absolute; top: 10px; right: 10px; }
+  .pref-toggle {
+    font: inherit; font-size: .72rem; font-weight: 500; color: #fff;
+    background: rgba(0, 0, 0, .5); border: 1px solid rgba(255, 255, 255, .16);
+    border-radius: 999px; padding: 5px 12px; cursor: pointer;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    opacity: 0; transform: translateY(-2px);
+    transition: opacity .18s ease, transform .18s ease, background .15s ease;
+  }
+  .cam:hover .pref-toggle,
+  .pref-toggle:focus-visible,
+  .pref-toggle[aria-expanded="true"] { opacity: 1; transform: none; }
+  .pref-toggle:hover { background: rgba(0, 0, 0, .68); }
+  .pref-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .pref-panel {
+    position: absolute; top: calc(100% + 8px); right: 0; z-index: 5;
+    min-width: 232px; padding: 14px;
+    background: rgba(22, 24, 28, .82); border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 16px; backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+  }
+  .pref-panel[hidden] { display: none; }
+  .pref-label {
+    display: block; font-size: .68rem; font-weight: 600; letter-spacing: .07em;
+    text-transform: uppercase; color: rgba(255, 255, 255, .5); margin-bottom: 7px;
+  }
+  .pref-label + .seg { margin-bottom: 14px; }
+  .pref-label + .seg:last-child { margin-bottom: 0; }
+  /* A row of choices rather than a dropdown: every option is visible, one tap
+     away, and the current one is obvious without opening anything. */
+  .seg { display: flex; flex-wrap: wrap; gap: 5px; }
+  .seg button {
+    font: inherit; font-size: .74rem; color: rgba(255, 255, 255, .78);
+    background: rgba(255, 255, 255, .07); border: 0;
+    border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+  }
+  .seg button:hover { background: rgba(255, 255, 255, .14); color: #fff; }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .msg { padding: 13px 17px; border-radius: 12px; margin-bottom: 16px; display: none; }
+  .msg.show { display: block; }
+  .msg.error { background: color-mix(in srgb, var(--err) 11%, transparent); color: var(--err); }
+  .msg.success { background: color-mix(in srgb, var(--ok) 11%, transparent); color: var(--ok); }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<section id="signin" hidden>
+  <form class="signin-card" id="signin-form">
+    <div class="signin-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>
+    </div>
+    <h1 data-i18n="signInTitle">Xiaomi Camera Bridge</h1>
+    <p class="sub" data-i18n="signInHint">Enter the web page password from this add-on's configuration.</p>
+    <input id="signin-password" type="password" autocomplete="current-password"
+           required data-i18n-placeholder="signInPlaceholder">
+    <p class="signin-error" id="signin-error" hidden></p>
+    <button class="primary" type="submit" data-i18n="signIn">Sign in</button>
+  </form>
+</section>
+
+<main hidden>
+  <header>
+    <div>
+      <h1 data-i18n="title">Xiaomi Camera Bridge</h1>
+      <p class="sub" data-i18n="subtitle">Publishes your Xiaomi cameras as standard RTSP streams.</p>
+    </div>
+    <span class="lang">
+      <button type="button" data-lang="en">English</button>
+      <button type="button" data-lang="zh">中文</button>
+    </span>
+  </header>
+
+  <div id="message" class="msg"></div>
+
+  <section class="card">
+    <h2 data-i18n="accountHeading">Account</h2>
+    <div class="row">
+      <span id="link-status" class="status warn"><span class="dot"></span></span>
+      <span style="flex:1"></span>
+      <button id="link-btn" class="primary" hidden data-i18n="connect">Connect Xiaomi account</button>
+      <button id="unlink-btn" class="ghost" hidden data-i18n="disconnect">Disconnect</button>
+    </div>
+
+    <div id="link-flow" hidden style="margin-top:20px">
+      <ol>
+        <li>
+          <a id="auth-link" href="#" target="_blank" rel="noopener" data-i18n="step1Link">Open the Xiaomi sign-in page</a>
+          <span data-i18n="step1Rest">and approve access.</span>
+        </li>
+        <li data-i18n="step2">Your browser will land on an address that cannot be opened — that is expected. Copy the entire address from the address bar.</li>
+        <li data-i18n="step3">Paste it below.</li>
+      </ol>
+      <input id="callback-url" type="text" autocomplete="off">
+      <p class="hint" data-i18n="privacyNote">The address is read locally to extract the authorization code. Nothing is sent anywhere else.</p>
+      <div class="row" style="margin-top:14px">
+        <button id="submit-btn" class="primary" data-i18n="finish">Finish sign-in</button>
+        <button id="cancel-btn" class="ghost" data-i18n="cancel">Cancel</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2 data-i18n="camerasHeading">Cameras</h2></div>
+    <div id="cameras"><p class="empty" data-i18n="notLoaded">Not loaded yet.</p></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// Ingress serves this page under a path prefix, so every request is relative.
+//
+// The header goes on every request because a standalone deployment guards this
+// page with HTTP Basic, and browsers attach those credentials to cross-site
+// requests automatically. A form on another site could otherwise unlink the
+// account; it cannot set a header of its own.
+const api = (path, options = {}) =>
+  fetch(`.${path}`, {
+    ...options,
+    headers: { ...(options.headers || {}), "X-Xiaomi-Camera": "1" },
+  });
+const $ = (id) => document.getElementById(id);
+
+const I18N = {
+  en: {
+    title: "Xiaomi Camera Bridge",
+    signInTitle: "Xiaomi Camera Bridge",
+    signInHint: "Enter the web page password from this add-on's configuration.",
+    signInPlaceholder: "Web page password",
+    signIn: "Sign in",
+    signInWrong: "That password is not right.",
+    subtitle: "Publishes your Xiaomi cameras as standard RTSP streams.",
+    accountHeading: "Account", camerasHeading: "Cameras",
+    prefFps: "Frame rate", prefQuality: "Quality",
+    fpsCamera: "Camera's rate",
+    qualityHigh: "High", qualityBalanced: "Balanced", qualityLow: "Low",
+    connect: "Connect Xiaomi account", disconnect: "Disconnect",
+    finish: "Finish sign-in", cancel: "Cancel",
+    step1Link: "Open the Xiaomi sign-in page",
+    step1Rest: "and approve access.",
+    step2: "Your browser will land on an address that cannot be opened — that is expected. Copy the entire address from the address bar.",
+    step3: "Paste it below.",
+    privacyNote: "The address is read locally to extract the authorization code. Nothing is sent anywhere else.",
+    callbackPlaceholder: "https://127.0.0.1/?code=…&state=…",
+    checking: "Checking…", connected: "Connected", notConnected: "Not connected",
+    unreachable: "Bridge unreachable",
+    notLoaded: "Not loaded yet.", loading: "Loading…",
+    connectToSee: "Connect your Xiaomi account to see your cameras.",
+    noCameras: "No supported cameras found on this account.",
+    loadFailed: "Could not load the camera list.",
+    ready: "Ready", offline: "Offline", switchedOff: "Switched off",
+    connecting: "Connecting…",
+    previewFailed: "Could not load the picture",
+    cameraOffHint: "Turn the camera on to see a picture",
+    retry: "Try again",
+    copy: "Copy", copied: "Copied",
+    credentialsHint: "This stream needs the RTSP username and password — from this add-on's configuration, or from the startup log if they were generated for you.",
+    noCode: "That address does not contain an authorization code. Copy the full address from the page you were redirected to.",
+    linked: "Account connected.",
+    startFailed: "Could not start sign-in: ",
+    signInFailed: "Sign-in failed: ",
+    confirmUnlink: "Disconnect the Xiaomi account? Cameras will stop streaming.",
+  },
+  zh: {
+    title: "小米摄像头桥接",
+    signInTitle: "小米摄像头桥接",
+    signInHint: "请输入加载项配置中的网页密码。",
+    signInPlaceholder: "网页密码",
+    signIn: "登录",
+    signInWrong: "密码不正确。",
+    subtitle: "把小米摄像头画面转换成标准 RTSP 流。",
+    accountHeading: "账号", camerasHeading: "摄像头",
+    prefFps: "帧率", prefQuality: "画质",
+    fpsCamera: "原生帧率",
+    qualityHigh: "高", qualityBalanced: "均衡", qualityLow: "低",
+    connect: "连接小米账号", disconnect: "断开连接",
+    finish: "完成登录", cancel: "取消",
+    step1Link: "打开小米登录页面",
+    step1Rest: "并授权。",
+    step2: "浏览器随后会跳转到一个打不开的地址 —— 这是正常的。请复制地址栏里的完整地址。",
+    step3: "粘贴到下方。",
+    privacyNote: "该地址仅在本地解析以提取授权码，不会发送到任何其他地方。",
+    callbackPlaceholder: "https://127.0.0.1/?code=…&state=…",
+    checking: "检查中…", connected: "已连接", notConnected: "未连接",
+    unreachable: "无法连接到服务",
+    notLoaded: "尚未加载。", loading: "加载中…",
+    connectToSee: "连接小米账号后即可看到你的摄像头。",
+    noCameras: "该账号下没有找到受支持的摄像头。",
+    loadFailed: "无法加载摄像头列表。",
+    ready: "就绪", offline: "离线", switchedOff: "已关闭",
+    connecting: "连接中…",
+    previewFailed: "无法加载画面",
+    cameraOffHint: "打开摄像头后才能看到画面",
+    retry: "重试",
+    copy: "复制", copied: "已复制",
+    credentialsHint: "该地址需要 RTSP 用户名和密码 —— 在加载项配置中填写的那组，或启动日志里自动生成的那组。",
+    noCode: "该地址中没有授权码。请复制跳转后页面地址栏里的完整地址。",
+    linked: "账号已连接。",
+    startFailed: "无法开始登录：",
+    signInFailed: "登录失败：",
+    confirmUnlink: "确定断开小米账号？摄像头将停止推流。",
+  },
+};
+
+const STORAGE_KEY = "xcam.lang";
+
+function pickLanguage() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved && I18N[saved]) return saved;
+  return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+let lang = pickLanguage();
+const t = (key) => I18N[lang][key] ?? I18N.en[key] ?? key;
+let cameras = [];
+
+function applyLanguage() {
+  document.documentElement.lang = lang === "zh" ? "zh-Hans" : "en";
+  document.title = t("title");
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  $("callback-url").placeholder = t("callbackPlaceholder");
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll("[data-lang]").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+  });
+  localStorage.setItem(STORAGE_KEY, lang);
+  if (!document.querySelector("main").hidden) refreshStatus();
+}
+
+document.querySelectorAll("[data-lang]").forEach((b) => {
+  b.addEventListener("click", () => { lang = b.dataset.lang; applyLanguage(); });
+});
+
+function showMessage(text, kind) {
+  const el = $("message");
+  el.textContent = text;
+  el.className = `msg show ${kind}`;
+  if (kind === "success") setTimeout(() => el.classList.remove("show"), 6000);
+}
+
+function setStatus(text, kind) {
+  const el = $("link-status");
+  el.className = `status ${kind}`;
+  el.innerHTML = '<span class="dot"></span>';
+  el.append(text);
+}
+
+/**
+ * Escape a value for insertion into HTML, including inside an attribute.
+ *
+ * The textContent/innerHTML trick alone escapes `&`, `<` and `>` but not
+ * quotes, which is enough in text position and not enough in `attr="..."` --
+ * a value containing a quote closes the attribute and starts writing markup.
+ */
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * Pull `code` and `state` out of whatever the user pasted.
+ *
+ * Accepts a full URL, a bare query string, or a fragment -- asking someone to
+ * identify the right substring by hand is where this step usually goes wrong.
+ */
+function extractCallbackParams(input) {
+  const text = (input || "").trim();
+  if (!text) return null;
+  const candidates = [];
+  try {
+    const url = new URL(text);
+    candidates.push(url.searchParams);
+    if (url.hash.length > 1) candidates.push(new URLSearchParams(url.hash.slice(1)));
+  } catch {
+    const start = text.indexOf("?");
+    candidates.push(new URLSearchParams(start >= 0 ? text.slice(start + 1) : text));
+  }
+  for (const params of candidates) {
+    const code = params.get("code");
+    if (code) return { code, state: params.get("state") || "" };
+  }
+  return null;
+}
+
+async function refreshStatus() {
+  try {
+    const data = await (await api("/api/health")).json();
+    if (data.linked) {
+      setStatus(t("connected"), "ok");
+      $("link-btn").hidden = true;
+      $("unlink-btn").hidden = false;
+      $("link-flow").hidden = true;
+      await loadCameras();
+    } else {
+      setStatus(t("notConnected"), "warn");
+      $("link-btn").hidden = false;
+      $("unlink-btn").hidden = true;
+      $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("connectToSee"))}</p>`;
+    }
+  } catch {
+    setStatus(t("unreachable"), "err");
+  }
+}
+
+/**
+ * The camera's RTSP URL, addressed from where the page is being viewed.
+ *
+ * The bridge reports `127.0.0.1` deliberately -- Home Assistant shares the
+ * host's network namespace, so that is correct for it, and a URL naming a
+ * specific interface would be wrong as soon as the host gained another. It is
+ * useless to a person, though, who is reading this page in order to paste the
+ * address into Frigate on a different machine. The host they reached this page
+ * on is the same host the streams are on, so it is the right substitution.
+ */
+function displayUrl(rtspUrl) {
+  try {
+    const url = new URL(rtspUrl);
+    url.hostname = location.hostname;
+    return url.toString();
+  } catch {
+    return rtspUrl;
+  }
+}
+
+//: Frame rates offered below whatever the camera is measured to send. Not a
+//: fixed list of what cameras can do -- that would be wrong the moment one
+//: ships that sends more -- but a ladder trimmed to what this camera gives.
+const FPS_LADDER = [20, 15, 12, 8, 5, 2];
+
+//: Used until a camera has streamed long enough to measure, and as the ceiling
+//: when it never does.
+const FPS_ASSUMED = 20;
+
+const DEFAULT_PREFS = { fps: 12, quality: "balanced" };
+
+/**
+ * Per-camera preview settings, remembered in this browser.
+ *
+ * Deliberately not stored by the add-on. What frame rate looks right depends
+ * on the screen and the connection doing the looking, so a phone and a desktop
+ * should not have to agree -- and a preview setting is not something an
+ * installation has, it is something a viewer prefers. Keeping it here also
+ * means nothing to save, migrate or keep in step on the add-on side.
+ */
+function prefsFor(did) {
+  try {
+    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(`xcam.prefs.${did}`) || "{}") };
+  } catch {
+    return { ...DEFAULT_PREFS };
+  }
+}
+
+function savePrefs(did, prefs) {
+  try {
+    localStorage.setItem(`xcam.prefs.${did}`, JSON.stringify(prefs));
+  } catch { /* private browsing; the setting simply does not persist */ }
+}
+
+function segment(kind, choices, selected) {
+  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label }) =>
+    `<button type="button" data-value="${escapeHtml(value)}" `
+    + `aria-pressed="${String(value) === String(selected)}">${escapeHtml(label)}</button>`
+  ).join("")}</div>`;
+}
+
+function fpsChoices(camera) {
+  const ceiling = Math.round(camera.stream_fps || FPS_ASSUMED);
+  return [
+    { value: 0, label: t("fpsCamera") },
+    ...FPS_LADDER.filter((rate) => rate < ceiling).map((rate) => ({
+      value: rate, label: `${rate}`,
+    })),
+  ];
+}
+
+function prefLabel(prefs) {
+  return prefs.fps ? `${prefs.fps} fps` : t("fpsCamera");
+}
+
+function prefControl(camera, prefs) {
+  const quality = ["high", "balanced", "low"].map((name) => ({
+    value: name,
+    label: t(`quality${name[0].toUpperCase()}${name.slice(1)}`),
+  }));
+  return `<div class="pref">
+    <button class="pref-toggle" type="button" data-toggle aria-expanded="false"
+            aria-label="${escapeHtml(t("prefFps"))}">${escapeHtml(prefLabel(prefs))}</button>
+    <div class="pref-panel" data-panel hidden>
+      <span class="pref-label">${escapeHtml(t("prefFps"))}</span>
+      ${segment("fps", fpsChoices(camera), prefs.fps)}
+      <span class="pref-label">${escapeHtml(t("prefQuality"))}</span>
+      ${segment("quality", quality, prefs.quality)}
+    </div>
+  </div>`;
+}
+
+function cameraState(camera) {
+  if (!camera.online) return { cls: "err", label: t("offline") };
+  // A switched-off camera answers normally and then sends nothing, so it needs
+  // to be called out rather than left looking like a broken stream.
+  if (camera.powered_on === false) return { cls: "warn", label: t("switchedOff") };
+  return { cls: "ok", label: t("ready") };
+}
+
+function renderCameras() {
+  const container = $("cameras");
+  // Replacing the grid's markup discards the elements but not the requests
+  // they started, so anything playing is stopped first. Switching language
+  // re-renders, and that used to strand a stream per switch.
+  container.querySelectorAll("[data-preview]").forEach(stopPreview);
+  if (!cameras.length) {
+    container.innerHTML = `<p class="empty">${escapeHtml(t("noCameras"))}</p>`;
+    return;
+  }
+  container.innerHTML = `<div class="grid">${cameras.map((c) => {
+    const st = cameraState(c);
+    const off = c.powered_on === false || !c.online;
+    return `<article class="cam" data-did="${escapeHtml(c.did)}"${off ? "" : " data-live"}>
+      <div class="preview" data-preview>
+        <div class="placeholder">${escapeHtml(off ? t("cameraOffHint") : t("connecting"))}</div>
+      </div>
+      ${off ? "" : prefControl(c, prefsFor(c.did))}
+      <div class="cam-body">
+        <div class="cam-head">
+          <span class="cam-name">${escapeHtml(c.name)}</span>
+          <span style="flex:1"></span>
+          <span class="status ${st.cls}"><span class="dot"></span>${escapeHtml(st.label)}</span>
+        </div>
+        <div class="cam-model">${escapeHtml(c.model)}</div>
+        <div class="cam-foot">
+          <code>${escapeHtml(displayUrl(c.rtsp_url))}</code>
+          <button class="copy" data-copy="${escapeHtml(displayUrl(c.rtsp_url))}">${escapeHtml(t("copy"))}</button>
+        </div>
+        ${c.rtsp_requires_credentials ? `<p class="hint">${escapeHtml(t("credentialsHint"))}</p>` : ""}
+      </div>
+    </article>`;
+  }).join("")}</div>`;
+
+  observe(container);
+  wirePreferences(container);
+  container.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.copy);
+        const original = btn.textContent;
+        btn.textContent = t("copied");
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      } catch { /* clipboard unavailable over plain http; ignore */ }
+    });
+  });
+}
+
+/**
+ * Make the per-camera settings work.
+ *
+ * Delegated from the grid rather than bound per button: the grid is rebuilt
+ * whenever the camera list is reloaded, and listeners attached to the buttons
+ * would have to be attached again every time.
+ */
+function wirePreferences(container) {
+  container.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-toggle]");
+    if (toggle) {
+      const panel = toggle.parentElement.querySelector("[data-panel]");
+      const opening = panel.hidden;
+      closePreferencePanels(container);
+      panel.hidden = !opening;
+      toggle.setAttribute("aria-expanded", String(opening));
+      return;
+    }
+
+    const choice = event.target.closest(".seg button");
+    if (!choice) return;
+
+    const cam = choice.closest(".cam");
+    const did = cam.dataset.did;
+    const kind = choice.closest("[data-seg]").dataset.seg;
+    const prefs = prefsFor(did);
+    prefs[kind] = kind === "fps" ? Number(choice.dataset.value) : choice.dataset.value;
+    savePrefs(did, prefs);
+
+    for (const sibling of choice.parentElement.children) {
+      sibling.setAttribute("aria-pressed", String(sibling === choice));
+    }
+    cam.querySelector("[data-toggle]").textContent = prefLabel(prefs);
+
+    // Restarted rather than left to take effect next time: the point of
+    // putting these over the picture is to see the change in it.
+    const box = cam.querySelector("[data-preview]");
+    stopPreview(box);
+    box._failed = false;
+    startPreview(cam);
+  });
+
+  // A click anywhere else puts the panel away, the way every other menu on
+  // the platform behaves.
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".pref")) closePreferencePanels(container);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closePreferencePanels(container);
+  });
+}
+
+function closePreferencePanels(container) {
+  container.querySelectorAll("[data-panel]").forEach((panel) => {
+    panel.hidden = true;
+    panel.parentElement.querySelector("[data-toggle]")
+      ?.setAttribute("aria-expanded", "false");
+  });
+}
+
+/**
+ * Play a camera's preview while its card is on screen, and only then.
+ *
+ * Each preview holds a session open on the camera, so playing every card at
+ * once on a page that scrolls would be wasteful. Tying playback to visibility
+ * gives the picture without asking for a click, and stops paying for cards
+ * nobody is looking at.
+ */
+function observe(container) {
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const box = entry.target.querySelector("[data-preview]");
+      if (entry.isIntersecting) {
+        // Not restarted if it is already playing, or if it failed and is
+        // waiting for the viewer to retry.
+        if (!box._preview && !box._failed) startPreview(entry.target);
+      } else {
+        stopPreview(box);
+        if (!box._failed) {
+          box.innerHTML = `<div class="placeholder">${escapeHtml(t("connecting"))}</div>`;
+        }
+      }
+    }
+  }, { rootMargin: "100px" });
+  container.querySelectorAll(".cam[data-live]").forEach((cam) => observer.observe(cam));
+}
+
+//: Consecutive failures tolerated before a preview gives up and offers a
+//: retry. A single miss is routine: the camera can be mid-keyframe, or the
+//: session may still be connecting.
+const PREVIEW_MAX_FAILURES = 4;
+
+//: Only after a failure. There is deliberately no delay on the success path --
+//: see startPreview.
+const PREVIEW_RETRY_MS = 1000;
+
+/**
+ * Show a live preview.
+ *
+ * Each picture is decoded from the RTSP stream this add-on publishes, so what
+ * appears here is evidence that the stream itself works -- not merely that the
+ * camera is reachable. A preview fed from the vendor library's own decoded
+ * frames would keep showing a picture while the published stream was broken,
+ * which is the one thing a status display must never do.
+ *
+ * The next picture is requested the instant the last one arrives, naming the
+ * one already held, and the add-on holds that request open until a newer one
+ * exists. Pacing therefore follows the stream, with no timer of its own to
+ * beat against it.
+ *
+ * A single multipart connection would be the textbook way to carry frames, and
+ * it does not survive the trip: two independent implementations were reset
+ * after about ten frames. On a local network a request per frame costs a few
+ * milliseconds against a frame period of fifty, and it works.
+ *
+ * `fetch` rather than pointing an <img> at the URL: the sequence number comes
+ * back in a header, and a failure comes back as a status and a message instead
+ * of an error event that says nothing.
+ */
+function startPreview(cam) {
+  const did = cam.dataset.did;
+  const box = cam.querySelector("[data-preview]");
+  stopPreview(box);
+  box._failed = false;
+  box.innerHTML = `<div class="placeholder">${escapeHtml(t("connecting"))}</div>`;
+
+  const img = document.createElement("img");
+  img.alt = "";
+  box.appendChild(img);
+
+  const controller = new AbortController();
+  const session = { img, controller, objectUrl: null, timer: null };
+  box._preview = session;
+
+  const prefs = prefsFor(did);
+  let failures = 0;
+  let seq = 0;
+
+  const stopped = () => box._preview !== session;
+
+  const show = (blob) => {
+    const next = URL.createObjectURL(blob);
+    img.src = next;
+    // Revoked only once its replacement is on screen, or the picture would
+    // blink to nothing in between.
+    if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
+    session.objectUrl = next;
+    box.querySelector(".placeholder")?.remove();
+    img.classList.add("visible");
+  };
+
+  const fail = (reason) => {
+    failures += 1;
+    if (failures < PREVIEW_MAX_FAILURES) {
+      session.timer = setTimeout(loop, PREVIEW_RETRY_MS);
+      return;
+    }
+    // Marked so scrolling past and back does not retry in a loop against a
+    // camera that is not going to answer.
+    box._failed = true;
+    box._preview = null;
+    box.innerHTML = `<div class="placeholder">${escapeHtml(reason)}</div>`;
+    box.appendChild(retryButton(cam));
+  };
+
+  async function loop() {
+    if (stopped()) return;
+    try {
+      const response = await api(
+        `/api/preview/${encodeURIComponent(did)}`
+        + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.quality)}&after=${seq}`,
+        { signal: controller.signal },
+      );
+      if (stopped()) return;
+      if (!response.ok) {
+        // The add-on explains itself here -- the camera being switched off, or
+        // the published stream producing nothing -- so the page shows what it
+        // said rather than a generic failure.
+        fail((await response.text()).trim() || t("previewFailed"));
+        return;
+      }
+      seq = Number(response.headers.get("X-Frame-Seq")) || seq + 1;
+      show(await response.blob());
+      failures = 0;
+      loop();
+    } catch (err) {
+      if (err.name === "AbortError" || stopped()) return;
+      fail(t("previewFailed"));
+    }
+  }
+
+  loop();
+}
+
+/**
+ * End a preview and release what is behind it.
+ *
+ * Aborting the pending request matters as much as dropping the element: the
+ * add-on holds that request open until the next picture, and leaving it open
+ * keeps a camera decoding for a card nobody is looking at.
+ */
+function stopPreview(box) {
+  const session = box._preview;
+  box._preview = null;
+  if (!session) return;
+  if (session.timer) clearTimeout(session.timer);
+  session.controller.abort();
+  if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
+}
+
+function retryButton(cam) {
+  const btn = document.createElement("button");
+  btn.className = "copy";
+  // The one action offered on that surface, so it wears the accent -- which
+  // is also the only place orange appears on a card.
+  btn.style.cssText =
+    "position:absolute;left:50%;bottom:16px;transform:translateX(-50%);"
+    + "background:var(--accent);color:#fff;border-color:transparent;font-weight:500";
+  btn.textContent = t("retry");
+  btn.addEventListener("click", () => startPreview(cam));
+  return btn;
+}
+
+async function loadCameras() {
+  const container = $("cameras");
+  container.querySelectorAll("[data-preview]").forEach(stopPreview);
+  container.innerHTML = `<p class="empty">${escapeHtml(t("loading"))}</p>`;
+  try {
+    const response = await api("/api/cameras");
+    if (!response.ok) throw new Error(await response.text());
+    cameras = (await response.json()).cameras;
+    renderCameras();
+  } catch {
+    container.innerHTML = `<p class="empty">${escapeHtml(t("loadFailed"))}</p>`;
+  }
+}
+
+$("link-btn").addEventListener("click", async () => {
+  $("link-btn").disabled = true;
+  try {
+    const response = await api("/api/link/begin", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    const { authorize_url: authorizeUrl } = await response.json();
+    $("auth-link").href = authorizeUrl;
+    $("link-flow").hidden = false;
+    window.open(authorizeUrl, "_blank", "noopener");
+  } catch (err) {
+    showMessage(t("startFailed") + err.message, "error");
+  } finally {
+    $("link-btn").disabled = false;
+  }
+});
+
+$("submit-btn").addEventListener("click", async () => {
+  const params = extractCallbackParams($("callback-url").value);
+  if (!params) { showMessage(t("noCode"), "error"); return; }
+  $("submit-btn").disabled = true;
+  try {
+    const response = await api("/api/link/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    $("callback-url").value = "";
+    showMessage(t("linked"), "success");
+    await refreshStatus();
+  } catch (err) {
+    showMessage(t("signInFailed") + err.message, "error");
+  } finally {
+    $("submit-btn").disabled = false;
+  }
+});
+
+$("cancel-btn").addEventListener("click", () => {
+  $("link-flow").hidden = true;
+  $("callback-url").value = "";
+});
+
+$("unlink-btn").addEventListener("click", async () => {
+  if (!window.confirm(t("confirmUnlink"))) return;
+  await api("/api/unlink", { method: "POST" });
+  await refreshStatus();
+});
+
+/**
+ * Show the page, or the way in.
+ *
+ * Whether a password applies is not something the page is told -- it asks. Any
+ * request the add-on turns down with a 401 means one is set and has not been
+ * given, and that answer is the same however the add-on is deployed, so the
+ * page needs no idea of what deployment it is part of.
+ */
+async function openPage() {
+  try {
+    const response = await api("/api/health");
+    if (response.status === 401) return showSignIn();
+  } catch {
+    // Unreachable rather than unauthorised: the page can still say so.
+  }
+  $("signin").hidden = true;
+  document.querySelector("main").hidden = false;
+  setStatus(t("checking"), "warn");
+  refreshStatus();
+  return undefined;
+}
+
+function showSignIn() {
+  document.querySelector("main").hidden = true;
+  $("signin").hidden = false;
+  $("signin-password").focus();
+}
+
+$("signin-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = $("signin-error");
+  error.hidden = true;
+  try {
+    const response = await api("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: $("signin-password").value }),
+    });
+    if (!response.ok) throw new Error();
+    $("signin-password").value = "";
+    await openPage();
+  } catch {
+    error.textContent = t("signInWrong");
+    error.hidden = false;
+    $("signin-password").select();
+  }
+});
+
+
+applyLanguage();
+openPage();
+// Only the account state is polled; re-rendering the grid would tear down any
+// preview the user is watching.
+setInterval(async () => {
+  try {
+    const data = await (await api("/api/health")).json();
+    setStatus(data.linked ? t("connected") : t("notConnected"), data.linked ? "ok" : "warn");
+  } catch { setStatus(t("unreachable"), "err"); }
+}, 30000);
+</script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+{
+  "config": {
+    "step": {
+      "discovery_confirm": {
+        "title": "小米摄像头",
+        "description": "发现了 {name} 加载项。现在配置吗？\n\n配置完成后，你将在加载项自己的页面上登录小米账号。"
+      },
+      "install_addon": {
+        "title": "安装取流服务",
+        "description": "摄像头画面由 {addon} 加载项提供，它与 Home Assistant 并行运行。系统将自动为你安装并启动它。\n\n这需要几分钟。"
+      },
+      "addon_unavailable": {
+        "title": "尚未添加加载项仓库",
+        "description": "加载项商店中还没有 {addon}。请在「设置 → 加载项 → 加载项商店 → 仓库」中添加本项目的仓库，安装加载项后再回到这里。\n\n也可以继续手动填写取流服务地址。"
+      },
+      "manual": {
+        "title": "连接取流服务",
+        "description": "填写小米摄像头取流服务的地址。若它与 Home Assistant 运行在同一台机器上，请使用 127.0.0.1。",
+        "data": {
+          "host": "主机",
+          "port": "端口"
+        }
+      },
+      "cameras": {
+        "title": "选择摄像头",
+        "description": "要把哪些小米摄像头接入 Home Assistant？之后可以随时修改。",
+        "data": {
+          "cameras": "摄像头",
+          "auto_add": "自动导入新发现的摄像头",
+          "stream_codec": "Home Assistant 播放的视频"
+        },
+        "data_description": {
+          "cameras": "只有勾选的摄像头会生成实体，其余的仅留在米家 App 中，不会被发布。",
+          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。",
+          "stream_codec": "H.264 由加载项转码，浏览器与 Apple 家庭均可播放，兼容性最强。H.265 为摄像头原生编码，画质更好且无转码开销，但需要播放设备支持解码，例如 Safari 或具备硬件解码能力的浏览器。"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接到该地址上的取流服务。",
+      "not_linked": "加载项仍未登录小米账号，请先在其页面完成登录。"
+    },
+    "abort": {
+      "already_configured": "取流服务已配置。",
+      "addon_start_failed": "加载项启动失败：{error}",
+      "addon_install_failed": "加载项安装失败：{error}",
+      "reauth_successful": "已重新登录。"
+    }
+  },
+  "entity": {
+    "switch": {
+      "camera_power": {
+        "name": "摄像头开关"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "选择摄像头",
+        "description": "要把哪些小米摄像头接入 Home Assistant？之后可以随时修改。",
+        "data": {
+          "cameras": "摄像头",
+          "auto_add": "自动导入新发现的摄像头",
+          "stream_codec": "Home Assistant 播放的视频"
+        },
+        "data_description": {
+          "cameras": "只有勾选的摄像头会生成实体，其余的仅留在米家 App 中，不会被发布。",
+          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。",
+          "stream_codec": "H.264 由加载项转码，浏览器与 Apple 家庭均可播放，兼容性最强。H.265 为摄像头原生编码，画质更好且无转码开销，但需要播放设备支持解码，例如 Safari 或具备硬件解码能力的浏览器。"
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "无法连接到桥接加载项。",
+      "no_cameras": "该账号下没有找到受支持的摄像头。"
+    }
+  },
+  "selector": {
+    "stream_codec": {
+      "options": {
+        "h264": "H.264 · 兼容性最强",
+        "original": "H.265 · 画质更好"
+      }
+    }
+  },
+  "issues": {
+    "not_linked": {
+      "title": "小米账号未登录",
+      "description": "{addon} 加载项当前没有登录小米账号，因此读不到任何摄像头。请打开加载项页面完成登录 —— 账号由加载项持有，Home Assistant 从不保存它。登录之后本提示会自行消失。"
+    }
+  }
+}

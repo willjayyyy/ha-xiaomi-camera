@@ -1,0 +1,11 @@
+# Checksums for the static ffmpeg pinned as FFMPEG_TAG/FFMPEG_BUILD in the
+# Dockerfile. Verified at build time: pinning the URL alone still trusts
+# whatever that URL serves.
+#
+# Regenerate when bumping the build:
+#   for a in linux64 linuxarm64; do
+#     curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/<TAG>/<BUILD>-$a-lgpl-7.1.tar.xz" \
+#       | sha256sum | sed "s|-$|<BUILD>-$a-lgpl-7.1.tar.xz|"
+#   done
+77714bdf7883f0f5fbbbdd0b60315f72212e8d13646d476ea312f8532e598fc6 ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-lgpl-7.1.tar.xz
+691e1859d16cc91c8588c77cad2368a3ad59884d6de77afbffa1426599180224 ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-lgpl-7.1.tar.xz

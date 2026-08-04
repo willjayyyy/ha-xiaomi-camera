@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pipx install ruff
+      - name: Lint
+        run: ruff check .
+      - name: Format check
+        run: ruff format --check .
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # PyYAML is a real dependency of the module under test. The rest of the
+      # suite covers modules that deliberately carry no vendor-SDK import, so
+      # the closed-source package does not need to be installed here.
+      # aiohttp and pytest-asyncio are needed by the account-page guard tests,
+      # which run a real server rather than mocking the request.
+      - run: pip install pytest pytest-asyncio pyyaml aiohttp
+      - run: python -m pytest
+
+  hassfest:
+    name: Home Assistant manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # Brand assets live in the home-assistant/brands repository and are
+          # added by a separate pull request there. Everything else HACS checks
+          # is enforced here.
+          ignore: brands

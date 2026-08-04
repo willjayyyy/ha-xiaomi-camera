@@ -1,0 +1,17 @@
+# The vendor SDK is not published to PyPI; it only exists inside the Xiaomi
+# Miloco repository.
+#
+# Pinned to a commit rather than a branch. This package brings in a
+# closed-source native library that is loaded into a process on the host
+# network, so tracking a branch would mean every rebuild silently adopts
+# whatever that branch points at. Bump this deliberately, and review the
+# upstream changes to the bundled library when you do.
+miloco-miot @ git+https://github.com/XiaoMi/xiaomi-miloco.git@eb264e8bb650ad5573d0e18962e69c6e48d2fe6d#subdirectory=backend/miot
+
+# numpy is an optional dependency of the SDK decoder; without it every
+# decoded frame logs a conversion warning.
+numpy>=1.26
+
+# aiohttp arrives transitively via the SDK, but the bridge's HTTP control plane
+# and ingress UI depend on it directly, so it is declared here as well.
+aiohttp>=3.14.1

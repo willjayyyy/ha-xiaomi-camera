@@ -1,0 +1,21 @@
+---
+# Which base image each architecture builds on.
+#
+# This is NOT read by the CI workflow: the maintained builder actions build any
+# container image and take the base as a build argument, so .github/workflows/
+# build.yml passes it explicitly.
+#
+# It is still required. Supervisor reads this file when it builds the add-on
+# locally, which happens whenever no prebuilt image is available -- a fork that
+# drops the `image` key from config.yaml, or anyone building from a checkout.
+# Without it, that path falls back to the wrong base.
+#
+# Debian, not Alpine: the vendor's streaming library is linked against glibc and
+# cannot load under musl. That single constraint is why this add-on exists
+# separately from the integration at all.
+build_from:
+  amd64: ghcr.io/home-assistant/amd64-base-debian:bookworm
+  aarch64: ghcr.io/home-assistant/aarch64-base-debian:bookworm
+labels:
+  org.opencontainers.image.title: Xiaomi Camera Bridge
+  org.opencontainers.image.licenses: Apache-2.0

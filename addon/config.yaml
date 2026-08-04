@@ -1,0 +1,63 @@
+---
+name: Xiaomi Camera Bridge
+version: "1.0.0"
+slug: xiaomi_camera_bridge
+description: >-
+  Streams Xiaomi cameras over the vendor's peer-to-peer protocol and republishes
+  them as standard RTSP for Home Assistant and any other NVR.
+url: https://github.com/willjayyyy/ha-xiaomi-camera
+arch:
+  - amd64
+  - aarch64
+init: false
+
+# The vendor SDK discovers cameras by broadcasting on the local network and
+# establishes a peer-to-peer session with them. Neither survives Docker's bridge
+# network: broadcasts do not cross the bridge, and the extra layer of NAT breaks
+# UDP hole punching, forcing every session onto the vendor's relay servers.
+host_network: true
+
+# Serves the account-linking page inside the Home Assistant UI, so users never
+# handle an OAuth code by hand.
+ingress: true
+ingress_port: 8098
+panel_icon: mdi:cctv
+panel_title: Xiaomi Camera
+
+# Announces this add-on to Home Assistant so the integration's config flow is
+# offered automatically instead of asking the user for a host and port.
+discovery:
+  - xiaomi_camera
+hassio_api: true
+
+# Credentials and cached device state live in /data, which Supervisor persists
+# across add-on restarts and updates.
+options:
+  access_mode: local
+  rtsp_username: ""
+  rtsp_password: ""
+  video_quality: low
+  enable_audio: false
+  log_level: info
+  web_password: ""
+
+schema:
+  # local: bind to loopback only. Home Assistant reaches the streams because it
+  #        shares the host network namespace; nothing else on the LAN can.
+  # lan:   expose to the local network for external NVRs. Requires credentials.
+  access_mode: list(local|lan)
+  rtsp_username: str?
+  rtsp_password: password?
+  video_quality: list(low|high)
+  enable_audio: bool
+  log_level: list(trace|debug|info|notice|warning|error|fatal)
+  # Required when access_mode is 'lan', in every deployment, because that is
+  # when this page becomes reachable from the network. Supervisor's schema has
+  # no conditional, so the field is declared optional here and the requirement
+  # is enforced at startup -- see Options.validate.
+  web_password: password?
+
+# Prebuilt images are published for each supported architecture, so a normal
+# install pulls one rather than building locally. Supervisor substitutes
+# {arch} at install time.
+image: ghcr.io/willjayyyy/{arch}-addon-xiaomi-camera-bridge

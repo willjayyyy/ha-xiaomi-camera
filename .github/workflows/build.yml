@@ -1,0 +1,166 @@
+name: Build add-on
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "addon/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Rebuild even if this version was already published"
+        type: boolean
+        default: false
+
+env:
+  ARCHITECTURES: '["amd64", "aarch64"]'
+  # Produces ghcr.io/<owner>/<arch>-addon-xiaomi-camera-bridge per architecture,
+  # which is the form addon/config.yaml points at through its {arch} placeholder.
+  IMAGE_NAME: addon-xiaomi-camera-bridge
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-addon
+  cancel-in-progress: false
+
+jobs:
+  init:
+    name: Initialize build
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      version: ${{ steps.version.outputs.version }}
+      published: ${{ steps.version.outputs.published }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version and check whether it is already published
+        id: version
+        run: |
+          set -euo pipefail
+          version="$(yq -r '.version' addon/config.yaml)"
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "::error::could not read version from addon/config.yaml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Skip a rebuild when every architecture is already published, so an
+          # unrelated push to addon/ does not republish an unchanged version.
+          published=true
+          for arch in amd64 aarch64; do
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${arch}-${IMAGE_NAME}:${version}"
+            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
+              published=false
+              break
+            fi
+          done
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          echo "version $version, already published: $published"
+
+      - name: Get build matrix
+        id: matrix
+        uses: home-assistant/builder/actions/prepare-multi-arch-matrix@2026.06.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: init
+    if: needs.init.outputs.published == 'false' || inputs.force
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write # Cosign signing needs an OIDC token
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.init.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        uses: home-assistant/builder/actions/build-image@2026.06.0
+        with:
+          arch: ${{ matrix.arch }}
+          image: ${{ matrix.image }}
+          image-tags: |
+            ${{ needs.init.outputs.version }}
+            latest
+          context: ./addon
+          # These actions build any container image and do not read an add-on's
+          # build.yaml, so the per-architecture base image is passed explicitly.
+          # It must stay Debian: the vendor's streaming library is glibc-only and
+          # cannot load on the Alpine images most add-ons use.
+          build-args: |
+            BUILD_FROM=ghcr.io/home-assistant/${{ matrix.arch }}-base-debian:bookworm
+          push: "true"
+          version: ${{ needs.init.outputs.version }}
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  manifest:
+    name: Publish multi-arch manifest
+    needs: [init, build]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Publish multi-arch manifest
+        uses: home-assistant/builder/actions/publish-multi-arch-manifest@2026.06.0
+        with:
+          architectures: ${{ env.ARCHITECTURES }}
+          image-name: ${{ env.IMAGE_NAME }}
+          image-tags: |
+            ${{ needs.init.outputs.version }}
+            latest
+          container-registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # HACS learns about versions from GitHub releases and from nothing else:
+  # without one it installs from the default branch, offers no version to
+  # choose and never reports an update. Created here rather than by hand,
+  # because a step that has to be remembered is one that will be forgotten --
+  # the two version numbers in this repository drifted apart for that reason.
+  #
+  # After the manifest, never before: a release names a version, and naming one
+  # whose image failed to build points users at something that cannot run.
+  release:
+    name: Publish release
+    needs: [init, manifest]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the release if this version has none
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.init.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} is already released"
+            exit 0
+          fi
+
+          # The changelog entry for this version, verbatim. It is written for
+          # the person deciding whether to update, which is exactly who reads a
+          # release, so there is no second set of notes to keep in step.
+          awk -v version="## ${VERSION}" '
+            $0 == version { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' addon/CHANGELOG.md > notes.md
+
+          if [ ! -s notes.md ]; then
+            echo "::error::addon/CHANGELOG.md has no entry for ${VERSION}"
+            exit 1
+          fi
+
+          gh release create "v${VERSION}" --title "v${VERSION}" --notes-file notes.md

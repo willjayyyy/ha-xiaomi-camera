@@ -1,0 +1,93 @@
+{
+  "config": {
+    "step": {
+      "discovery_confirm": {
+        "title": "Xiaomi Camera",
+        "description": "The {name} add-on was found. Set it up now?\n\nYou will sign in to your Xiaomi account on the add-on's own page afterwards."
+      },
+      "install_addon": {
+        "title": "Install the bridge",
+        "description": "Your cameras are streamed by the {addon} add-on, which runs alongside Home Assistant. It will be installed and started for you.\n\nThis takes a few minutes."
+      },
+      "addon_unavailable": {
+        "title": "Add-on repository missing",
+        "description": "The {addon} add-on is not available in your add-on store yet. Add this project's repository under Settings → Add-ons → Add-on Store → Repositories, install the add-on, then come back.\n\nContinue to enter a bridge address manually instead."
+      },
+      "manual": {
+        "title": "Connect to the bridge",
+        "description": "Enter the address of the Xiaomi Camera Bridge. Use 127.0.0.1 when it runs on this machine.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      },
+      "cameras": {
+        "title": "Choose cameras",
+        "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
+        "data": {
+          "cameras": "Cameras",
+          "auto_add": "Add new cameras automatically",
+          "stream_codec": "Video for Home Assistant"
+        },
+        "data_description": {
+          "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
+          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the bridge at that address.",
+      "not_linked": "The add-on still has no Xiaomi account linked. Sign in on its page first."
+    },
+    "abort": {
+      "already_configured": "The bridge is already set up.",
+      "addon_start_failed": "The add-on could not be started: {error}",
+      "addon_install_failed": "The add-on could not be installed: {error}",
+      "reauth_successful": "Signed in again."
+    }
+  },
+  "entity": {
+    "switch": {
+      "camera_power": {
+        "name": "Camera power"
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Choose cameras",
+        "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
+        "data": {
+          "cameras": "Cameras",
+          "auto_add": "Add new cameras automatically",
+          "stream_codec": "Video for Home Assistant"
+        },
+        "data_description": {
+          "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
+          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+        }
+      }
+    },
+    "abort": {
+      "cannot_connect": "Could not reach the bridge add-on.",
+      "no_cameras": "No supported cameras were found on this account."
+    }
+  },
+  "selector": {
+    "stream_codec": {
+      "options": {
+        "h264": "H.264 · Best compatibility",
+        "original": "H.265 · Best quality"
+      }
+    }
+  },
+  "issues": {
+    "not_linked": {
+      "title": "Xiaomi account is not signed in",
+      "description": "The {addon} add-on has no Xiaomi account signed in, so no cameras can be read. Open the add-on's page and sign in there — the account belongs to the add-on and is never held by Home Assistant. This message clears itself once it does."
+    }
+  }
+}
