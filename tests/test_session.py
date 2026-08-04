@@ -164,14 +164,21 @@ class TestColdStart:
         await session.async_stop()
 
     async def test_a_warm_session_does_not_wait(self) -> None:
-        """A consumer joining a running session starts immediately."""
-        client = _FakeClient()
+        """A consumer joining a running session starts immediately.
+
+        The deadline is far shorter than the camera's first-frame delay, so
+        this fails if the wait starts over rather than seeing what the session
+        already holds. Waiting every time would put the cost of a cold start
+        on every reconnecting viewer -- and a browser reloading a stream is
+        exactly the case the linger period exists to make cheap.
+        """
+        client = _FakeClient(first_frame_delay=0.2)
         session = _session(client)
 
         async with session.subscribe():
             pass
 
-        async with asyncio.timeout(0.5):
+        async with asyncio.timeout(0.05):
             async with session.subscribe() as consumer:
                 assert not consumer.queue.empty()
 
