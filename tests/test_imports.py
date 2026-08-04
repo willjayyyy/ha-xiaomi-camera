@@ -25,7 +25,12 @@ _BRIDGE = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app" / 
 
 #: Modules that reach the vendor SDK, directly or through an import of their
 #: own. They can only be read, not imported.
-_NEEDS_SDK = {"__main__", "account", "cameras", "streaming", "api", "restream"}
+#:
+#: ``streaming`` is absent: the only SDK names it needs at run time are two
+#: enums, which ``conftest`` supplies, so it imports and its session lifetime
+#: is covered by ``test_session``. It was on this list while that lifetime was
+#: untested, and two faults lived there undetected as a result.
+_NEEDS_SDK = {"__main__", "account", "cameras", "api", "restream"}
 
 _IMPORTABLE = sorted(
     path.stem

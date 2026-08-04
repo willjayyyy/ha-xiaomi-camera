@@ -29,7 +29,11 @@ from typing import TYPE_CHECKING
 
 from miot.types import MIoTCameraStatus, MIoTCameraVideoQuality
 
-from .const import CONNECT_TIMEOUT_SECONDS, SNAPSHOT_TIMEOUT_SECONDS
+from .const import (
+    CONNECT_TIMEOUT_SECONDS,
+    PARAMETER_SET_TIMEOUT_SECONDS,
+    SNAPSHOT_TIMEOUT_SECONDS,
+)
 from .framing import Consumer as _Consumer
 from .framing import ParameterSets as _ParameterSets
 from .framing import SessionStats
@@ -112,6 +116,10 @@ class CameraSession:
         #: between a snapshot's clear and its wait made the snapshot miss the
         #: very frame it woke for.
         self._jpeg_ready = asyncio.Event()
+        #: Set once the parameter sets a decoder needs have arrived. Replaced
+        #: rather than cleared on teardown, for the same reason as
+        #: ``_jpeg_ready``: a waiter holds its own reference.
+        self._parameters_ready = asyncio.Event()
         self.stats = SessionStats()
 
     @property
@@ -133,7 +141,27 @@ class CameraSession:
                 self._linger_task.cancel()
                 self._linger_task = None
             if self._instance is not None:
-                return
+                # Holding an instance is not the same as holding a working
+                # one. The peer-to-peer link drops on its own, and the SDK
+                # reports that only through its status -- the object stays
+                # exactly as it was. Trusting the object alone once left a
+                # camera dead for two and a half hours: every request reused a
+                # disconnected session, nothing reconnected, and because this
+                # branch returned before the log line below, the add-on never
+                # said a word about it.
+                #
+                # Asked on every entry rather than cached behind an interval.
+                # The call is one crossing into the vendor library and the
+                # callers are not hot -- snapshots come from dashboard tiles,
+                # and the preview reads the published RTSP stream rather than
+                # this path. A cache here would buy nothing and would put a
+                # window back in, during which a dead link still looks alive.
+                if await self._current_status() == MIoTCameraStatus.CONNECTED:
+                    return
+                _LOGGER.warning(
+                    "%s lost its peer-to-peer link; reconnecting", self._info.name
+                )
+                await self._teardown()
 
             _LOGGER.info("Starting session for %s", self._info.name)
             instance = await self._client.create_camera_instance_async(
@@ -172,32 +200,63 @@ class CameraSession:
             self.stats = SessionStats(started_at=time.monotonic())
             _LOGGER.info("Session established for %s", self._info.name)
 
+    async def _current_status(self) -> MIoTCameraStatus | None:
+        """The peer-to-peer link's status, or ``None`` if it cannot be read.
+
+        An unreadable status is treated as a dead link by the caller rather
+        than as a reason to give up: the remedy for both is the same
+        reconnect, and the alternative -- keeping a session whose health is
+        unknown -- is exactly the state this guards against.
+        """
+        assert self._instance is not None
+        try:
+            return await self._instance.get_status_async()
+        except Exception as err:
+            _LOGGER.warning(
+                "Could not read %s's session status: %s",
+                self._info.name,
+                safe_error(err),
+            )
+            return None
+
+    async def _teardown(self) -> None:
+        """Stop the instance and reset everything derived from it.
+
+        Assumes ``self._lock`` is already held. Separate from
+        :meth:`async_stop` because reconnecting has to tear down from inside
+        the critical section it is already in; calling the public method there
+        would deadlock on the same lock.
+        """
+        if self._instance is None:
+            return
+        _LOGGER.info("Stopping session for %s", self._info.name)
+        with contextlib.suppress(Exception):
+            await self._instance.stop_async()
+        self._instance = None
+        self._codec = None
+        self._parameter_sets = _ParameterSets()
+        self._latest_jpeg = None
+        self._latest_jpeg_at = None
+        # Released rather than discarded, so anything waiting for a frame
+        # wakes up now and finds the session gone instead of waiting out
+        # its own timeout.
+        self._jpeg_ready.set()
+        self._jpeg_ready = asyncio.Event()
+        self._parameters_ready.set()
+        self._parameters_ready = asyncio.Event()
+        self.stats = SessionStats()
+        # Signal through an event rather than a queue sentinel -- see
+        # the note on _Consumer.closed.
+        for consumer in list(self._consumers):
+            consumer.closed.set()
+        self._consumers.clear()
+
     async def async_stop(self) -> None:
         async with self._lock:
             if self._linger_task is not None:
                 self._linger_task.cancel()
                 self._linger_task = None
-            if self._instance is None:
-                return
-            _LOGGER.info("Stopping session for %s", self._info.name)
-            with contextlib.suppress(Exception):
-                await self._instance.stop_async()
-            self._instance = None
-            self._codec = None
-            self._parameter_sets = _ParameterSets()
-            self._latest_jpeg = None
-            self._latest_jpeg_at = None
-            # Released rather than discarded, so anything waiting for a frame
-            # wakes up now and finds the session gone instead of waiting out
-            # its own timeout.
-            self._jpeg_ready.set()
-            self._jpeg_ready = asyncio.Event()
-            self.stats = SessionStats()
-            # Signal through an event rather than a queue sentinel -- see
-            # the note on _Consumer.closed.
-            for consumer in list(self._consumers):
-                consumer.closed.set()
-            self._consumers.clear()
+            await self._teardown()
 
     def _schedule_linger_stop(self) -> None:
         if self._linger_task is not None:
@@ -247,11 +306,14 @@ class CameraSession:
     async def subscribe(self) -> AsyncIterator[_Consumer]:
         """Yield a consumer of Annex-B chunks for the lifetime of the context."""
         async with self._hold():
+            await self._async_wait_for_parameter_sets()
             consumer = _Consumer(queue=asyncio.Queue(maxsize=_CONSUMER_QUEUE_SIZE))
-            if self._parameter_sets.units:
-                # Replay the parameter sets so a decoder can start without
-                # waiting for the camera to send the next set.
-                consumer.queue.put_nowait(self._parameter_sets.as_annex_b())
+            # Replay the parameter sets so a decoder can start without waiting
+            # for the camera to send the next set. Guaranteed to be present by
+            # the wait above; before it existed, a consumer arriving during a
+            # cold start got nothing here and had to gamble on catching the
+            # next keyframe within its own reader's timeout.
+            consumer.queue.put_nowait(self._parameter_sets.as_annex_b())
             self._consumers.add(consumer)
             self.stats.consumers = len(self._consumers)
             try:
@@ -259,6 +321,30 @@ class CameraSession:
             finally:
                 self._consumers.discard(consumer)
                 self.stats.consumers = len(self._consumers)
+
+    async def _async_wait_for_parameter_sets(self) -> None:
+        """Block until a joining consumer would have something decodable.
+
+        An H.265 decoder cannot start without the parameter sets, and a camera
+        sends them only ahead of a keyframe -- roughly every three seconds
+        here. Handing over a consumer before then produces a stream that reads
+        as corrupt rather than as empty, and the reader gives up long before
+        the next keyframe explains why.
+
+        Only the raw video path waits. Snapshots come from the SDK's own
+        decoder and never touch these.
+        """
+        if self._parameter_sets.units:
+            return
+        ready = self._parameters_ready
+        try:
+            await asyncio.wait_for(ready.wait(), timeout=PARAMETER_SET_TIMEOUT_SECONDS)
+        except TimeoutError as err:
+            raise CameraOffError(
+                f"{self._info.name} is connected but sent no video within "
+                f"{PARAMETER_SET_TIMEOUT_SECONDS}s. The camera is most likely "
+                f"switched off."
+            ) from err
 
     async def async_snapshot(self, max_age: float | None = None) -> bytes:
         """Return a JPEG still, starting the session if needed.
@@ -331,6 +417,7 @@ class CameraSession:
                 unit_type = nal_type(unit, self._codec)
                 if is_parameter_set(unit_type, self._codec):
                     self._parameter_sets.remember(unit)
+                    self._parameters_ready.set()
                 elif is_keyframe(unit_type, self._codec):
                     self.stats.keyframes += 1
 
