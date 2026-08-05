@@ -523,9 +523,14 @@ def _camera_checklist_schema(
     )
 
 
-def _stream_label_map(keys: list[str]) -> dict[str, str]:
+def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
     """Stream key -> display label, from the translations table the rest of
-    the integration uses, so there is exactly one source of labels."""
+    the integration uses, so there is exactly one source of labels.
+
+    The labels carry the camera's name, substituted into the `{camera}`
+    placeholder the same way the entity-name path does, so the form reads
+    "Living room H.264 360p" rather than a bare codec.
+    """
     path = Path(__file__).with_name("translations") / "en.json"
     try:
         entities = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
@@ -535,9 +540,7 @@ def _stream_label_map(keys: list[str]) -> dict[str, str]:
     for key in keys:
         entry = entities.get(key)
         label = entry.get("name", key) if isinstance(entry, dict) else entry or key
-        # The translations carry a `{camera}` placeholder for the entity-name
-        # path; the form labels only name the stream, so it is dropped here.
-        labels[key] = label.replace("{camera}", "").strip()
+        labels[key] = label.replace("{camera}", camera_name).strip()
     return labels
 
 
@@ -569,7 +572,7 @@ def _streams_schema(
             continue
         default = stream_options.get(did, [primary]) if stream_options else [primary]
         streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
-            cv.multi_select(_stream_label_map(available[did]))
+            cv.multi_select(_stream_label_map(available[did], cameras[did]))
         )
     return vol.Schema(streams)
 
