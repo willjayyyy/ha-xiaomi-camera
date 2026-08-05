@@ -56,7 +56,10 @@ Measured on current-generation hardware at the `low` quality setting:
   need to cache parameter sets and replay them to late joiners. A client that
   attaches mid-stream can decode from the next keyframe.
 
-Do not assume H.264 anywhere in the playback path.
+Do not assume H.264 anywhere upstream of go2rtc: the camera itself never emits
+it. Every H.264 variant this add-on publishes (see "Eight published streams")
+is produced by re-encoding the camera's own H.265, not received from the
+camera.
 
 ## Vendor SDK constraints
 
@@ -248,33 +251,70 @@ end. It was dropped for uniformity. Generating a password the user must then
 find in a log is worse than telling them to choose one, and one rule that holds
 everywhere is easier to reason about than two that differ by deployment.
 
-## Two published streams
+## Eight published streams
 
-Each camera is published twice:
+Each camera is published as eight variants: two codecs (H.265, H.264) at four
+resolutions each (source, 720, 360, 180).
 
 | Stream | Contents | For |
 |---|---|---|
-| `camera_<did>` | the camera's H.265, repackaged, never re-encoded | NVRs, Frigate, anything that can decode it |
-| `camera_<did>_h264` | the same pictures re-encoded, on demand | browsers, HomeKit |
+| `camera_<did>_h265` | the camera's own encoding, repackaged, never re-encoded | NVRs, Frigate, recording — anything that can decode H.265 and wants the source untouched |
+| `camera_<did>_h264` | the same pictures re-encoded at source resolution | browsers, HomeKit, and anything else that cannot decode H.265 |
+| `camera_<did>_h265_720` / `_h264_720` | re-encoded and scaled to 720p, 2M bitrate | consumers that want a smaller picture than the source but not a phone-sized one |
+| `camera_<did>_h265_360` / `_h264_360` | scaled to 360p, 512k bitrate | bandwidth-constrained viewing |
+| `camera_<did>_h265_180` / `_h264_180` | scaled to 180p, 256k bitrate | the most constrained consumers — thumbnails, slow links |
 
-The second exists because H.265 is where these cameras end and most consumers
-begin. `VideoDecoder` is a SecureContext API and Home Assistant is usually
-reached over plain HTTP; MSE decodes H.265 only where the hardware happens to
-support it; HomeKit does not accept it at all. The symptom is not an error but
-a picture that sits still, which is the hardest kind of failure to explain.
+The H.264 variants exist because H.265 is where these cameras end and most
+consumers begin. `VideoDecoder` is a SecureContext API and Home Assistant is
+usually reached over plain HTTP; MSE decodes H.265 only where the hardware
+happens to support it; HomeKit does not accept it at all. The symptom is not
+an error but a picture that sits still, which is the hardest kind of failure
+to explain.
 
-Two names rather than two codecs under one name. Offering both on one stream
-leaves the choice to whatever connects, so an NVR that accepts either could
-record a re-encode of a stream it could have copied.
+The lower resolutions exist for the same underlying reason under a different
+name: a viewer on a slow link or a small screen does not need the bitrate the
+source was captured at, and asking it to decode that anyway wastes bandwidth
+it may not have.
 
-go2rtc's own H.264 template is `-c:v libx264`, which is GPL and therefore
-absent from the LGPL ffmpeg this image ships. It is overridden to use openh264
-— Cisco's BSD-licensed encoder, which that build does include. The Dockerfile
-greps the encoder list for it, so a build that loses it fails there rather than
-when a user opens a camera.
+Distinct names rather than codecs or resolutions negotiated on one stream.
+Offering more than one option on a single name leaves the choice to whatever
+connects, so an NVR that accepts either codec could end up recording a
+re-encode of a stream it could have copied untouched. The naming rule has no
+exception: the codec is always part of the name, including for the camera's
+own H.265 at source resolution (`camera_<did>_h265`, never a bare
+`camera_<did>`). An earlier version omitted the codec for H.265 on the
+grounds that it was the default, and that made the two 360p variants
+indistinguishable in the entity picker — there was no way to tell
+`camera_<did>_360` apart from `camera_<did>_h264_360` without opening it.
 
-Nothing is encoded until something opens the second URL. The integration hands
-Home Assistant that one; `Restreamer.rtsp_url` still reports the original.
+Every variant but the root is defined not against the add-on's HTTP endpoint
+but against `camera_<did>_h265` itself — go2rtc reads one stream from
+another by name. That means every derived stream, however many are open at
+once, shares the one peer-to-peer session the root already holds with the
+camera, instead of each variant opening its own.
+
+Nothing is encoded until a consumer connects: go2rtc starts an `ffmpeg:`
+producer for a variant on its first consumer and stops it after the last one
+leaves. The root is the exception in the other direction — it is
+`#video=copy`, repackaging only, so there is nothing to encode there at any
+point.
+
+The image ships ffmpeg's GPL build, and `libx264` and `libx265` are used
+directly as go2rtc's encoder templates for the H.264 and H.265 variants —
+they are the standard encoders for their formats. The Dockerfile greps the
+built ffmpeg's encoder list for both after compiling it, so a build that loses
+one fails there rather than when a user opens a camera.
+
+The build was permissively licensed, without either encoder, until this
+branch. That earlier choice rested on the add-on only ever copying streams,
+never encoding them — a build without `libx264` or `libx265` was enough to
+remux H.265 into RTSP. Publishing re-encoded and rescaled variants stopped
+that being true, and the standard encoders for both formats require the
+copyleft build, so the build had to move with it.
+
+The integration hands Home Assistant the URL for whichever variants a user
+selects per camera; `Restreamer.rtsp_url` reports the root regardless of what
+else is published.
 
 ## Preview
 
@@ -304,9 +344,11 @@ frame rate. With bandwidth not a constraint -- this runs on the same local
 network as the cameras -- MJPEG wins on the things that are left: no round trip
 or middleware pass per picture, no buffering latency, no decoder or codec
 negotiation in the page, and intra-only frames with no motion artefacts. The
-alternatives lose on constraints rather than on merit: WebCodecs needs a secure
-context, and an H.264 fragment stream for MSE needs a GPL encoder this image
-deliberately does not ship, and buffers whole fragments before playing them.
+image now ships the encoders an H.264 fragment stream for MSE would need, so
+that is no longer why MJPEG is used -- but MSE still buffers whole fragments
+before playing them, which trades away the low latency a live preview exists
+for, and WebCodecs still needs a secure context Home Assistant does not
+reliably have. MJPEG remains the better fit on its own merits, not by default.
 
 Its frame rate and quality are set on the page rather than in the add-on
 options, and stored in `/data` (`bridge/preferences.py`). The split is between
