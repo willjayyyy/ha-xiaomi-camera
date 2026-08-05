@@ -373,6 +373,7 @@ class BridgeApi:
         queue is bounded: a stalled consumer can fill it, and a dropped sentinel
         would leave this loop waiting forever and block shutdown.
         """
+        first_ts = True
         while True:
             unit_task = asyncio.ensure_future(consumer.queue.get())
             closed_task = asyncio.ensure_future(consumer.closed.wait())
@@ -408,6 +409,14 @@ class BridgeApi:
                 return
             chunk = muxer.write(unit)
             if chunk:
+                if first_ts:
+                    first_ts = False
+                    _LOGGER.warning(
+                        "TSDUMP %s first %d bytes: %s",
+                        did,
+                        len(chunk),
+                        chunk[:256].hex(),
+                    )
                 await response.write(chunk)
 
     async def _set_power(self, request: web.Request) -> web.Response:

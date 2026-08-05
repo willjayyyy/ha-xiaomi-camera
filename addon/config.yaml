@@ -1,6 +1,6 @@
 ---
 name: Xiaomi Camera Bridge
-version: "1.1.0"
+version: "1.1.1"
 slug: xiaomi_camera_bridge
 description: >-
   Streams Xiaomi cameras over the vendor's peer-to-peer protocol and republishes
