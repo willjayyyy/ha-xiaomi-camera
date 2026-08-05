@@ -381,8 +381,17 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         if not self._cameras:
             # The coordinator already holds the current inventory -- polled
             # while the entry was set up -- so opening this form costs no
-            # extra round trip to the bridge.
-            cameras = self.config_entry.runtime_data.data
+            # extra round trip to the bridge. `runtime_data` is only ever set
+            # by a *successful* `async_setup_entry`; an entry stuck retrying
+            # after a `ConfigEntryNotReady` may not have the attribute at
+            # all, and the options flow can still be opened against it -- Home
+            # Assistant does not gate on entry state here. Reading it with
+            # `getattr` turns that into a clean, actionable abort instead of
+            # an unhandled `AttributeError` surfacing as "Unknown error".
+            coordinator = getattr(self.config_entry, "runtime_data", None)
+            if coordinator is None:
+                return self.async_abort(reason="cannot_connect")
+            cameras = coordinator.data
             self._cameras = {did: camera.name for did, camera in cameras.items()}
             self._available_streams = {
                 did: [stream.key for stream in camera.streams]

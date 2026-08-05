@@ -176,3 +176,32 @@ async def test_the_primary_stream_is_not_rewritten_by_editing_options(hass) -> N
     await hass.async_block_till_done()
 
     assert entry.options["primary_stream"] == "h264"
+
+
+async def test_options_on_an_entry_that_never_loaded_aborts_cleanly(hass) -> None:
+    """The bridge was unreachable at startup, so nothing was ever polled.
+
+    Home Assistant still lets the options flow be opened on an entry stuck
+    retrying, and this is precisely when a user goes looking at the
+    configuration. "Cannot connect" is actionable; "Unknown error" is not.
+    """
+    from custom_components.xiaomi_camera.api import BridgeError
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"host": "127.0.0.1", "port": 8099},
+        options={"cameras": ["42"], "primary_stream": "h265"},
+    )
+    entry.add_to_hass(hass)
+    with patch("custom_components.xiaomi_camera.BridgeClient") as client:
+        client.return_value.async_health = AsyncMock(
+            side_effect=BridgeError("bridge is down")
+        )
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "cannot_connect"

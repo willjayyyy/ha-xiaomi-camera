@@ -26,13 +26,11 @@
         "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
         "data": {
           "cameras": "Cameras",
-          "auto_add": "Add new cameras automatically",
-          "stream_codec": "Video for Home Assistant"
+          "auto_add": "Add new cameras automatically"
         },
         "data_description": {
           "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
-          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
-          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself."
         }
       }
     },
@@ -61,27 +59,17 @@
         "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
         "data": {
           "cameras": "Cameras",
-          "auto_add": "Add new cameras automatically",
-          "stream_codec": "Video for Home Assistant"
+          "auto_add": "Add new cameras automatically"
         },
         "data_description": {
           "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
-          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
-          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself."
         }
       }
     },
     "abort": {
       "cannot_connect": "Could not reach the bridge add-on.",
       "no_cameras": "No supported cameras were found on this account."
-    }
-  },
-  "selector": {
-    "stream_codec": {
-      "options": {
-        "h264": "H.264 · Best compatibility",
-        "original": "H.265 · Best quality"
-      }
     }
   },
   "issues": {

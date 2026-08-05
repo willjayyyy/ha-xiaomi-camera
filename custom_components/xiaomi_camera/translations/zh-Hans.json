@@ -26,13 +26,11 @@
         "description": "要把哪些小米摄像头接入 Home Assistant？之后可以随时修改。",
         "data": {
           "cameras": "摄像头",
-          "auto_add": "自动导入新发现的摄像头",
-          "stream_codec": "Home Assistant 播放的视频"
+          "auto_add": "自动导入新发现的摄像头"
         },
         "data_description": {
           "cameras": "只有勾选的摄像头会生成实体，其余的仅留在米家 App 中，不会被发布。",
-          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。",
-          "stream_codec": "H.264 由加载项转码，浏览器与 Apple 家庭均可播放，兼容性最强。H.265 为摄像头原生编码，画质更好且无转码开销，但需要播放设备支持解码，例如 Safari 或具备硬件解码能力的浏览器。"
+          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。"
         }
       }
     },
@@ -61,27 +59,17 @@
         "description": "要把哪些小米摄像头接入 Home Assistant？之后可以随时修改。",
         "data": {
           "cameras": "摄像头",
-          "auto_add": "自动导入新发现的摄像头",
-          "stream_codec": "Home Assistant 播放的视频"
+          "auto_add": "自动导入新发现的摄像头"
         },
         "data_description": {
           "cameras": "只有勾选的摄像头会生成实体，其余的仅留在米家 App 中，不会被发布。",
-          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。",
-          "stream_codec": "H.264 由加载项转码，浏览器与 Apple 家庭均可播放，兼容性最强。H.265 为摄像头原生编码，画质更好且无转码开销，但需要播放设备支持解码，例如 Safari 或具备硬件解码能力的浏览器。"
+          "auto_add": "以后账号里新增的摄像头会自动接入。关闭后，每一台都由你自己决定。"
         }
       }
     },
     "abort": {
       "cannot_connect": "无法连接到桥接加载项。",
       "no_cameras": "该账号下没有找到受支持的摄像头。"
-    }
-  },
-  "selector": {
-    "stream_codec": {
-      "options": {
-        "h264": "H.264 · 兼容性最强",
-        "original": "H.265 · 画质更好"
-      }
     }
   },
   "issues": {

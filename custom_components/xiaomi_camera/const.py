@@ -27,22 +27,6 @@ CONF_EXCLUDED: Final = "excluded_cameras"
 #: missing is harder than noticing one you did not want.
 CONF_AUTO_ADD: Final = "auto_add"
 
-#: Which of the two published streams Home Assistant should play. The cameras
-#: send H.265; the add-on also publishes an H.264 version, re-encoded only
-#: while something is watching.
-CONF_STREAM_CODEC: Final = "stream_codec"
-
-#: Re-encoded H.264. The default, because it plays everywhere: browsers decode
-#: H.265 only where the hardware happens to support it and the page is served
-#: over HTTPS, and the failure is a picture that sits still rather than an
-#: error anyone can act on.
-STREAM_CODEC_H264: Final = "h264"
-
-#: The camera's own H.265. Better quality and no encoding at all, for someone
-#: who knows their devices can decode it -- Safari, or a browser with hardware
-#: support.
-STREAM_CODEC_ORIGINAL: Final = "original"
-
 #: Per-camera stream selection: {did: [stream key, ...]}. Replaces the
 #: entry-wide CONF_STREAM_CODEC, which could only say one thing for every
 #: camera at once.
