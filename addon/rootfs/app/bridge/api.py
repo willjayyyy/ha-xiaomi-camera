@@ -2,11 +2,11 @@
 
 Two listeners with deliberately different exposure:
 
-* **Control plane** -- machine-facing. Serves the raw elementary stream to the
-  restreamer and answers the integration's queries. It has no authentication of
-  its own, so it is bound to loopback unconditionally and never follows
-  ``access_mode``: publishing it would hand out live video, camera power control
-  and session teardown to anyone on the network.
+* **Control plane** -- machine-facing. Serves the camera streams, muxed as
+  MPEG-TS, to the restreamer and answers the integration's queries. It has no
+  authentication of its own, so it is bound to loopback unconditionally and
+  never follows ``access_mode``: publishing it would hand out live video,
+  camera power control and session teardown to anyone on the network.
 * **Ingress UI** -- the account-linking page. Supervisor's ingress proxy runs in
   its own container and reaches a host-network add-on over the Docker bridge
   rather than loopback, so this listener cannot be bound to loopback. Instead
@@ -30,6 +30,7 @@ import logging
 import secrets
 from typing import TYPE_CHECKING, Any
 
+import av.error
 from aiohttp import web
 
 from .account import AccountManager, LinkFailedError
@@ -326,15 +327,29 @@ class BridgeApi:
                 # its first byte, so this is the moment the decision is made.
                 muxer = StreamMuxer(session.codec, session.audio_codec)
                 try:
-                    await self._pump(consumer, response, muxer)
+                    await self._pump(consumer, response, muxer, session.stats, did)
                 finally:
-                    # Accumulated before the muxer is discarded. It is
-                    # per-consumer and short-lived; the session's counter is
-                    # the total across every reader it has served.
+                    # Accumulated before the muxer is discarded. They are
+                    # per-consumer and short-lived; the session's counters are
+                    # the totals across every reader it has served.
                     session.stats.dropped_timestamps += muxer.dropped
+                    session.stats.clock_reanchors += muxer.reanchors
+                    # Attempted independently: a failing write must not skip
+                    # the close (it releases the underlying AVFormatContext),
+                    # and a failing close is suppressed on its own rather than
+                    # also swallowing a write that would otherwise succeed.
+                    trailer = b""
                     with contextlib.suppress(Exception):
-                        await response.write(muxer.close())
-        except StreamError as err:
+                        trailer = muxer.close()
+                    if trailer:
+                        with contextlib.suppress(Exception):
+                            await response.write(trailer)
+        except (StreamError, av.error.FFmpegError) as err:
+            # The muxer's own exceptions land here too: a malformed unit (a
+            # zero-length payload, observed from the SDK after a peer-to-peer
+            # reconnect) makes PyAV raise, and letting that escape means an
+            # unredacted traceback in the response instead of the safe_error
+            # discipline every other failure on this path already gets.
             _LOGGER.warning("stream for %s failed: %s", did, safe_error(err))
         except (ConnectionResetError, asyncio.CancelledError):
             # go2rtc disconnecting is routine -- it reconnects on demand.
@@ -345,7 +360,13 @@ class BridgeApi:
         return response
 
     @staticmethod
-    async def _pump(consumer, response: web.StreamResponse, muxer: StreamMuxer) -> None:
+    async def _pump(
+        consumer,
+        response: web.StreamResponse,
+        muxer: StreamMuxer,
+        stats,
+        did: str,
+    ) -> None:
         """Package units into the response until the session or client ends.
 
         The close signal is an event rather than a queue sentinel because the
@@ -369,6 +390,21 @@ class BridgeApi:
                 # cannot gain a track. Ending the response is the whole remedy:
                 # go2rtc reconnects within about a second onto a session that
                 # is already warm, and gets a container that has the track.
+                #
+                # The spec treats this as a rare safety net rather than the
+                # normal path, on the unverified assumption that a camera
+                # sending audio at all sends some before subscribe()'s
+                # parameter-set wait finishes. Counted and logged so release
+                # verification can tell "fired once" from "fires on every
+                # connect" without a packet capture.
+                stats.late_audio_reconnects += 1
+                _LOGGER.info(
+                    "%s: audio arrived after the stream started without it; "
+                    "ending the response so go2rtc reconnects with an audio "
+                    "track (%d such reconnect(s) so far)",
+                    did,
+                    stats.late_audio_reconnects,
+                )
                 return
             chunk = muxer.write(unit)
             if chunk:

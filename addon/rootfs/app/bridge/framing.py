@@ -104,6 +104,19 @@ class SessionStats:
     #: reports after a reconnect, mostly. Counted rather than merely logged, so
     #: a stream that is quietly short of frames can be recognised as one.
     dropped_timestamps: int = 0
+    #: Times the muxer judged the device clock to have restarted and
+    #: re-anchored its shared offset. Frequent re-anchoring on a camera that
+    #: never actually reconnects would mean the audio and video timestamps do
+    #: not share an epoch after all -- the one assumption this design could
+    #: not verify in CI.
+    clock_reanchors: int = 0
+    #: Times a container without an audio track outlived the arrival of an
+    #: audio unit, so the response was ended for go2rtc to reconnect onto a
+    #: session that already has the track. The design treats this as a rare
+    #: safety net rather than the normal path; if it fires on every connect
+    #: instead of almost never, that assumption is wrong and cold start is
+    #: paying for an extra reconnect cycle every time.
+    late_audio_reconnects: int = 0
     started_at: float | None = None
     last_frame_at: float | None = None
     consumers: int = 0
@@ -125,6 +138,8 @@ class SessionStats:
             "audio_frames": self.audio_frames,
             "audio_bytes": self.audio_bytes,
             "dropped_timestamps": self.dropped_timestamps,
+            "clock_reanchors": self.clock_reanchors,
+            "late_audio_reconnects": self.late_audio_reconnects,
             "stalled": self.is_stalled(),
         }
 
