@@ -338,6 +338,7 @@ const I18N = {
     accountHeading: "Account", camerasHeading: "Cameras",
     prefFps: "Frame rate", prefQuality: "Quality",
     fpsCamera: "Camera's rate",
+    audioOn: "Audio",
     qualityHigh: "High", qualityBalanced: "Balanced", qualityLow: "Low",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
     finish: "Finish sign-in", cancel: "Cancel",
@@ -377,6 +378,7 @@ const I18N = {
     accountHeading: "账号", camerasHeading: "摄像头",
     prefFps: "帧率", prefQuality: "画质",
     fpsCamera: "原生帧率",
+    audioOn: "声音",
     qualityHigh: "高", qualityBalanced: "均衡", qualityLow: "低",
     connect: "连接小米账号", disconnect: "断开连接",
     finish: "完成登录", cancel: "取消",
@@ -639,7 +641,11 @@ function renderCameras() {
           <span style="flex:1"></span>
           <span class="status ${st.cls}"><span class="dot"></span>${escapeHtml(st.label)}</span>
         </div>
-        <div class="cam-model">${escapeHtml(c.model)}</div>
+        <div class="cam-model">${escapeHtml(c.model)}${
+          c.stream_audio
+            ? ` · ${escapeHtml(t("audioOn"))} ${escapeHtml(c.stream_audio)}`
+            : ""
+        }</div>
         <div class="cam-foot">
           <code>${escapeHtml(displayUrl(c.rtsp_url))}</code>
           <button class="copy" data-copy="${escapeHtml(displayUrl(c.rtsp_url))}">${escapeHtml(t("copy"))}</button>

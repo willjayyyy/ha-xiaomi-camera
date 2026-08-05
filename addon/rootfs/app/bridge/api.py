@@ -240,6 +240,12 @@ class BridgeApi:
                         # here, which would be wrong the moment a camera ships
                         # that sends more.
                         "stream_fps": (stats.get(description.did, {}).get("fps")),
+                        # What the camera is actually sending, not what the
+                        # configuration asked for. The two disagreed for this
+                        # option's entire existence and nothing said so.
+                        "stream_audio": (
+                            stats.get(description.did, {}).get("audio_codec")
+                        ),
                         # Credential-free by construction: a URL carrying
                         # user:password@ would be copied into Home Assistant
                         # config state, diagnostics and the UI.
@@ -314,6 +320,10 @@ class BridgeApi:
                 try:
                     await self._pump(consumer, response, muxer)
                 finally:
+                    # Accumulated before the muxer is discarded. It is
+                    # per-consumer and short-lived; the session's counter is
+                    # the total across every reader it has served.
+                    session.stats.dropped_timestamps += muxer.dropped
                     with contextlib.suppress(Exception):
                         await response.write(muxer.close())
         except StreamError as err:

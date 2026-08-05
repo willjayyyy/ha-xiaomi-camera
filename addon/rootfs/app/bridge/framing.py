@@ -121,6 +121,10 @@ class SessionStats:
             "fps": round(self.frames / uptime, 1) if uptime > 1 else None,
             "consumers": self.consumers,
             "resyncs": self.resyncs,
+            "audio_codec": self.audio_codec,
+            "audio_frames": self.audio_frames,
+            "audio_bytes": self.audio_bytes,
+            "dropped_timestamps": self.dropped_timestamps,
             "stalled": self.is_stalled(),
         }
 

@@ -15,7 +15,7 @@ import pytest
 from bridge.framing import Consumer as _Consumer
 from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.framing import ParameterSets as _ParameterSets
-from bridge.mux import AUDIO_CODEC_OPUS
+from bridge.mux import AUDIO_CODEC_OPUS, StreamMuxer
 from bridge.nal import Codec
 from bridge.streaming import CameraSession, audio_codec_for
 from miot.types import MIoTCameraCodec, MIoTCameraVideoQuality
@@ -214,3 +214,42 @@ class TestAudioCodec:
         it and it demuxes back as an unusable `data` stream. A video-only
         stream is the honest outcome."""
         assert audio_codec_for(codec_id) is None
+
+
+class TestAudioStatistics:
+    """A number a user can read beats a symptom they have to describe.
+
+    The option this work repairs spent its whole existence claiming to carry
+    audio while carrying none, and nothing in the add-on could have said
+    otherwise.
+    """
+
+    def test_a_session_with_no_audio_says_so(self) -> None:
+        assert SessionStats().as_dict()["audio_codec"] is None
+
+    def test_audio_is_counted(self) -> None:
+        stats = SessionStats()
+        stats.audio_codec = "opus"
+        stats.audio_frames += 1
+        stats.audio_bytes += 80
+        reported = stats.as_dict()
+        assert reported["audio_codec"] == "opus"
+        assert reported["audio_frames"] == 1
+        assert reported["audio_bytes"] == 80
+
+    def test_dropped_timestamps_are_visible(self) -> None:
+        """Frames silently missing is what this project keeps having to
+        explain after the fact."""
+        stats = SessionStats()
+        stats.dropped_timestamps += 2
+        assert stats.as_dict()["dropped_timestamps"] == 2
+
+    def test_the_counter_has_a_writer(self) -> None:
+        """A statistic nothing assigns is an indicator wired to nothing --
+        which is the defect this change exists to remove, not to repeat."""
+        muxer = StreamMuxer(Codec.H265, None)
+        muxer.write(MediaUnit(MediaKind.VIDEO, 0, b"\x00\x00\x00\x01\x26\x01"))
+        muxer.write(MediaUnit(MediaKind.VIDEO, 0xFFFFFFFFFFFFFFFF, b"\x00"))
+        stats = SessionStats()
+        stats.dropped_timestamps += muxer.dropped
+        assert stats.as_dict()["dropped_timestamps"] == 1
