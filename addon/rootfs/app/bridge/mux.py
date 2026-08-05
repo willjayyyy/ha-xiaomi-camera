@@ -20,11 +20,14 @@ sent it.
 from __future__ import annotations
 
 import fractions
+import logging
 
 import av
 
 from .framing import MediaKind, MediaUnit
 from .nal import Codec
+
+_LOGGER = logging.getLogger(__name__)
 
 #: Container time base. The SDK stamps in milliseconds, so this carries the
 #: device's own numbers with neither rescaling nor rounding.
@@ -110,11 +113,25 @@ class StreamMuxer:
         #: Subtracted from every device timestamp. Shared by both tracks,
         #: which is precisely what keeps them in sync.
         self._offset: int | None = None
+        #: One value shared by both tracks rather than one per track. That is
+        #: only correct because the SDK dispatches every callback through
+        #: `asyncio.run_coroutine_threadsafe` (see streaming.py's threading
+        #: note), which preserves the order units were produced in across
+        #: audio and video alike -- so a single "last seen" timestamp is a
+        #: valid discontinuity check for both. Queueing either track's
+        #: callbacks separately, or dispatching audio through a different
+        #: path, would silently break that ordering guarantee.
         self._last_input: int | None = None
         self._last_output: dict[MediaKind, int] = {}
         #: Units whose timestamp could not be used. Reported, because a stream
         #: quietly missing frames is what this project keeps having to explain.
         self.dropped = 0
+        #: Times the device clock was judged to have restarted and the shared
+        #: offset re-anchored. The one assumption this design cannot verify in
+        #: CI is that the camera's audio and video timestamps share an epoch;
+        #: if they do not, the symptom is desynchronised audio with otherwise
+        #: clean statistics, so this is counted rather than only logged.
+        self.reanchors = 0
 
     @property
     def has_audio(self) -> bool:
@@ -157,6 +174,13 @@ class StreamMuxer:
             # re-anchoring the one shared offset keeps them in sync as well as
             # keeping the output moving forward.
             self._offset = ts_ms - (max(self._last_output.values(), default=0) + 1)
+            self.reanchors += 1
+            _LOGGER.debug(
+                "clock re-anchored after a %sms jump (kind=%s, reanchors=%d)",
+                ts_ms - self._last_input,
+                kind,
+                self.reanchors,
+            )
         self._last_input = ts_ms
 
         stamp = ts_ms - self._offset
