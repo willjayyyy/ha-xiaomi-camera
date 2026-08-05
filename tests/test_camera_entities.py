@@ -339,15 +339,16 @@ async def test_an_entry_with_no_stream_options_still_has_a_primary(hass) -> None
     assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
 
 
-async def test_registry_display_name_is_device_plus_label(hass) -> None:
+async def test_entities_never_strip_the_device_prefix(hass) -> None:
     """The device page shows the device name on every stream entity.
 
-    Home Assistant's device page shows the entity's stored registry name, and
-    for `has_entity_name` entities that is the label alone -- so a sub-stream
-    would appear as a bare codec under the device heading. The integration
-    pins the registry `name` to "device + label", so every surface agrees.
+    With `has_entity_name` Home Assistant composes "device + label" for the
+    name on every surface -- the device page, the entity list, the states --
+    and does not strip a device prefix into `original_name_unprefixed`. A
+    bare "H.264 360p" under the device heading would otherwise read as a
+    fault rather than a choice.
     """
-    entry = await _setup(
+    await _setup(
         hass,
         {
             "cameras": ["42"],
@@ -355,17 +356,16 @@ async def test_registry_display_name_is_device_plus_label(hass) -> None:
             "camera_streams": {"42": ["original", "h264_360"]},
         },
     )
-    # Trigger a coordinator poll so the registry-name sync runs with the
-    # camera name available (the entities register asynchronously after setup).
-    await entry.runtime_data.async_refresh()
-    await hass.async_block_till_done()
 
     registry = er.async_get(hass)
+    for uid in ("42", "42_h264_360"):
+        entry = registry.async_get(registry.async_get_entity_id("camera", DOMAIN, uid))
+        assert entry is not None
+        assert entry.has_entity_name is True
+        assert entry.original_name_unprefixed is None
+
     original = registry.async_get_entity_id("camera", DOMAIN, "42")
     variant = registry.async_get_entity_id("camera", DOMAIN, "42_h264_360")
-    assert registry.async_get(original).name == "Living room"
-    assert registry.async_get(variant).name == "Living room H.264 360p"
-    # The composed full name still reaches the states.
     assert hass.states.get(original).attributes["friendly_name"] == "Living room"
     assert (
         hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
