@@ -100,19 +100,14 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "streams"
-    # Each ticked camera is its own dropdown, so the choices live directly on
-    # the step's schema keyed by the camera's name plus id.
+    # Each ticked camera is its own field, so the choices live directly on
+    # the step's schema keyed by the camera's name plus id. `cv.multi_select`
+    # renders as a dropdown that opens into checkboxes -- Home Assistant's own
+    # "pick a domain" selectors use it -- and its options are the keys of the
+    # mapping it was given.
     stream_selector = result["data_schema"].schema["Living room (42)"]
-    stream_choices = stream_selector.config["options"]
-    assert set(stream_choices) == set(_KEYS)
-    assert "h264_720" not in stream_choices
-
-    # A plain `cv.multi_select` renders its labels verbatim -- raw identifiers
-    # like "h264_360" -- because it has no notion of translation at all. Only
-    # a selector with a `translation_key` resolves labels from
-    # `selector.stream_key.options.*`, so asserting the key here is what
-    # would catch a regression back to `cv.multi_select` before it ships.
-    assert stream_selector.config["translation_key"] == "stream_key"
+    assert set(stream_selector.options) == set(_KEYS)
+    assert "h264_720" not in stream_selector.options
 
 
 async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:

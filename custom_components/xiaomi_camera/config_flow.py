@@ -9,7 +9,9 @@ running on another machine) the same flow accepts an address instead.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -20,12 +22,8 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import (
-    SelectSelector,
-    SelectSelectorConfig,
-    SelectSelectorMode,
-)
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .api import BridgeCamera, BridgeClient, BridgeError, BridgeNotLinkedError
@@ -506,30 +504,34 @@ def _camera_checklist_schema(
     chosen: list[str],
     auto_add: bool,
 ) -> vol.Schema:
-    """A dropdown of cameras, labelled the way the Mi Home app labels them.
+    """A checklist of cameras, labelled the way the Mi Home app labels them.
 
-    A dropdown that opens into a checklist, like Home Assistant's "pick a
-    domain" selectors: each option carries the camera's name plus its id, so a
-    person can tell which camera is which and the id stays unique even when
-    two cameras share a name. The submitted value is the device id itself.
+    `cv.multi_select` renders as a dropdown that opens into checkboxes -- the
+    same control Home Assistant's own "pick a domain" selectors use, rather
+    than a `SelectSelector`, which shows chosen values as chips. Each option
+    carries the camera's name plus its id, so a person can tell which camera
+    is which; the submitted value is the device id itself.
     """
-    options = [
-        {"value": did, "label": f"{name} ({did})"} for did, name in cameras.items()
-    ]
+    options = {did: f"{name} ({did})" for did, name in cameras.items()}
     return vol.Schema(
         {
             vol.Required(
                 CONF_CAMERAS, default=[did for did in chosen if did in cameras]
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=options,
-                    multiple=True,
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
+            ): cv.multi_select(options),
             vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
         }
     )
+
+
+def _stream_label_map(keys: list[str]) -> dict[str, str]:
+    """Stream key -> display label, from the translations table the rest of
+    the integration uses, so there is exactly one source of labels."""
+    path = Path(__file__).with_name("translations") / "en.json"
+    try:
+        names = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
+    except (OSError, KeyError, ValueError):
+        names = {}
+    return {key: names.get(key, key) for key in keys}
 
 
 def _streams_schema(
@@ -539,36 +541,29 @@ def _streams_schema(
     primary: str,
     stream_options: dict[str, list[str]] | None = None,
 ) -> vol.Schema:
-    """One stream dropdown per selected camera, opening into a checklist.
+    """One stream checklist per selected camera, opening from a dropdown.
 
-    A separate field per camera rather than a shared list, so one camera's
-    choice can never be confused with another's. The field is keyed by the
-    camera's name plus its device id -- Home Assistant labels a dynamic field
-    by its schema key, so the id alone would show as an opaque number; the id
-    in the label is what keeps the key unique even when two cameras share a
-    name. Defaults to the primary stream (see `streams.py`), or to the entry's
-    current choice in the options flow.
+    `cv.multi_select` renders as a dropdown that opens into checkboxes -- the
+    same control Home Assistant's own "pick a domain" selectors use, unlike a
+    `SelectSelector`, which shows chosen values as chips. A separate field per
+    camera rather than a shared list, so one camera's choice can never be
+    confused with another's. The field is keyed by the camera's name plus its
+    device id, so the form reads like something a person recognises and the id
+    keeps the key unique even when two cameras share a name. Defaults to the
+    primary stream (see `streams.py`), or to the entry's current choice in the
+    options flow.
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here.
     """
-    streams = {
-        vol.Required(
-            f"{cameras[did]} ({did})",
-            default=(
-                stream_options.get(did, [primary]) if stream_options else [primary]
-            ),
-        ): SelectSelector(
-            SelectSelectorConfig(
-                options=available.get(did, []),
-                multiple=True,
-                translation_key="stream_key",
-                mode=SelectSelectorMode.DROPDOWN,
-            )
+    streams = {}
+    for did in chosen_cameras:
+        if did not in cameras or not available.get(did):
+            continue
+        default = stream_options.get(did, [primary]) if stream_options else [primary]
+        streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
+            cv.multi_select(_stream_label_map(available[did]))
         )
-        for did in chosen_cameras
-        if did in cameras and available.get(did)
-    }
     return vol.Schema(streams)
 
 
