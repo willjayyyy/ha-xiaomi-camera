@@ -61,6 +61,21 @@ _LEGACY_CODECS = {"h264": "h264", "original": ROOT_KEY}
 _LEGACY_DEFAULT = "h264"
 
 
+def wanted_unique_ids(options: dict, available: dict[str, list[str]]) -> set[str]:
+    """Every entity identity the current selection should produce.
+
+    Anything in the registry outside this set was deselected. Home Assistant
+    keeps such entities forever otherwise -- present, permanently unavailable,
+    and indistinguishable from a broken one.
+    """
+    primary = options.get(CONF_PRIMARY_STREAM, ROOT_KEY)
+    return {
+        unique_id(did, key, primary)
+        for did, keys in available.items()
+        for key in selected_streams(options, did, keys)
+    }
+
+
 def migrate_options(options: dict, dids: list[str]) -> dict:
     """Turn the entry-wide codec choice into a per-camera selection.
 

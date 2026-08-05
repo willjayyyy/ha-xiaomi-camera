@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_AUTO_ADD, CONF_CAMERAS, CONF_EXCLUDED, DOMAIN
 
@@ -65,3 +66,17 @@ def async_remove_unselected(
             registry.async_update_device(
                 device.id, remove_config_entry_id=entry.entry_id
             )
+
+
+def async_remove_unselected_entities(
+    hass: HomeAssistant, entry: ConfigEntry, keep: set[str]
+) -> None:
+    """Delete entities for streams that are no longer wanted.
+
+    Device-level removal is not enough here: a camera can stay selected while
+    one of its streams is dropped, which leaves that stream's entity behind.
+    """
+    registry = er.async_get(hass)
+    for entity in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if entity.domain == "camera" and entity.unique_id not in keep:
+            registry.async_remove(entity.entity_id)

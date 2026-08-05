@@ -20,8 +20,12 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .api import BridgeClient, BridgeError
 from .const import CONF_CAMERAS, CONF_HOST, CONF_PORT
 from .coordinator import XiaomiCameraCoordinator
-from .selection import async_remove_unselected, selected
-from .streams import migrate_options
+from .selection import (
+    async_remove_unselected,
+    async_remove_unselected_entities,
+    selected,
+)
+from .streams import migrate_options, wanted_unique_ids
 
 #: Typed alias so platforms can read `entry.runtime_data` without a cast.
 XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
@@ -75,6 +79,13 @@ async def async_setup_entry(
     # so a deselected camera disappears instead of lingering as permanently
     # unavailable -- which reads as a fault rather than as a choice.
     async_remove_unselected(hass, entry, selected(entry, coordinator.data))
+    available = {
+        did: [stream.key for stream in cam.streams]
+        for did, cam in coordinator.data.items()
+    }
+    async_remove_unselected_entities(
+        hass, entry, wanted_unique_ids(dict(entry.options), available)
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))

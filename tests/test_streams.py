@@ -33,6 +33,7 @@ if sys.version_info >= (3, 14):
         migrate_options,
         selected_streams,
         unique_id,
+        wanted_unique_ids,
     )
 
 
@@ -116,3 +117,23 @@ class TestMigration:
         )
         assert migrated["auto_add"] is False
         assert migrated["excluded_cameras"] == ["7"]
+
+
+class TestEntityCleanup:
+    def test_it_lists_an_identity_per_selected_stream(self) -> None:
+        options = {
+            "camera_streams": {"42": ["h264", "h264_360"]},
+            "primary_stream": "h264",
+        }
+        assert wanted_unique_ids(options, {"42": ["h264", "h264_360"]}) == {
+            "42",
+            "42_h264_360",
+        }
+
+    def test_an_unticked_stream_drops_out(self) -> None:
+        options = {"camera_streams": {"42": ["h264"]}, "primary_stream": "h264"}
+        assert wanted_unique_ids(options, {"42": ["h264", "h264_360"]}) == {"42"}
+
+    def test_a_camera_with_no_entry_falls_back_to_the_root(self) -> None:
+        options = {"primary_stream": "hevc"}
+        assert wanted_unique_ids(options, {"42": ["hevc", "h264"]}) == {"42"}

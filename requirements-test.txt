@@ -4,6 +4,12 @@
 # appears to.
 pytest-homeassistant-custom-component==0.13.348
 
+# homeassistant.components.camera declares this in its own manifest, but the
+# plugin does not install component requirements -- only camera.py pulls it
+# in, at platform-import time, so nothing surfaced this until entities were
+# actually set up under test.
+PyTurboJPEG==1.8.3
+
 # Read by bridge.restream when it renders the go2rtc configuration. Not pulled
 # in by the plugin, and the add-on tests need it.
 pyyaml
