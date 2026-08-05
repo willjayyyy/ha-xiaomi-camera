@@ -10,10 +10,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
-from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
+from bridge.const import (
+    ALL_INTERFACES,
+    GO2RTC_API_PORT,
+    LOOPBACK,
+    RTSP_PORT,
+    SRTP_PORT,
+    WEBRTC_PORT,
+)
 from bridge.restream import (
     ROOT_CODEC,
     ROOT_KEY,
@@ -326,6 +334,37 @@ class TestStreamDescriptions:
         by_key = {d["key"]: d for d in restreamer.stream_descriptions("42")}
         assert by_key["h265"]["height"] is None
         assert by_key["h264_360"]["height"] == 360
+
+
+class TestRtspReachableOffHost:
+    """Whether the published RTSP listener can be reached from another
+    machine -- what the page needs before it may rewrite the loopback
+    hostname it was sent into something else.
+
+    This is a different fact from `requires_credentials`, even though the two
+    happen to agree for every real `Options` today (`lan` mode is the only
+    mode that both requires a password and binds beyond loopback). Pinned to
+    a fake whose two flags disagree, so this fails if the property is ever
+    re-pointed at `requires_credentials` instead of `bind_address`.
+    """
+
+    def test_real_options_agree_in_local_mode(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        assert restreamer.rtsp_reachable_off_host is False
+
+    def test_real_options_agree_in_lan_mode(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LAN, "user", "secret"))
+        assert restreamer.rtsp_reachable_off_host is True
+
+    def test_it_reads_bind_address_even_when_credentials_disagree(self) -> None:
+        fake_options = SimpleNamespace(
+            bind_address=ALL_INTERFACES, requires_credentials=False
+        )
+        assert Restreamer(fake_options).rtsp_reachable_off_host is True
+
+    def test_it_is_false_on_loopback_even_when_credentials_are_required(self) -> None:
+        fake_options = SimpleNamespace(bind_address=LOOPBACK, requires_credentials=True)
+        assert Restreamer(fake_options).rtsp_reachable_off_host is False
 
 
 class TestPorts:

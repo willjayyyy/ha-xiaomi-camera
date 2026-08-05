@@ -265,6 +265,14 @@ class BridgeApi:
                         "rtsp_requires_credentials": (
                             self._restreamer.requires_credentials
                         ),
+                        # Whether the address above is reachable from anything
+                        # other than this host -- distinct from whether a
+                        # password is required. The page needs this to decide
+                        # whether rewriting the loopback hostname it was sent
+                        # would produce a working address or a dead one.
+                        "rtsp_reachable_off_host": (
+                            self._restreamer.rtsp_reachable_off_host
+                        ),
                     }
                     for description in descriptions
                 ]

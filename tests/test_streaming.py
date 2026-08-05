@@ -333,3 +333,69 @@ class TestAudioStatistics:
             await client.close()
 
         assert session.stats.dropped_timestamps == 1
+
+
+class TestCamerasEndpointReachability:
+    """`/api/cameras` is where the page learns whether the RTSP address it is
+    about to show can be rewritten to something reachable off this host.
+    """
+
+    async def test_the_field_is_read_from_the_restreamer_not_recomputed(self) -> None:
+        """Drives the real ``BridgeApi._cameras`` handler over a real
+        ``aiohttp`` request/response, the same seam as ``test_the_counter_has_a_writer``
+        above, rather than asserting against ``restreamer.rtsp_reachable_off_host``
+        directly -- a test that did that would pass even if the handler never
+        put the field in the response at all.
+
+        The fake restreamer's two flags are set to disagree on purpose:
+        ``requires_credentials`` is False while ``rtsp_reachable_off_host`` is
+        True. If the handler read the wrong attribute -- the mistake this field
+        exists to prevent -- this would observe False and fail.
+        """
+        description = SimpleNamespace(
+            did="42",
+            as_dict=lambda: {
+                "did": "42",
+                "name": "Cam",
+                "model": "chuangmi.camera.81ac1",
+                "manufacturer": "Xiaomi",
+                "channel_count": 1,
+                "online": True,
+                "lan_online": True,
+                "powered_on": True,
+                "requires_pin": False,
+            },
+        )
+
+        async def _async_refresh():
+            return [description]
+
+        registry = SimpleNamespace(async_refresh=_async_refresh)
+        restreamer = SimpleNamespace(
+            rtsp_url=lambda did: f"rtsp://127.0.0.1:8554/camera_{did}",
+            rtsp_url_h264=lambda did: f"rtsp://127.0.0.1:8554/camera_{did}_h264",
+            stream_descriptions=lambda did: [],
+            requires_credentials=False,
+            rtsp_reachable_off_host=True,
+        )
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: None,
+            restreamer=restreamer,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/cameras", api._cameras)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/cameras")
+            payload = await resp.json()
+        finally:
+            await client.close()
+
+        assert payload["cameras"][0]["rtsp_reachable_off_host"] is True

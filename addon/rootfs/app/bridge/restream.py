@@ -259,6 +259,20 @@ class Restreamer:
     def requires_credentials(self) -> bool:
         return self._options.requires_credentials
 
+    @property
+    def rtsp_reachable_off_host(self) -> bool:
+        """Whether the published RTSP listener can be reached from another machine.
+
+        Derived from `bind_address` rather than `access_mode` directly, and
+        kept separate from `requires_credentials`: the two happen to agree
+        today -- `lan` mode is the only mode that both requires a password and
+        binds beyond loopback -- but they answer different questions, and nothing
+        forces them to keep agreeing. `requires_credentials` speaks for whether a
+        password is mandatory; this speaks for whether a listener is reachable
+        off-box, which is what a page rewriting a displayed hostname needs to know.
+        """
+        return self._options.bind_address != LOOPBACK
+
     def rtsp_url(self, did: str) -> str:
         """RTSP URL for a camera, always without embedded credentials.
 
