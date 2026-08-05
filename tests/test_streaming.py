@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
@@ -206,11 +207,15 @@ class TestAudioCodec:
         assert audio_codec_for(MIoTCameraCodec.AUDIO_OPUS) == AUDIO_CODEC_OPUS
 
     @pytest.mark.parametrize(
+        # AUDIO_PCM is deliberately not included: the SDK's raw-audio
+        # callback dispatch (`__on_raw_data`) only ever invokes with
+        # AUDIO_OPUS, AUDIO_G711A or AUDIO_G711U, so a PCM codec id can never
+        # reach `audio_codec_for` in practice. Testing it would imply a case
+        # this code path can actually receive.
         "codec_id",
         [
             MIoTCameraCodec.AUDIO_G711A,
             MIoTCameraCodec.AUDIO_G711U,
-            MIoTCameraCodec.AUDIO_PCM,
         ],
     )
     def test_everything_else_is_refused(self, codec_id) -> None:
@@ -333,6 +338,218 @@ class TestAudioStatistics:
             await client.close()
 
         assert session.stats.dropped_timestamps == 1
+
+    async def test_a_late_audio_reconnect_is_counted(self) -> None:
+        """Same seam as `test_the_counter_has_a_writer` above, for the other
+        statistic this branch adds: `late_audio_reconnects`.
+
+        The spec calls the late-audio reconnect "a safety net, not the normal
+        path" on the assumption that a camera which sends audio at all sends
+        some before the container is built. That assumption is unverified
+        against real hardware, so release verification needs to be able to
+        tell "fired once" from "fires on every connect" without a packet
+        capture -- which requires this counter to actually be written by the
+        code path that fires it, not merely declared.
+        """
+        closed = asyncio.Event()
+        # No video first: the container is built video-only (session.audio_codec
+        # is None below), so the very first unit -- audio -- must hit the late
+        # reconnect path immediately.
+        units = [MediaUnit(MediaKind.AUDIO, 0, b"\x01\x02")]
+
+        class _DrainingQueue:
+            def __init__(self, items: list[MediaUnit]) -> None:
+                self._items = list(items)
+
+            async def get(self) -> MediaUnit:
+                if not self._items:
+                    raise asyncio.CancelledError()
+                return self._items.pop(0)
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.codec = Codec.H265
+                self.audio_codec = None  # no audio yet when the container was built
+                self.stats = SessionStats()
+
+            @contextlib.asynccontextmanager
+            async def subscribe(self):
+                consumer = SimpleNamespace(queue=_DrainingQueue(units), closed=closed)
+                yield consumer
+
+        session = _FakeSession()
+        registry = SimpleNamespace(get=lambda did: object())
+        sessions = SimpleNamespace(session_for=lambda info: session)
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/stream/{did}", api._stream)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/stream/42")
+            await resp.read()
+        finally:
+            await client.close()
+
+        assert session.stats.late_audio_reconnects == 1
+
+
+class TestStreamContentType:
+    """go2rtc's native ``http://`` source picks its producer by Content-Type.
+
+    This branch removed the ffmpeg hop that used to sit between the bridge
+    and go2rtc, which would have masked a wrong header by re-probing the
+    bytes. Nothing else in the repository asserts the header the endpoint
+    promises in its own comment (`Content-Type: video/mp2t`), so a typo here
+    would ship a stream go2rtc cannot read, silently.
+
+    Placed alongside `TestAudioStatistics` rather than in `tests/test_routes.py`:
+    that file does coarse text matching between the page and the route table
+    and never actually calls a handler, whereas this needs a real response
+    object -- the same `TestClient`/`TestServer` seam used above.
+    """
+
+    async def test_the_stream_endpoint_answers_video_mp2t(self) -> None:
+        closed = asyncio.Event()
+        units = [MediaUnit(MediaKind.VIDEO, 0, b"\x00\x00\x00\x01\x26\x01")]
+
+        class _DrainingQueue:
+            def __init__(self, items: list[MediaUnit]) -> None:
+                self._items = list(items)
+
+            async def get(self) -> MediaUnit:
+                if not self._items:
+                    raise asyncio.CancelledError()
+                return self._items.pop(0)
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.codec = Codec.H265
+                self.audio_codec = None
+                self.stats = SessionStats()
+
+            @contextlib.asynccontextmanager
+            async def subscribe(self):
+                consumer = SimpleNamespace(queue=_DrainingQueue(units), closed=closed)
+                yield consumer
+
+        session = _FakeSession()
+        registry = SimpleNamespace(get=lambda did: object())
+        sessions = SimpleNamespace(session_for=lambda info: session)
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/stream/{did}", api._stream)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/stream/42")
+            await resp.read()
+        finally:
+            await client.close()
+
+        assert resp.headers["Content-Type"] == "video/mp2t"
+
+
+class TestMuxerFailureIsHandled:
+    """A muxer exception must not escape as a bare, unredacted traceback.
+
+    Reproduced against the real muxer: `StreamMuxer.write` raises
+    `av.error.InvalidDataError` on a zero-length payload, which is exactly
+    what the SDK produces from `string_at(data, frame_header.length)` when a
+    frame header reports zero length -- observed after a peer-to-peer
+    reconnect. Before this fix, only `StreamError`, `ConnectionResetError`
+    and `CancelledError` were caught here, so this exception would propagate
+    out of the handler.
+    """
+
+    async def test_a_rejected_payload_does_not_escape_the_handler(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        closed = asyncio.Event()
+        # An empty payload: real bytes, but ones the muxer rejects outright,
+        # the same failure mode as the reproduction in the review.
+        units = [MediaUnit(MediaKind.VIDEO, 0, b"")]
+
+        class _DrainingQueue:
+            def __init__(self, items: list[MediaUnit]) -> None:
+                self._items = list(items)
+
+            async def get(self) -> MediaUnit:
+                if not self._items:
+                    raise asyncio.CancelledError()
+                return self._items.pop(0)
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.codec = Codec.H265
+                self.audio_codec = None
+                self.stats = SessionStats()
+
+            @contextlib.asynccontextmanager
+            async def subscribe(self):
+                consumer = SimpleNamespace(queue=_DrainingQueue(units), closed=closed)
+                yield consumer
+
+        session = _FakeSession()
+        registry = SimpleNamespace(get=lambda did: object())
+        sessions = SimpleNamespace(session_for=lambda info: session)
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/stream/{did}", api._stream)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            # The response's headers are already sent by the time the muxer
+            # raises (mid-body), so an escaping exception cannot turn into an
+            # HTTP error status the client would see -- aiohttp just aborts
+            # the connection and logs the bare traceback itself, through its
+            # own "aiohttp.server" logger, which is exactly the unredacted
+            # leak this test exists to catch. `resp.status == 200` alone does
+            # NOT prove the fix: it is true either way, since the status line
+            # was written before the muxer ever saw the payload.
+            with caplog.at_level(logging.ERROR, logger="aiohttp.server"):
+                resp = await client.get("/api/stream/42")
+                await resp.read()
+        finally:
+            await client.close()
+
+        assert resp.status == 200
+        escaped = [
+            record
+            for record in caplog.records
+            if record.name == "aiohttp.server" and record.levelno >= logging.ERROR
+        ]
+        assert not escaped, (
+            "the muxer's exception reached aiohttp's own handler instead of "
+            f"being caught in bridge.api: {[r.getMessage() for r in escaped]}"
+        )
 
 
 class TestCamerasEndpointReachability:
