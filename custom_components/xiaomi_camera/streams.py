@@ -12,7 +12,7 @@ reason.
 
 from __future__ import annotations
 
-from .const import CONF_CAMERA_STREAMS
+from .const import CONF_CAMERA_STREAMS, CONF_PRIMARY_STREAM
 
 #: The camera's own encoding at its own resolution. What a camera gets when
 #: nothing has been chosen for it: the unmodified stream, no transcode.
@@ -48,3 +48,29 @@ def selected_streams(options: dict, did: str, available: list[str]) -> list[str]
         return [ROOT_KEY] if ROOT_KEY in available else available[:1]
     wanted = set(chosen)
     return [key for key in available if key in wanted]
+
+
+#: What the entry-wide option's values mean in the per-camera model. Read only
+#: by the migration; delete both this and `migrate_options` once no entry can
+#: still be at version 1.
+_LEGACY_CODECS = {"h264": "h264", "original": ROOT_KEY}
+
+#: What an entry with no `stream_codec` key has been playing all along --
+#: `camera.py` defaults to H.264. Not the new default, which would silently
+#: change a working entity on upgrade.
+_LEGACY_DEFAULT = "h264"
+
+
+def migrate_options(options: dict, dids: list[str]) -> dict:
+    """Turn the entry-wide codec choice into a per-camera selection.
+
+    One-shot, driven by the config entry version. Everything it reads is gone
+    afterwards, so this function and `_LEGACY_*` above can be deleted whole
+    once no entry remains at version 1 -- which is the point of doing it here
+    rather than leaving the old key in place and branching on it forever.
+    """
+    migrated = {key: value for key, value in options.items() if key != "stream_codec"}
+    primary = _LEGACY_CODECS.get(options.get("stream_codec", _LEGACY_DEFAULT), "h264")
+    migrated[CONF_PRIMARY_STREAM] = primary
+    migrated[CONF_CAMERA_STREAMS] = {did: [primary] for did in dids}
+    return migrated

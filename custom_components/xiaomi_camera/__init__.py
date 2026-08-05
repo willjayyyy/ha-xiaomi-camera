@@ -18,9 +18,10 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import BridgeClient, BridgeError
-from .const import CONF_HOST, CONF_PORT
+from .const import CONF_CAMERAS, CONF_HOST, CONF_PORT
 from .coordinator import XiaomiCameraCoordinator
 from .selection import async_remove_unselected, selected
+from .streams import migrate_options
 
 #: Typed alias so platforms can read `entry.runtime_data` without a cast.
 XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
@@ -28,6 +29,25 @@ XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SWITCH]
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: XiaomiCameraConfigEntry
+) -> bool:
+    """Bring an entry up to the current options shape.
+
+    Version 1 chose one codec for every camera at once. Version 2 chooses per
+    camera, and records which stream the pre-existing entity is bound to so
+    its identity survives.
+    """
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        dids = list(entry.options.get(CONF_CAMERAS) or [])
+        hass.config_entries.async_update_entry(
+            entry, options=migrate_options(dict(entry.options), dids), version=2
+        )
+    return True
 
 
 async def async_setup_entry(

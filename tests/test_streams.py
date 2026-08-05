@@ -8,7 +8,12 @@ untested until two faults surfaced in production.
 
 from __future__ import annotations
 
-from xiaomi_camera.streams import ROOT_KEY, selected_streams, unique_id
+from xiaomi_camera.streams import (
+    ROOT_KEY,
+    migrate_options,
+    selected_streams,
+    unique_id,
+)
 
 
 class TestUniqueId:
@@ -55,3 +60,39 @@ class TestSelection:
             "hevc",
             "h264_360",
         ]
+
+
+class TestMigration:
+    """Upgrading must not change what a working entity plays."""
+
+    def test_h264_entries_keep_playing_h264(self) -> None:
+        migrated = migrate_options({"stream_codec": "h264"}, ["42"])
+        assert migrated["primary_stream"] == "h264"
+        assert migrated["camera_streams"]["42"] == ["h264"]
+
+    def test_original_entries_keep_playing_hevc(self) -> None:
+        migrated = migrate_options({"stream_codec": "original"}, ["42"])
+        assert migrated["primary_stream"] == "hevc"
+        assert migrated["camera_streams"]["42"] == ["hevc"]
+
+    def test_entries_predating_the_option_are_treated_as_h264(self) -> None:
+        """`camera.py` has always defaulted to H.264 when the key is absent.
+
+        Binding these to hevc because that is the new default would change
+        what an already-working entity plays, on upgrade, unasked.
+        """
+        migrated = migrate_options({}, ["42"])
+        assert migrated["primary_stream"] == "h264"
+
+    def test_the_old_option_is_removed(self) -> None:
+        """A field nobody reads is one every later reader has to think about."""
+        migrated = migrate_options({"stream_codec": "h264"}, ["42"])
+        assert "stream_codec" not in migrated
+
+    def test_unrelated_options_survive(self) -> None:
+        migrated = migrate_options(
+            {"stream_codec": "h264", "auto_add": False, "excluded_cameras": ["7"]},
+            ["42"],
+        )
+        assert migrated["auto_add"] is False
+        assert migrated["excluded_cameras"] == ["7"]
