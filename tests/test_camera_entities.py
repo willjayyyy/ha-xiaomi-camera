@@ -105,7 +105,7 @@ async def test_variant_entities_name_the_camera(hass) -> None:
     variant = registry.async_get_entity_id("camera", DOMAIN, "42_h264_360")
     assert primary is not None and variant is not None
 
-    assert hass.states.get(primary).attributes["friendly_name"] == "Living room"
+    assert hass.states.get(primary).attributes["friendly_name"] == "Living room H.264"
     assert (
         hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
     )

@@ -71,29 +71,18 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         self._stream_key = stream_key
         self._primary_key = primary_key
         self._attr_unique_id = unique_id(did, stream_key, primary_key)
-        # The primary entity keeps the device's own name, unchanged for anyone
-        # upgrading. The others carry the device name in their own name, so a
-        # consumer that shows only the entity name -- HomeKit, a voice
-        # assistant -- still knows which camera it belongs to. Relying on Home
-        # Assistant's device-name prefixing (`has_entity_name`) leaves those
-        # consumers showing only "H.264 360p".
-        if stream_key != primary_key:
-            # `has_entity_name` is off for these so Home Assistant does not
-            # prepend the device name a second time; the name carries it
-            # explicitly. With `has_entity_name` off Home Assistant ignores
-            # `translation_key` for the name, so the label is read by hand
-            # in `_stream_label`.
-            self._attr_has_entity_name = False
-            self._attr_translation_key = stream_key
-        else:
-            self._attr_name = None
+        # Every entity names the camera and its stream itself, rather than
+        # relying on Home Assistant's device-name prefixing (`has_entity_name`),
+        # so a consumer that shows only the entity name -- the device page, a
+        # voice assistant -- still knows which camera and which stream it is.
+        # With `has_entity_name` off Home Assistant ignores `translation_key`
+        # for the name, so the label is read by hand in `_stream_label`.
+        self._attr_has_entity_name = False
+        self._attr_translation_key = stream_key
 
     @property
-    def name(self) -> str | None:
-        """Variant entities name the camera themselves; the primary keeps
-        just the device name, unchanged for anyone upgrading."""
-        if self._stream_key == self._primary_key:
-            return None
+    def name(self) -> str:
+        """The camera name plus the stream label, on every entity."""
         camera = self.camera
         device = camera.name if camera else self._did
         return f"{device} {self._stream_label()}"
