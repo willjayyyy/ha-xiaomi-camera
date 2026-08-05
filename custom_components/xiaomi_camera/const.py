@@ -28,7 +28,7 @@ CONF_EXCLUDED: Final = "excluded_cameras"
 CONF_AUTO_ADD: Final = "auto_add"
 
 #: Per-camera stream selection: {did: [stream key, ...]}. Replaces the
-#: entry-wide CONF_STREAM_CODEC, which could only say one thing for every
+#: entry-wide `stream_codec` option, which could only say one thing for every
 #: camera at once.
 CONF_CAMERA_STREAMS: Final = "camera_streams"
 

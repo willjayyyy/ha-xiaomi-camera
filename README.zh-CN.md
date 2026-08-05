@@ -205,18 +205,17 @@ Home Assistant 可以显示，局域网上的其他设备无法访问。
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) 讲了内部是怎么实现的、
 为什么拆成两个组件，以及小米取流库里那些反直觉的行为。
 
-## 第三方组件
-
-本项目使用小米自己的取流库，它是闭源的，**不由本项目再分发** ——
-构建时从小米那里下载，适用的是他们的许可证，不是我们的。
-
-本项目自身的代码采用 Apache-2.0。见 [LICENSE](LICENSE)。
-
 ## 许可证
 
-本项目采用 Apache-2.0 许可证。加载项镜像内置了来自
-[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的静态
-[ffmpeg](https://ffmpeg.org/)（GPL 版本），该组件遵循 GPL 许可证，
-其源代码可从上述项目获取。
+本项目自身的代码采用 Apache-2.0 许可证。见 [LICENSE](LICENSE)。
+
+另有两个第三方组件是打包或下载而来，而非本项目编写，各自遵循自己的许可证：
+
+- **小米自己的取流库**是闭源的，**不由本项目再分发** ——
+  构建时从小米那里下载，适用的是他们的许可证，不是我们的。
+- 加载项镜像内置了来自
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的静态
+  [ffmpeg](https://ffmpeg.org/)（GPL 版本），该组件遵循 GPL 许可证，
+  其源代码可从上述项目获取。
 
 实现参考了 [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco)。

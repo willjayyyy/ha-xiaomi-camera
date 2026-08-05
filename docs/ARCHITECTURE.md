@@ -301,8 +301,9 @@ point.
 
 The image ships ffmpeg's GPL build, and `libx264` and `libx265` are used
 directly as go2rtc's encoder templates for the H.264 and H.265 variants —
-they are the standard encoders for their formats. The Dockerfile greps the
-built ffmpeg's encoder list for both after compiling it, so a build that loses
+they are the standard encoders for their formats. ffmpeg itself is never
+compiled: the Dockerfile downloads a prebuilt static binary from
+BtbN/FFmpeg-Builds and greps its encoder list for both, so a build that loses
 one fails there rather than when a user opens a camera.
 
 The image shipped the LGPL build, which carries neither encoder, until this

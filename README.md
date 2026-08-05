@@ -224,19 +224,19 @@ Conventions and the release process are in
 internally, why it is split into two components, and the non-obvious behaviour
 of Xiaomi's streaming library.
 
-## Third-party components
-
-This project uses Xiaomi's own streaming library, which is closed source and
-**not redistributed here** — it is downloaded from Xiaomi during the build and
-is covered by their licence, not ours.
+## Licence
 
 This project's own code is Apache-2.0. See [LICENSE](LICENSE).
 
-## Licence
+Two third-party components are bundled or downloaded rather than written here,
+each under its own licence:
 
-This project is Apache-2.0. The add-on image bundles a static
-[ffmpeg](https://ffmpeg.org/) from
-[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), GPL variant,
-which is licensed under the GPL. Its sources are available from that project.
+- **Xiaomi's own streaming library** is closed source and **not redistributed
+  here** — it is downloaded from Xiaomi during the build and is covered by
+  their licence, not ours.
+- The add-on image bundles a static [ffmpeg](https://ffmpeg.org/) from
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), GPL variant,
+  which is licensed under the GPL. Its sources are available from that
+  project.
 
 Built by studying [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco).
