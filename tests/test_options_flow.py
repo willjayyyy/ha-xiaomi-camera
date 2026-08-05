@@ -38,7 +38,7 @@ def _camera(did: str = "42") -> BridgeCamera:
         online=True,
         lan_online=True,
         powered_on=True,
-        rtsp_url=f"rtsp://127.0.0.1:8554/camera_{did}_h265",
+        rtsp_url=f"rtsp://127.0.0.1:8554/camera_{did}",
         rtsp_url_h264=f"rtsp://127.0.0.1:8554/camera_{did}_h264",
         streams=tuple(
             CameraStream(
