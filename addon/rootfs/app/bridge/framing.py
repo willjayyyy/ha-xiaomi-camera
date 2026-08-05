@@ -94,6 +94,16 @@ class SessionStats:
     #: reports as "it stutters every few seconds". Left as a debug log, it was
     #: invisible to anyone trying to explain the stutter.
     resyncs: int = 0
+    #: The container codec of the audio track, or None when the camera sends
+    #: none. Not derived from the option: the option says what was asked for,
+    #: this says what arrived.
+    audio_codec: str | None = None
+    audio_frames: int = 0
+    audio_bytes: int = 0
+    #: Units whose device timestamp could not be used -- the sentinel the SDK
+    #: reports after a reconnect, mostly. Counted rather than merely logged, so
+    #: a stream that is quietly short of frames can be recognised as one.
+    dropped_timestamps: int = 0
     started_at: float | None = None
     last_frame_at: float | None = None
     consumers: int = 0

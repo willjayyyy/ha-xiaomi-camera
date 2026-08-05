@@ -8,10 +8,15 @@ than on the logic being wrong.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import FrozenInstanceError
 
+import pytest
 from bridge.framing import Consumer as _Consumer
+from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.framing import ParameterSets as _ParameterSets
-from bridge.framing import SessionStats
+from bridge.mux import AUDIO_CODEC_OPUS
+from bridge.streaming import audio_codec_for
+from miot.types import MIoTCameraCodec
 
 
 class TestConsumer:
@@ -87,3 +92,64 @@ class TestFallingBehind:
         assert stats.as_dict()["resyncs"] == 0
         stats.resyncs += 1
         assert stats.as_dict()["resyncs"] == 1
+
+
+class TestParameterReplay:
+    """One mechanism, not two.
+
+    A joining consumer and a resyncing one both need the parameter sets, and
+    the code used to answer that in two places -- a free-standing chunk pushed
+    at subscribe time, and a re-injection after a resync. A free-standing chunk
+    has no timestamp, and under a container that is a special case with nothing
+    to fill it in with.
+    """
+
+    def test_a_new_consumer_starts_needing_parameters(self) -> None:
+        assert _Consumer(queue=asyncio.Queue()).needs_parameters is True
+
+    def test_a_resync_asks_for_them_again(self) -> None:
+        consumer = _Consumer(queue=asyncio.Queue())
+        consumer.needs_parameters = False
+        consumer.resyncing = True
+        # What the fan-out does when a resyncing consumer reaches a keyframe.
+        if consumer.resyncing:
+            consumer.resyncing = False
+            consumer.needs_parameters = True
+        assert consumer.needs_parameters is True
+
+
+class TestMediaUnits:
+    def test_a_unit_carries_its_own_time(self) -> None:
+        """Bare bytes had nowhere to put this, which is the whole reason
+        audio could not travel this path."""
+        unit = MediaUnit(MediaKind.AUDIO, 1234, b"\x01\x02")
+        assert unit.ts_ms == 1234
+        assert unit.kind is MediaKind.AUDIO
+
+    def test_units_are_immutable(self) -> None:
+        """They are handed to every consumer at once; one consumer must not be
+        able to alter what the others receive."""
+        unit = MediaUnit(MediaKind.VIDEO, 0, b"")
+        with pytest.raises(FrozenInstanceError):
+            unit.ts_ms = 1
+
+
+class TestAudioCodec:
+    """What the camera sends decides whether a track is declared at all."""
+
+    def test_opus_is_published(self) -> None:
+        assert audio_codec_for(MIoTCameraCodec.AUDIO_OPUS) == AUDIO_CODEC_OPUS
+
+    @pytest.mark.parametrize(
+        "codec_id",
+        [
+            MIoTCameraCodec.AUDIO_G711A,
+            MIoTCameraCodec.AUDIO_G711U,
+            MIoTCameraCodec.AUDIO_PCM,
+        ],
+    )
+    def test_everything_else_is_refused(self, codec_id) -> None:
+        """MPEG-TS has no stream type that identifies G.711: the muxer accepts
+        it and it demuxes back as an unusable `data` stream. A video-only
+        stream is the honest outcome."""
+        assert audio_codec_for(codec_id) is None

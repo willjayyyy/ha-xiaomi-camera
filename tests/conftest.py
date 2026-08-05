@@ -51,6 +51,25 @@ class MIoTCameraVideoQuality(int, enum.Enum):
     HIGH = 3
 
 
+class MIoTCameraCodec(int, enum.Enum):
+    """Mirrors ``miot.types.MIoTCameraCodec``.
+
+    ``VIDEO_H265`` is an alias of ``VIDEO_HEVC`` upstream and is kept as one
+    here: an alias is skipped when an enum is iterated, so defining it as a
+    distinct member would make the drift check below compare six names against
+    seven and fail against an SDK that had not changed.
+    """
+
+    VIDEO_H264 = 4
+    VIDEO_HEVC = 5
+    VIDEO_H265 = 5
+
+    AUDIO_PCM = 1024
+    AUDIO_G711U = 1026
+    AUDIO_G711A = 1027
+    AUDIO_OPUS = 1032
+
+
 def _verify_against_real_sdk() -> None:
     """Fail loudly if the stub and the installed SDK disagree.
 
@@ -63,7 +82,7 @@ def _verify_against_real_sdk() -> None:
         import miot.types as real
     except Exception:
         return
-    for stub in (MIoTCameraStatus, MIoTCameraVideoQuality):
+    for stub in (MIoTCameraStatus, MIoTCameraVideoQuality, MIoTCameraCodec):
         actual = getattr(real, stub.__name__, None)
         if actual is None:  # pragma: no cover - upstream rename
             raise AssertionError(f"{stub.__name__} no longer exists in miot.types")
@@ -83,6 +102,7 @@ _verify_against_real_sdk()
 _types = types.ModuleType("miot.types")
 _types.MIoTCameraStatus = MIoTCameraStatus
 _types.MIoTCameraVideoQuality = MIoTCameraVideoQuality
+_types.MIoTCameraCodec = MIoTCameraCodec
 _miot = types.ModuleType("miot")
 _miot.types = _types
 sys.modules["miot"] = _miot

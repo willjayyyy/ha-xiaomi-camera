@@ -61,7 +61,13 @@ class _FakeInstance:
     async def _feed(self) -> None:
         await asyncio.sleep(self._first_frame_delay)
         assert self._on_video is not None
-        await self._on_video(_FakeInfo.did, _PARAMETER_SETS + _KEYFRAME, 0, 0, 0)
+        # Repeats, as a real camera resends its parameter sets ahead of every
+        # keyframe: a consumer that joins after the first delivery still needs
+        # a video unit to arrive before it sees anything, since the parameter
+        # sets are now carried on a unit rather than pushed on their own.
+        while True:
+            await self._on_video(_FakeInfo.did, _PARAMETER_SETS + _KEYFRAME, 0, 0, 0)
+            await asyncio.sleep(0.01)
 
     async def stop_async(self) -> None:
         self.stopped = True
@@ -139,11 +145,12 @@ class TestColdStart:
 
     An H.265 decoder cannot start without the parameter sets, and a camera
     sends them only ahead of a keyframe -- about every three seconds here. The
-    session replays the ones it holds to a joining consumer, but on a cold
-    start it holds none yet, so whoever arrived first got an undecodable
-    stream and gave up. go2rtc's transcode allows five seconds, the session
-    took nearly two to produce anything, and what remained was a coin toss
-    against the keyframe interval.
+    session waits for a first delivery before handing out any consumer, and
+    prepends the held sets to the next unit a joining consumer receives, but
+    on a cold start it holds none yet, so whoever arrived first got an
+    undecodable stream and gave up. go2rtc's transcode allows five seconds,
+    the session took nearly two to produce anything, and what remained was a
+    coin toss against the keyframe interval.
 
     The camera that worked was not healthier: its dashboard fetched a snapshot
     first, which warmed the session, so by the time the stream connected the
@@ -155,12 +162,9 @@ class TestColdStart:
         session = _session(client)
 
         async with session.subscribe() as consumer:
-            assert not consumer.queue.empty(), (
-                "consumer was handed a stream with no parameter sets to decode it"
-            )
-            first = consumer.queue.get_nowait()
+            first = await asyncio.wait_for(consumer.queue.get(), timeout=1.0)
 
-        assert b"\x40\x01" in first, "the replayed chunk carries no VPS"
+        assert b"\x40\x01" in first.payload, "the first unit carries no VPS"
         await session.async_stop()
 
     async def test_a_warm_session_does_not_wait(self) -> None:
@@ -180,7 +184,7 @@ class TestColdStart:
 
         async with asyncio.timeout(0.05):
             async with session.subscribe() as consumer:
-                assert not consumer.queue.empty()
+                await consumer.queue.get()
 
         await session.async_stop()
 
