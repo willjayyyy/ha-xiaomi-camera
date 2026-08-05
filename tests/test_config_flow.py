@@ -88,16 +88,11 @@ async def test_ticking_a_new_camera_defaults_it_to_the_primary_stream(hass) -> N
             user_input={"cameras": ["42", "43"], "auto_add": False},
         )
         assert result["step_id"] == "streams"
-        assert "Camera 43 (43) · Codec" in result["data_schema"].schema
+        assert "Camera 43 (43)" in result["data_schema"].schema
 
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={
-                "Camera 42 (42) · Codec": ["h264"],
-                "Camera 42 (42) · Resolution": ["original"],
-                "Camera 43 (43) · Codec": ["h264"],
-                "Camera 43 (43) · Resolution": ["original"],
-            },
+            user_input={"Camera 42 (42)": ["h264"], "Camera 43 (43)": ["h264"]},
         )
         await hass.async_block_till_done()
 
