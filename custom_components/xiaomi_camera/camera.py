@@ -71,11 +71,22 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         self._stream_key = stream_key
         self._attr_unique_id = unique_id(did, stream_key, primary_key)
         # The primary entity keeps the device's own name, unchanged for anyone
-        # upgrading. The others are named after what distinguishes them.
+        # upgrading. The others carry the device name in their own name, so a
+        # consumer that shows only the entity name -- HomeKit, a voice
+        # assistant -- still knows which camera it belongs to. Relying on Home
+        # Assistant's device-name prefixing (`has_entity_name`) leaves those
+        # consumers showing only "H.264 360p".
         if stream_key != primary_key:
+            self._attr_has_entity_name = False
             self._attr_translation_key = stream_key
         else:
             self._attr_name = None
+
+    @property
+    def translation_placeholders(self) -> dict[str, str]:
+        """The device name, substituted into variant entities' names."""
+        camera = self.camera
+        return {"camera": camera.name if camera else self._did}
 
     @property
     def is_streaming(self) -> bool:

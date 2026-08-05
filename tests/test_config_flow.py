@@ -50,14 +50,9 @@ def _stream(did: str, key: str, codec: str = "h264") -> CameraStream:
 
 
 async def test_ticking_a_new_camera_defaults_it_to_the_primary_stream(hass) -> None:
-    """C1b: a camera ticked in the same submission gets no key in the wire data.
-
-    The section's schema only carries a selector for cameras already ticked
-    when the form was rendered, so `user_input["camera_streams"]` has no key
-    for one ticked just now. Left unfilled, the camera would fall through to
-    whatever `selected_streams` defaults to instead of recording an explicit
-    choice alongside the other cameras'.
-    """
+    """C1b: a camera ticked in step one is offered in the stream step, where
+    the primary stream is its default -- so ticking alone gives it a working
+    stream instead of falling through to an unrecorded default."""
     entry = MockConfigEntry(
         domain=DOMAIN,
         version=2,
@@ -83,18 +78,21 @@ async def test_ticking_a_new_camera_defaults_it_to_the_primary_stream(hass) -> N
 
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["type"] == "form"
+        assert result["step_id"] == "init"
 
-        # Camera "43" is newly ticked in this submission -- it was not among
-        # `chosen` when the form above was rendered, so the section built for
-        # that render carries no field for it at all. Simulating that
-        # omission directly, the way the real form would submit it.
+        # Camera "43" is newly ticked here. The stream step that follows is
+        # built from what was ticked, so it carries a field for "43" whose
+        # default is the primary stream.
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={
-                "cameras": ["42", "43"],
-                "auto_add": False,
-                "camera_streams": {"42": ["h264"]},
-            },
+            user_input={"cameras": ["42", "43"], "auto_add": False},
+        )
+        assert result["step_id"] == "streams"
+        assert "43" in result["data_schema"].schema
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"],
+            user_input={"42": ["h264"], "43": ["h264"]},
         )
         await hass.async_block_till_done()
 
@@ -128,14 +126,13 @@ async def test_setup_completes_when_a_camera_declares_no_streams(hass) -> None:
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input={
-                "cameras": ["42"],
-                "auto_add": True,
-                # No key for "42": its selector was omitted since it declares
-                # no streams.
-                "camera_streams": {},
-            },
+            user_input={"cameras": ["42"], "auto_add": True},
         )
+        assert result["step_id"] == "streams"
+
+        # No key for "42": its selector was omitted since it declares no
+        # streams, so the stream step submits empty and setup completes.
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
@@ -168,14 +165,16 @@ async def test_options_flow_completes_when_a_camera_declares_no_streams(
 
         result = await hass.config_entries.options.async_init(entry.entry_id)
         assert result["type"] == "form"
+        assert result["step_id"] == "init"
 
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={
-                "cameras": ["42"],
-                "auto_add": False,
-                "camera_streams": {},
-            },
+            user_input={"cameras": ["42"], "auto_add": False},
+        )
+        assert result["step_id"] == "streams"
+
+        result = await hass.config_entries.options.async_configure(
+            result["flow_id"], {}
         )
         await hass.async_block_till_done()
 

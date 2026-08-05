@@ -33,10 +33,17 @@ _LOGGER = logging.getLogger(__name__)
 #: device's own numbers with neither rescaling nor rounding.
 _TIME_BASE = fractions.Fraction(1, 1000)
 
-#: A timestamp at or above this cannot be handed to the muxer at all: PyAV
-#: raises OverflowError converting it. The SDK reports 0xFFFFFFFFFFFFFFFF when
-#: the device PTS is unknown, which Miloco's source documents for the first
-#: frames after a peer-to-peer reconnect.
+#: The SDK reports this exact value when the device PTS is unknown, which
+#: Miloco's source documents for the first frames after a peer-to-peer
+#: reconnect. It is a marker, not a clock reading: a real clock can sit very
+#: close to 2**64 (this camera's firmware counts up from a value just under
+#: it), so the marker is matched exactly rather than by range.
+_SENTINEL_TS = 0xFFFFFFFFFFFFFFFF
+
+#: A relative output stamp at or above this cannot be handed to the muxer at
+#: all: PyAV raises OverflowError converting it. Stamps are rebased off the
+#: first unit's device timestamp, so in normal operation they stay small; a
+#: stamp this large means the device timestamps themselves are unusable.
 _MAX_TS_MS = 2**62
 
 #: A jump beyond this, in either direction, is a restarted device clock rather
@@ -158,13 +165,21 @@ class StreamMuxer:
     def _stamp(self, ts_ms: int, kind: MediaKind) -> int | None:
         """The output timestamp for a unit, or None if it cannot be used.
 
-        Four rules, all of them for behaviour observed against a real muxer
-        rather than anticipated.
+        The device clock's absolute value is irrelevant; only the difference
+        from the first unit seen matters. This camera's firmware counts up
+        from a value just under 2**64 -- an int64-negative offset, with frame
+        deltas that match its real frame rate -- so an absolute range check
+        would drop every frame it sends. The only timestamps refused are the
+        explicit "time unknown" marker and a negative clock reading.
         """
-        if not 0 <= ts_ms < _MAX_TS_MS:
-            # Unrepairable without inventing a value. Dropping costs little:
-            # these arrive after a reconnect, and a reconnect is followed by a
-            # fresh keyframe anyway.
+        if ts_ms == _SENTINEL_TS:
+            # The device has no usable time (the SDK sends this after a
+            # reconnect). Dropping costs little: a reconnect is followed by a
+            # fresh keyframe with a real timestamp.
+            return None
+
+        if ts_ms < 0:
+            # A negative clock reading is never valid.
             return None
 
         if self._offset is None or self._last_input is None:
@@ -184,6 +199,10 @@ class StreamMuxer:
         self._last_input = ts_ms
 
         stamp = ts_ms - self._offset
+        if not 0 <= stamp < _MAX_TS_MS:
+            # A rebased stamp that is negative or enormous means the device
+            # timestamps cannot be used together.
+            return None
         last = self._last_output.get(kind)
         if last is not None and stamp <= last:
             # A single repeat is enough to make the muxer reject the packet

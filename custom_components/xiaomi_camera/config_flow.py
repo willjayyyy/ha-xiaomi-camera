@@ -20,7 +20,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -72,6 +71,10 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         #: from the add-on's own answer -- never a list hardcoded here, since
         #: the two components ship separately.
         self._available_streams: dict[str, list[str]] = {}
+        #: Filled by the camera checklist step, read by the stream step that
+        #: follows it.
+        self._chosen_cameras: list[str] = []
+        self._auto_add = True
 
     # ------------------------------------------------------------------
     # Entry points
@@ -280,27 +283,53 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_cameras(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Choose which cameras to bring into Home Assistant."""
+        """Choose which cameras to bring into Home Assistant.
+
+        Step one of two: tick the cameras. The stream choice for each comes
+        in the next step, so it only ever asks about cameras selected here --
+        a camera ticked now appears in that form, one unticked does not.
+        """
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            self._chosen_cameras = list(user_input[CONF_CAMERAS])
+            self._auto_add = bool(user_input[CONF_AUTO_ADD])
+            return await self.async_step_streams()
+        return self.async_show_form(
+            step_id="cameras",
+            data_schema=_camera_checklist_schema(
+                self._cameras, list(self._cameras), True
+            ),
+            errors=errors,
+        )
+
+    async def async_step_streams(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Choose which streams each selected camera publishes."""
         errors: dict[str, str] = {}
         if user_input is not None:
             chosen_streams = _with_defaulted_streams(
-                user_input[CONF_CAMERAS],
-                user_input[CONF_CAMERA_STREAMS],
+                self._chosen_cameras,
+                user_input,
                 self._available_streams,
                 ROOT_KEY,
             )
             if any(not keys for keys in chosen_streams.values()):
-                # The camera was ticked one field above, so an empty stream
-                # list is a contradiction rather than a choice. Saying so
-                # beats silently dropping the camera, which would look like
-                # the tick was ignored.
+                # The camera was ticked one step ago, so an empty stream list
+                # is a contradiction rather than a choice. Saying so beats
+                # silently dropping the camera, which would look like the
+                # tick was ignored.
                 errors["base"] = "no_streams"
             else:
                 return self._create(
                     {
                         **_options_from(
                             self._cameras,
-                            {**user_input, CONF_CAMERA_STREAMS: chosen_streams},
+                            {
+                                CONF_CAMERAS: self._chosen_cameras,
+                                CONF_AUTO_ADD: self._auto_add,
+                                CONF_CAMERA_STREAMS: chosen_streams,
+                            },
                         ),
                         # Fixed at creation and never revisited: this is what
                         # binds the bare `<did>` entity to a stream.
@@ -310,12 +339,10 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
                     }
                 )
         return self.async_show_form(
-            step_id="cameras",
-            data_schema=_cameras_schema(
+            step_id="streams",
+            data_schema=_streams_schema(
                 self._cameras,
-                list(self._cameras),
-                True,
-                {},
+                self._chosen_cameras,
                 self._available_streams,
                 ROOT_KEY,
             ),
@@ -370,38 +397,20 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         #: alongside `_cameras` so a redisplay after a validation error does
         #: not need a second round trip to the bridge.
         self._available_streams: dict[str, list[str]] = {}
+        #: Filled by the camera checklist step, read by the stream step that
+        #: follows it.
+        self._chosen_cameras: list[str] = []
+        self._auto_add = True
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        """Step one of two: tick the cameras to keep in Home Assistant."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            primary = primary_stream(dict(self.config_entry.options))
-            chosen_streams = _with_defaulted_streams(
-                user_input[CONF_CAMERAS],
-                user_input[CONF_CAMERA_STREAMS],
-                self._available_streams,
-                primary,
-            )
-            if any(not keys for keys in chosen_streams.values()):
-                # The camera was ticked one field above, so an empty stream
-                # list is a contradiction rather than a choice. Saying so
-                # beats silently dropping the camera, which would look like
-                # the tick was ignored.
-                errors["base"] = "no_streams"
-            else:
-                return self.async_create_entry(
-                    data={
-                        **_options_from(
-                            self._cameras,
-                            {**user_input, CONF_CAMERA_STREAMS: chosen_streams},
-                        ),
-                        # Carried forward, not recomputed: it fixes which
-                        # stream the bare `<did>` entity is bound to, and
-                        # this flow never revisits that decision.
-                        CONF_PRIMARY_STREAM: primary,
-                    }
-                )
+            self._chosen_cameras = list(user_input[CONF_CAMERAS])
+            self._auto_add = bool(user_input[CONF_AUTO_ADD])
+            return await self.async_step_streams()
 
         if not self._cameras:
             # The coordinator already holds the current inventory -- polled
@@ -432,34 +441,86 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         chosen = selected(self.config_entry, self._cameras)
         return self.async_show_form(
             step_id="init",
-            data_schema=_cameras_schema(
-                self._cameras,
-                chosen,
-                auto_add,
-                self.config_entry.options.get(CONF_CAMERA_STREAMS, {}),
+            data_schema=_camera_checklist_schema(self._cameras, chosen, auto_add),
+            errors=errors,
+        )
+
+    async def async_step_streams(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step two: choose the streams each selected camera publishes."""
+        errors: dict[str, str] = {}
+        primary = primary_stream(dict(self.config_entry.options))
+        if user_input is not None:
+            chosen_streams = _with_defaulted_streams(
+                self._chosen_cameras,
+                user_input,
                 self._available_streams,
-                primary_stream(dict(self.config_entry.options)),
+                primary,
+            )
+            if any(not keys for keys in chosen_streams.values()):
+                # The camera was ticked one step ago, so an empty stream list
+                # is a contradiction rather than a choice. Saying so beats
+                # silently dropping the camera, which would look like the
+                # tick was ignored.
+                errors["base"] = "no_streams"
+            else:
+                return self.async_create_entry(
+                    data={
+                        **_options_from(
+                            self._cameras,
+                            {
+                                CONF_CAMERAS: self._chosen_cameras,
+                                CONF_AUTO_ADD: self._auto_add,
+                                CONF_CAMERA_STREAMS: chosen_streams,
+                            },
+                        ),
+                        # Carried forward, not recomputed: it fixes which
+                        # stream the bare `<did>` entity is bound to, and
+                        # this flow never revisits that decision.
+                        CONF_PRIMARY_STREAM: primary,
+                    }
+                )
+        return self.async_show_form(
+            step_id="streams",
+            data_schema=_streams_schema(
+                self._cameras,
+                self._chosen_cameras,
+                self._available_streams,
+                primary,
             ),
             errors=errors,
         )
 
 
-def _cameras_schema(
+def _camera_checklist_schema(
     cameras: dict[str, str],
     chosen: list[str],
     auto_add: bool,
-    stream_options: dict[str, list[str]],
+) -> vol.Schema:
+    """A checklist of cameras, labelled the way the Mi Home app labels them."""
+    return vol.Schema(
+        {
+            vol.Required(
+                CONF_CAMERAS, default=[did for did in chosen if did in cameras]
+            ): cv.multi_select(cameras),
+            vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
+        }
+    )
+
+
+def _streams_schema(
+    cameras: dict[str, str],
+    chosen_cameras: list[str],
     available: dict[str, list[str]],
     primary: str,
 ) -> vol.Schema:
-    """A checklist of cameras, labelled the way the Mi Home app labels them.
+    """One stream selector per selected camera.
 
-    Stream choice sits in a collapsed section: first-time setup asks nothing
-    about it, and the eight checkboxes per camera only appear for someone who
-    goes looking. A default that most users never revisit is the one that has
-    to be right, which is why it defaults to `primary` -- the same stream the
-    camera's bare `<did>` entity is already bound to (see `streams.py`), not a
-    value that might disagree with it.
+    A separate field per camera rather than a shared list, so one camera's
+    choice can never be confused with another's. Defaults to `primary` -- the
+    same stream the camera's bare `<did>` entity is already bound to (see
+    `streams.py`), not a value that might disagree with it.
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here. Offering one with no
@@ -468,7 +529,7 @@ def _cameras_schema(
     is among the (empty) options.
     """
     streams = {
-        vol.Required(did, default=stream_options.get(did) or [primary]): SelectSelector(
+        vol.Required(did, default=[primary]): SelectSelector(
             SelectSelectorConfig(
                 options=available.get(did, []),
                 multiple=True,
@@ -476,20 +537,10 @@ def _cameras_schema(
                 mode=SelectSelectorMode.LIST,
             )
         )
-        for did in chosen
+        for did in chosen_cameras
         if did in cameras and available.get(did)
     }
-    return vol.Schema(
-        {
-            vol.Required(
-                CONF_CAMERAS, default=[did for did in chosen if did in cameras]
-            ): cv.multi_select(cameras),
-            vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
-            vol.Required(CONF_CAMERA_STREAMS): section(
-                vol.Schema(streams), {"collapsed": True}
-            ),
-        }
-    )
+    return vol.Schema(streams)
 
 
 def _with_defaulted_streams(

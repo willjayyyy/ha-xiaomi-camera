@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.1
+
+Fix the regression that froze video after 1.1.0, and clean up stream setup.
+
+- Live video froze on the first frame because the muxer dropped every frame
+  from cameras whose firmware reports timestamps as an int64-negative offset
+  (near 2**64 unsigned). Those are real times -- the frame deltas match the
+  camera's rate -- so they are now rebased instead of discarded; only the
+  explicit "time unknown" marker is dropped.
+- Choosing streams is now two steps: pick the cameras, then pick streams per
+  camera, one selector each, instead of one collapsed section.
+- Variant entities carry the camera name in their own name, so a consumer
+  that shows only the entity name -- HomeKit, a voice assistant -- still says
+  which camera it is.
+- The add-on page no longer spells out technical details like the Opus codec
+  or the loopback-only address.
+
 ## 1.1.0
 
 Sound, and a stream for every player.

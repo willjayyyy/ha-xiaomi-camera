@@ -68,12 +68,24 @@ async def _loaded_entry(hass, options: dict) -> MockConfigEntry:
     return entry
 
 
+async def _pick_cameras(hass, entry, cameras: list[str]) -> dict:
+    """Open the options flow and complete step one (the camera checklist)."""
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "init"
+    return await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"cameras": cameras, "auto_add": True},
+    )
+
+
 async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> None:
     """Not from a list hardcoded in the integration.
 
     The add-on and the integration ship separately. A camera here publishes
-    only three variants; the form must offer exactly those, so that an add-on
-    which gains or loses a variant is reflected without changing this code.
+    only three variants; the stream step must offer exactly those, so that an
+    add-on which gains or loses a variant is reflected without changing this
+    code.
     """
     entry = await _loaded_entry(
         hass,
@@ -84,15 +96,13 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
         },
     )
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _pick_cameras(hass, entry, ["42"])
 
     assert result["type"] == FlowResultType.FORM
-    assert result["step_id"] == "init"
-    # `str(data_schema.schema)` only shows the `section`'s object identity,
-    # not its contents -- voluptuous does not repr into it -- so the offered
-    # keys have to be read from the section's own inner schema instead.
-    section_field = result["data_schema"].schema["camera_streams"]
-    stream_selector = section_field.schema.schema["42"]
+    assert result["step_id"] == "streams"
+    # Each ticked camera is its own field, so the choices live directly on
+    # the step's schema keyed by device id -- not inside a shared section.
+    stream_selector = result["data_schema"].schema["42"]
     stream_choices = stream_selector.config["options"]
     assert set(stream_choices) == set(_KEYS)
     assert "h264_720" not in stream_choices
@@ -118,14 +128,10 @@ async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:
         },
     )
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _pick_cameras(hass, entry, ["42"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={
-            "cameras": ["42"],
-            "auto_add": True,
-            "camera_streams": {"42": []},
-        },
+        user_input={"42": []},
     )
 
     assert result["type"] == FlowResultType.FORM
@@ -142,14 +148,10 @@ async def test_choosing_streams_stores_them_per_camera(hass) -> None:
         },
     )
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await _pick_cameras(hass, entry, ["42"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={
-            "cameras": ["42"],
-            "auto_add": True,
-            "camera_streams": {"42": ["h265", "h264_360"]},
-        },
+        user_input={"42": ["h265", "h264_360"]},
     )
     await hass.async_block_till_done()
 
@@ -172,14 +174,10 @@ async def test_the_primary_stream_is_not_rewritten_by_editing_options(hass) -> N
         },
     )
 
-    result = await hass.config_entries.options.async_init(entry.entry_id)
-    await hass.config_entries.options.async_configure(
+    result = await _pick_cameras(hass, entry, ["42"])
+    result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={
-            "cameras": ["42"],
-            "auto_add": True,
-            "camera_streams": {"42": ["h264", "h264_360"]},
-        },
+        user_input={"42": ["h264", "h264_360"]},
     )
     await hass.async_block_till_done()
 

@@ -361,7 +361,6 @@ const I18N = {
     retry: "Try again",
     copy: "Copy", copied: "Copied",
     credentialsHint: "This stream needs the RTSP username and password — from this add-on's configuration, or from the startup log if they were generated for you.",
-    loopbackOnlyHint: "This address only works from software running on this machine, which is how Home Assistant reaches it. To read the stream from another device, set access_mode to \"lan\".",
     noCode: "That address does not contain an authorization code. Copy the full address from the page you were redirected to.",
     linked: "Account connected.",
     startFailed: "Could not start sign-in: ",
@@ -402,7 +401,6 @@ const I18N = {
     retry: "重试",
     copy: "复制", copied: "已复制",
     credentialsHint: "该地址需要 RTSP 用户名和密码 —— 在加载项配置中填写的那组，或启动日志里自动生成的那组。",
-    loopbackOnlyHint: "这个地址只有本机上运行的软件能用，Home Assistant 正是这样访问它的。要从其他设备读取这路视频流，请把 access_mode 设为 “lan”。",
     noCode: "该地址中没有授权码。请复制跳转后页面地址栏里的完整地址。",
     linked: "账号已连接。",
     startFailed: "无法开始登录：",
@@ -650,7 +648,7 @@ function renderCameras() {
         </div>
         <div class="cam-model">${escapeHtml(c.model)}${
           c.stream_audio
-            ? ` · ${escapeHtml(t("audioOn"))} ${escapeHtml(c.stream_audio)}`
+            ? ` · ${escapeHtml(t("audioOn"))}`
             : ""
         }</div>
         <div class="cam-foot">
@@ -658,7 +656,6 @@ function renderCameras() {
           <button class="copy" data-copy="${escapeHtml(displayUrl(c.rtsp_url, c.rtsp_reachable_off_host))}">${escapeHtml(t("copy"))}</button>
         </div>
         ${c.rtsp_requires_credentials ? `<p class="hint">${escapeHtml(t("credentialsHint"))}</p>` : ""}
-        ${c.rtsp_reachable_off_host ? "" : `<p class="hint">${escapeHtml(t("loopbackOnlyHint"))}</p>`}
       </div>
     </article>`;
   }).join("")}</div>`;
