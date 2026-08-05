@@ -142,6 +142,16 @@ class TestStreamCatalogue:
         mine = [name for name in config["streams"] if name.startswith("camera_42")]
         assert len(mine) == 8, sorted(mine)
 
+    def test_every_stream_name_states_its_codec(self) -> None:
+        """No variant omits its codec, not even the camera's own encoding.
+
+        The rule exists because a user comparing two 360p entities otherwise
+        has nothing to tell them apart.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        for name in config["streams"]:
+            assert name.startswith(("camera_42_h264", "camera_42_h265")), name
+
     def test_derived_streams_source_the_root_not_the_http_endpoint(self) -> None:
         """One peer-to-peer session per camera, however many streams are open.
 
@@ -222,7 +232,7 @@ class TestStreamDescriptions:
     def test_heights_are_reported_for_scaled_streams_only(self) -> None:
         restreamer = Restreamer(make_options(AccessMode.LOCAL))
         by_key = {d["key"]: d for d in restreamer.stream_descriptions("42")}
-        assert by_key["hevc"]["height"] is None
+        assert by_key["h265"]["height"] is None
         assert by_key["h264_360"]["height"] == 360
 
 

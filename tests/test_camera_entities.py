@@ -25,7 +25,7 @@ if sys.version_info >= (3, 14):
     from custom_components.xiaomi_camera.api import BridgeCamera, CameraStream
     from custom_components.xiaomi_camera.const import DOMAIN
 
-_KEYS = ("hevc", "h264", "h264_360")
+_KEYS = ("h265", "h264", "h264_360")
 
 
 def _camera(did: str = "42") -> BridgeCamera:
@@ -43,7 +43,7 @@ def _camera(did: str = "42") -> BridgeCamera:
         streams=tuple(
             CameraStream(
                 key=key,
-                codec="h265" if key.startswith("hevc") else "h264",
+                codec="h265" if key.startswith("h265") else "h264",
                 height=360 if key.endswith("360") else None,
                 url=f"rtsp://127.0.0.1:8554/camera_{did}_{key}",
             )
@@ -107,20 +107,20 @@ async def test_the_primary_entity_keeps_the_bare_device_id(hass) -> None:
 
 
 async def test_which_stream_is_primary_moves_the_bare_id(hass) -> None:
-    """An entry migrated from `original` has hevc as its primary."""
+    """An entry migrated from `original` has h265 as its primary."""
     await _setup(
         hass,
         {
             "cameras": ["42"],
-            "primary_stream": "hevc",
-            "camera_streams": {"42": ["hevc", "h264"]},
+            "primary_stream": "h265",
+            "camera_streams": {"42": ["h265", "h264"]},
         },
     )
 
     registry = er.async_get(hass)
     assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
     assert registry.async_get_entity_id("camera", DOMAIN, "42_h264") is not None
-    assert registry.async_get_entity_id("camera", DOMAIN, "42_hevc") is None
+    assert registry.async_get_entity_id("camera", DOMAIN, "42_h265") is None
 
 
 async def test_each_entity_points_at_its_own_stream(hass) -> None:
@@ -193,7 +193,7 @@ async def test_all_of_a_cameras_entities_share_one_device(hass) -> None:
         {
             "cameras": ["42"],
             "primary_stream": "h264",
-            "camera_streams": {"42": ["hevc", "h264", "h264_360"]},
+            "camera_streams": {"42": ["h265", "h264", "h264_360"]},
         },
     )
 

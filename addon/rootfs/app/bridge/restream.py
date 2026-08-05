@@ -116,10 +116,10 @@ STREAM_SPECS: tuple[StreamSpec, ...] = (
     # The root's bitrate is documentary only: it is always `#video=copy` (see
     # `build_config`), so no template is ever generated for it and this value
     # is never read.
-    StreamSpec("hevc", "h265", None, "2M"),
-    StreamSpec("hevc_720", "h265", 720, "2M"),
-    StreamSpec("hevc_360", "h265", 360, "512k"),
-    StreamSpec("hevc_180", "h265", 180, "256k"),
+    StreamSpec("h265", "h265", None, "2M"),
+    StreamSpec("h265_720", "h265", 720, "2M"),
+    StreamSpec("h265_360", "h265", 360, "512k"),
+    StreamSpec("h265_180", "h265", 180, "256k"),
     StreamSpec("h264", "h264", None, "2M"),
     StreamSpec("h264_720", "h264", 720, "2M"),
     StreamSpec("h264_360", "h264", 360, "512k"),
@@ -128,23 +128,19 @@ STREAM_SPECS: tuple[StreamSpec, ...] = (
 
 #: The variant every other one is derived from: the camera's own encoding at
 #: its own resolution, repackaged without re-encoding.
-ROOT_KEY = "hevc"
+ROOT_KEY = "h265"
 
 
 def stream_name(did: str, key: str = ROOT_KEY) -> str:
     """Stable go2rtc stream name for one variant of a camera.
 
-    Device identifiers are numeric and these names appear in URLs, so they are
-    prefixed to stay readable and collision-free. The root keeps the bare name
-    it has always had, so URLs already in someone's NVR keep working.
+    `camera_<did>_<codec>` or `camera_<did>_<codec>_<height>`. The codec is
+    never omitted, including for the camera's own encoding: a name that
+    depends on which codec happens to be the default is a rule with an
+    exception, and the exception is exactly what makes two 360p streams
+    indistinguishable.
     """
-    if key == ROOT_KEY:
-        return f"camera_{did}"
-    # H.265 is the camera's own encoding, so its variants are named by height
-    # alone -- `camera_42_360`. Only the transcoded ones carry a codec in the
-    # name, which keeps the common URLs short.
-    suffix = key.removeprefix("hevc_")
-    return f"camera_{did}_{suffix}"
+    return f"camera_{did}_{key}"
 
 
 def _encoder_templates() -> dict[str, str]:

@@ -39,7 +39,7 @@ class TestStreamParsing:
             {
                 **_BASE,
                 "streams": [
-                    {"key": "hevc", "codec": "h265", "height": None, "url": "rtsp://a"},
+                    {"key": "h265", "codec": "h265", "height": None, "url": "rtsp://a"},
                     {
                         "key": "h264_360",
                         "codec": "h264",
@@ -49,7 +49,7 @@ class TestStreamParsing:
                 ],
             }
         )
-        assert [s.key for s in camera.streams] == ["hevc", "h264_360"]
+        assert [s.key for s in camera.streams] == ["h265", "h264_360"]
         assert camera.stream_url("h264_360") == "rtsp://b"
 
     def test_an_add_on_without_streams_reports_none(self) -> None:

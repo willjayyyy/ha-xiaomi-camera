@@ -52,19 +52,19 @@ class TestUniqueId:
         assert unique_id("42", "h264_360", primary_key="h264") == "42_h264_360"
 
     def test_which_stream_is_primary_depends_on_the_entry(self) -> None:
-        """An entry migrated from `original` has hevc as its primary."""
-        assert unique_id("42", "hevc", primary_key="hevc") == "42"
-        assert unique_id("42", "h264", primary_key="hevc") == "42_h264"
+        """An entry migrated from `original` has h265 as its primary."""
+        assert unique_id("42", "h265", primary_key="h265") == "42"
+        assert unique_id("42", "h264", primary_key="h265") == "42_h264"
 
 
 class TestSelection:
     def test_an_unconfigured_camera_gets_the_root_stream(self) -> None:
         """The camera's own encoding, nothing chosen on the user's behalf."""
-        assert selected_streams({}, "42", available=["hevc", "h264"]) == [ROOT_KEY]
+        assert selected_streams({}, "42", available=["h265", "h264"]) == [ROOT_KEY]
 
     def test_a_configured_camera_gets_what_was_ticked(self) -> None:
         options = {"camera_streams": {"42": ["h264", "h264_360"]}}
-        assert selected_streams(options, "42", ["hevc", "h264", "h264_360"]) == [
+        assert selected_streams(options, "42", ["h265", "h264", "h264_360"]) == [
             "h264",
             "h264_360",
         ]
@@ -76,9 +76,9 @@ class TestSelection:
 
     def test_order_follows_the_add_ons_order_not_the_users(self) -> None:
         """Entity creation order stays stable across reconfigurations."""
-        options = {"camera_streams": {"42": ["h264_360", "hevc"]}}
-        assert selected_streams(options, "42", ["hevc", "h264_360"]) == [
-            "hevc",
+        options = {"camera_streams": {"42": ["h264_360", "h265"]}}
+        assert selected_streams(options, "42", ["h265", "h264_360"]) == [
+            "h265",
             "h264_360",
         ]
 
@@ -91,15 +91,15 @@ class TestMigration:
         assert migrated["primary_stream"] == "h264"
         assert migrated["camera_streams"]["42"] == ["h264"]
 
-    def test_original_entries_keep_playing_hevc(self) -> None:
+    def test_original_entries_keep_playing_h265(self) -> None:
         migrated = migrate_options({"stream_codec": "original"}, ["42"])
-        assert migrated["primary_stream"] == "hevc"
-        assert migrated["camera_streams"]["42"] == ["hevc"]
+        assert migrated["primary_stream"] == "h265"
+        assert migrated["camera_streams"]["42"] == ["h265"]
 
     def test_entries_predating_the_option_are_treated_as_h264(self) -> None:
         """`camera.py` has always defaulted to H.264 when the key is absent.
 
-        Binding these to hevc because that is the new default would change
+        Binding these to h265 because that is the new default would change
         what an already-working entity plays, on upgrade, unasked.
         """
         migrated = migrate_options({}, ["42"])
@@ -135,5 +135,5 @@ class TestEntityCleanup:
         assert wanted_unique_ids(options, {"42": ["h264", "h264_360"]}) == {"42"}
 
     def test_a_camera_with_no_entry_falls_back_to_the_root(self) -> None:
-        options = {"primary_stream": "hevc"}
-        assert wanted_unique_ids(options, {"42": ["hevc", "h264"]}) == {"42"}
+        options = {"primary_stream": "h265"}
+        assert wanted_unique_ids(options, {"42": ["h265", "h264"]}) == {"42"}
