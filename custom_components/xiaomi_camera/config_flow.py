@@ -20,32 +20,28 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.selector import (
-    SelectSelector,
-    SelectSelectorConfig,
-    SelectSelectorMode,
-)
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
-from .api import BridgeClient, BridgeError, BridgeNotLinkedError
+from .api import BridgeCamera, BridgeClient, BridgeError, BridgeNotLinkedError
 from .const import (
     ADDON_NAME,
     ADDON_SLUG,
     CONF_AUTO_ADD,
+    CONF_CAMERA_STREAMS,
     CONF_CAMERAS,
     CONF_EXCLUDED,
     CONF_HOST,
     CONF_PORT,
-    CONF_STREAM_CODEC,
+    CONF_PRIMARY_STREAM,
     DEFAULT_HOST,
     DEFAULT_PORT,
     DOMAIN,
-    STREAM_CODEC_H264,
-    STREAM_CODEC_ORIGINAL,
 )
 from .selection import selected
+from .streams import ROOT_KEY, primary_stream
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,6 +62,11 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         self._host: str = DEFAULT_HOST
         self._port: int = DEFAULT_PORT
         self._addon_manager: Any = None
+        self._cameras: dict[str, str] = {}
+        #: Stream keys each camera actually publishes, by device id. Comes
+        #: from the add-on's own answer -- never a list hardcoded here, since
+        #: the two components ship separately.
+        self._available_streams: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------------
     # Entry points
@@ -255,7 +256,11 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         # this. Skipped when there is nothing to choose from -- an account
         # that has not been linked yet has no cameras, and an empty checklist
         # would only teach the user that this step does not matter.
-        self._cameras = await self._async_fetch_cameras()
+        cameras = await self._async_fetch_cameras()
+        self._cameras = {camera.did: camera.name for camera in cameras}
+        self._available_streams = {
+            camera.did: [stream.key for stream in camera.streams] for camera in cameras
+        }
         if self._cameras:
             return await self.async_step_cameras()
         return self._create()
@@ -271,25 +276,44 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Choose which cameras to bring into Home Assistant."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self._create(_options_from(self._cameras, user_input))
+            chosen_streams = user_input[CONF_CAMERA_STREAMS]
+            if any(not keys for keys in chosen_streams.values()):
+                # The camera was ticked one field above, so an empty stream
+                # list is a contradiction rather than a choice. Saying so
+                # beats silently dropping the camera, which would look like
+                # the tick was ignored.
+                errors["base"] = "no_streams"
+            else:
+                return self._create(
+                    {
+                        **_options_from(self._cameras, user_input),
+                        # Fixed at creation and never revisited: this is what
+                        # binds the bare `<did>` entity to a stream.
+                        # Recomputing it later would change an existing
+                        # entity's identity.
+                        CONF_PRIMARY_STREAM: ROOT_KEY,
+                    }
+                )
         return self.async_show_form(
             step_id="cameras",
             data_schema=_cameras_schema(
-                self._cameras, list(self._cameras), True, STREAM_CODEC_H264
+                self._cameras, list(self._cameras), True, {}, self._available_streams
             ),
+            errors=errors,
         )
 
-    async def _async_fetch_cameras(self) -> dict[str, str]:
+    async def _async_fetch_cameras(self) -> list[BridgeCamera]:
         client = BridgeClient(
             async_get_clientsession(self.hass), host=self._host, port=self._port
         )
         try:
-            return {camera.did: camera.name for camera in await client.async_cameras()}
+            return await client.async_cameras()
         except BridgeError:
             # Not fatal: the entry is still valid, and the choice can be made
             # later from the integration's options.
-            return {}
+            return []
 
     def _is_supervised(self) -> bool:
         try:
@@ -324,26 +348,48 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         #: Filled by the form that offers them, so saving can work out which
         #: cameras were turned down as well as which were kept.
         self._cameras: dict[str, str] = {}
+        #: Stream keys each camera actually publishes, by device id. Filled
+        #: alongside `_cameras` so a redisplay after a validation error does
+        #: not need a second round trip to the bridge.
+        self._available_streams: dict[str, list[str]] = {}
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(
-                data=_options_from(self._cameras, user_input)
-            )
+            chosen_streams = user_input[CONF_CAMERA_STREAMS]
+            if any(not keys for keys in chosen_streams.values()):
+                # The camera was ticked one field above, so an empty stream
+                # list is a contradiction rather than a choice. Saying so
+                # beats silently dropping the camera, which would look like
+                # the tick was ignored.
+                errors["base"] = "no_streams"
+            else:
+                return self.async_create_entry(
+                    data={
+                        **_options_from(self._cameras, user_input),
+                        # Carried forward, not recomputed: it fixes which
+                        # stream the bare `<did>` entity is bound to, and
+                        # this flow never revisits that decision.
+                        CONF_PRIMARY_STREAM: primary_stream(
+                            dict(self.config_entry.options)
+                        ),
+                    }
+                )
 
-        client = BridgeClient(
-            async_get_clientsession(self.hass),
-            host=self.config_entry.data[CONF_HOST],
-            port=self.config_entry.data[CONF_PORT],
-        )
-        try:
-            self._cameras = {c.did: c.name for c in await client.async_cameras()}
-        except BridgeError:
-            return self.async_abort(reason="cannot_connect")
         if not self._cameras:
-            return self.async_abort(reason="no_cameras")
+            # The coordinator already holds the current inventory -- polled
+            # while the entry was set up -- so opening this form costs no
+            # extra round trip to the bridge.
+            cameras = self.config_entry.runtime_data.data
+            self._cameras = {did: camera.name for did, camera in cameras.items()}
+            self._available_streams = {
+                did: [stream.key for stream in camera.streams]
+                for did, camera in cameras.items()
+            }
+            if not self._cameras:
+                return self.async_abort(reason="no_cameras")
 
         # Everything the account has now, with what is currently imported
         # ticked. A camera bought since setup therefore appears here -- ticked
@@ -356,27 +402,42 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
                 self._cameras,
                 chosen,
                 auto_add,
-                self.config_entry.options.get(CONF_STREAM_CODEC, STREAM_CODEC_H264),
+                self.config_entry.options.get(CONF_CAMERA_STREAMS, {}),
+                self._available_streams,
             ),
+            errors=errors,
         )
 
 
 def _cameras_schema(
-    cameras: dict[str, str], chosen: list[str], auto_add: bool, codec: str
+    cameras: dict[str, str],
+    chosen: list[str],
+    auto_add: bool,
+    stream_options: dict[str, list[str]],
+    available: dict[str, list[str]],
 ) -> vol.Schema:
-    """A checklist of cameras, labelled the way the Mi Home app labels them."""
+    """A checklist of cameras, labelled the way the Mi Home app labels them.
+
+    Stream choice sits in a collapsed section: first-time setup asks nothing
+    about it, and the eight checkboxes per camera only appear for someone who
+    goes looking. A default that most users never revisit is the one that has
+    to be right, which is why it is the camera's own encoding.
+    """
+    streams = {
+        vol.Required(
+            did, default=stream_options.get(did) or [ROOT_KEY]
+        ): cv.multi_select({key: key for key in available.get(did, [])})
+        for did in chosen
+        if did in cameras
+    }
     return vol.Schema(
         {
             vol.Required(
                 CONF_CAMERAS, default=[did for did in chosen if did in cameras]
             ): cv.multi_select(cameras),
             vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
-            vol.Required(CONF_STREAM_CODEC, default=codec): SelectSelector(
-                SelectSelectorConfig(
-                    options=[STREAM_CODEC_H264, STREAM_CODEC_ORIGINAL],
-                    translation_key=CONF_STREAM_CODEC,
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
+            vol.Required(CONF_CAMERA_STREAMS): section(
+                vol.Schema(streams), {"collapsed": True}
             ),
         }
     )
@@ -396,5 +457,5 @@ def _options_from(
         CONF_CAMERAS: chosen,
         CONF_EXCLUDED: [did for did in cameras if did not in chosen],
         CONF_AUTO_ADD: bool(user_input[CONF_AUTO_ADD]),
-        CONF_STREAM_CODEC: user_input[CONF_STREAM_CODEC],
+        CONF_CAMERA_STREAMS: user_input[CONF_CAMERA_STREAMS],
     }
