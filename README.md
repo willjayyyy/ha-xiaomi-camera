@@ -195,8 +195,8 @@ does not appear is almost certainly on that list.
 
 ## Known limits
 
-- Cameras send H.265 video. Each one is also published as H.264, converted
-  only while something is watching, because browsers and HomeKit need that.
+- Cameras send H.265 video. Every other stream variant is produced by
+  converting it, and only while something is watching.
 - Only Xiaomi's China account region has been tested.
 - No two-way audio, no pan/tilt control, no SD-card playback.
 
