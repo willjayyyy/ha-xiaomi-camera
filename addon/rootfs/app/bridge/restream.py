@@ -252,6 +252,25 @@ class Restreamer:
         """RTSP URL for the H.264 version of a camera's stream."""
         return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did, 'h264')}"
 
+    def stream_descriptions(self, did: str) -> list[dict[str, object]]:
+        """Every variant published for a camera, for the integration to read.
+
+        Sent rather than hardcoded on the other side so the two components can
+        be upgraded independently: an integration older than this add-on shows
+        the variants it knows, and a newer one shows whatever arrives.
+
+        Credentials are absent by construction, as in :meth:`rtsp_url`.
+        """
+        return [
+            {
+                "key": spec.key,
+                "codec": spec.codec,
+                "height": spec.height,
+                "url": f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did, spec.key)}",
+            }
+            for spec in STREAM_SPECS
+        ]
+
     def internal_rtsp_url(self, did: str) -> str:
         """RTSP URL for this process's own use, credentials included.
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
 from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
-from bridge.restream import build_config, stream_name
+from bridge.restream import STREAM_SPECS, Restreamer, build_config, stream_name
 
 
 def make_options(mode: AccessMode, user: str = "", password: str = "") -> Options:
@@ -203,6 +203,27 @@ class TestStreamCatalogue:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert "-b:v 2M" in config["ffmpeg"]["h264"]
         assert "scale" not in config["ffmpeg"]["h264"]
+
+
+class TestStreamDescriptions:
+    """What the integration reads instead of hardcoding the list."""
+
+    def test_it_describes_every_published_stream(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        described = restreamer.stream_descriptions("42")
+        assert [d["key"] for d in described] == [s.key for s in STREAM_SPECS]
+
+    def test_urls_carry_no_credentials(self) -> None:
+        """These reach Home Assistant's config state, diagnostics and logs."""
+        restreamer = Restreamer(make_options(AccessMode.LAN, "user", "pass"))
+        for described in restreamer.stream_descriptions("42"):
+            assert "@" not in described["url"]
+
+    def test_heights_are_reported_for_scaled_streams_only(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        by_key = {d["key"]: d for d in restreamer.stream_descriptions("42")}
+        assert by_key["hevc"]["height"] is None
+        assert by_key["h264_360"]["height"] == 360
 
 
 class TestPorts:
