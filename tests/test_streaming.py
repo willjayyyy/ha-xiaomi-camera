@@ -339,6 +339,66 @@ class TestAudioStatistics:
 
         assert session.stats.dropped_timestamps == 1
 
+    async def test_clock_reanchors_are_counted(self) -> None:
+        """Same seam as `test_the_counter_has_a_writer` above, for
+        `clock_reanchors` -- the one number that would show, on real
+        hardware, that the camera's audio and video timestamps do not share
+        an epoch. It has to actually be written by `_stream`'s `finally`, not
+        just declared on `SessionStats`.
+        """
+        closed = asyncio.Event()
+        units = [
+            MediaUnit(MediaKind.VIDEO, 10_000, b"\x00\x00\x00\x01\x26\x01"),
+            # A jump past the discontinuity threshold: the device clock
+            # restarted, and the muxer re-anchors its shared offset.
+            MediaUnit(MediaKind.VIDEO, 30, b"\x00\x00\x00\x01\x26\x01"),
+        ]
+
+        class _DrainingQueue:
+            def __init__(self, items: list[MediaUnit]) -> None:
+                self._items = list(items)
+
+            async def get(self) -> MediaUnit:
+                if not self._items:
+                    raise asyncio.CancelledError()
+                return self._items.pop(0)
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.codec = Codec.H265
+                self.audio_codec = None
+                self.stats = SessionStats()
+
+            @contextlib.asynccontextmanager
+            async def subscribe(self):
+                consumer = SimpleNamespace(queue=_DrainingQueue(units), closed=closed)
+                yield consumer
+
+        session = _FakeSession()
+        registry = SimpleNamespace(get=lambda did: object())
+        sessions = SimpleNamespace(session_for=lambda info: session)
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/stream/{did}", api._stream)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/stream/42")
+            await resp.read()
+        finally:
+            await client.close()
+
+        assert session.stats.clock_reanchors == 1
+
     async def test_a_late_audio_reconnect_is_counted(self) -> None:
         """Same seam as `test_the_counter_has_a_writer` above, for the other
         statistic this branch adds: `late_audio_reconnects`.

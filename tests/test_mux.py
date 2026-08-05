@@ -173,6 +173,20 @@ class TestHazards:
         _, times = _demux(_drain(muxer, [_video(0), _audio(0), _audio(3_600_000)]))
         assert times["audio"][-1] < 1000
 
+    def test_a_clock_restart_is_counted(self) -> None:
+        """The one number that would show a broken audio/video epoch
+        assumption on real hardware, so it has to move on a real restart."""
+        muxer = StreamMuxer(Codec.H265, AUDIO_CODEC_OPUS)
+        units = [
+            _video(10_000),
+            _audio(10_120),
+            _video(30),  # the device clock restarted
+            _audio(150),
+            _audio(3_600_150),  # and again, forward this time
+        ]
+        _drain(muxer, units)
+        assert muxer.reanchors == 2
+
     def test_a_muxer_with_no_audio_still_counts_bad_video_stamps(self) -> None:
         muxer = StreamMuxer(Codec.H265, None)
         _drain(muxer, [_video(0), _video(SENTINEL_TS)])
