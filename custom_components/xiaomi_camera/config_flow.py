@@ -528,10 +528,16 @@ def _stream_label_map(keys: list[str]) -> dict[str, str]:
     the integration uses, so there is exactly one source of labels."""
     path = Path(__file__).with_name("translations") / "en.json"
     try:
-        names = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
+        entities = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
     except (OSError, KeyError, ValueError):
-        names = {}
-    return {key: names.get(key, key) for key in keys}
+        entities = {}
+    labels = {}
+    for key in keys:
+        entry = entities.get(key)
+        labels[key] = (
+            entry.get("name", key) if isinstance(entry, dict) else entry or key
+        )
+    return labels
 
 
 def _streams_schema(

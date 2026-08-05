@@ -35,7 +35,7 @@
       },
       "streams": {
         "title": "Choose streams",
-        "description": "Each camera starts with one stream in its original encoding. Add lower-bandwidth versions for Apple Home or remote viewing. If your browser cannot play the picture, add an H.264 stream."
+        "description": "Choose the streams each camera should publish."
       }
     },
     "error": {
@@ -83,7 +83,7 @@
       },
       "streams": {
         "title": "Choose streams",
-        "description": "Each camera starts with one stream in its original encoding. Add lower-bandwidth versions for Apple Home or remote viewing. If your browser cannot play the picture, add an H.264 stream."
+        "description": "Choose the streams each camera should publish."
       }
     },
     "error": {
