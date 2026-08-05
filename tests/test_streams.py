@@ -35,6 +35,7 @@ if sys.version_info >= (3, 14):
     from custom_components.xiaomi_camera.streams import ROOT_KEY as INTEGRATION_ROOT_KEY
     from custom_components.xiaomi_camera.streams import (
         migrate_options,
+        migrate_v2_options,
         selected_streams,
         unique_id,
         wanted_unique_ids,
@@ -140,6 +141,21 @@ class TestMigration:
         )
         assert migrated["auto_add"] is False
         assert migrated["excluded_cameras"] == ["7"]
+
+    def test_a_v2_entry_with_the_root_primary_keeps_the_root(self) -> None:
+        """'h265' meant the root in v2; it must not rebind to the transcode."""
+        migrated = migrate_v2_options(
+            {
+                "primary_stream": "h265",
+                "camera_streams": {"42": ["h265", "h264"]},
+            }
+        )
+        assert migrated["primary_stream"] == "original"
+        assert migrated["camera_streams"] == {"42": ["original", "h264"]}
+
+    def test_a_v2_entry_without_h265_is_untouched(self) -> None:
+        options = {"primary_stream": "h264", "camera_streams": {"42": ["h264"]}}
+        assert migrate_v2_options(options) == options
 
 
 class TestEntityCleanup:

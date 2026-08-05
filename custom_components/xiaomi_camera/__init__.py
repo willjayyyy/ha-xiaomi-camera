@@ -25,7 +25,7 @@ from .selection import (
     async_remove_unselected_entities,
     selected,
 )
-from .streams import migrate_options, wanted_unique_ids
+from .streams import migrate_options, migrate_v2_options, wanted_unique_ids
 
 #: Typed alias so platforms can read `entry.runtime_data` without a cast.
 XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
@@ -42,14 +42,19 @@ async def async_migrate_entry(
 
     Version 1 chose one codec for every camera at once. Version 2 chooses per
     camera, and records which stream the pre-existing entity is bound to so
-    its identity survives.
+    its identity survives. Version 3 renames the default: 'h265' meant the
+    root in v2, and the root now has a codec-neutral key of its own.
     """
-    if entry.version > 2:
+    if entry.version > 3:
         return False
     if entry.version == 1:
         dids = list(entry.options.get(CONF_CAMERAS) or [])
         hass.config_entries.async_update_entry(
             entry, options=migrate_options(dict(entry.options), dids), version=2
+        )
+    if entry.version == 2:
+        hass.config_entries.async_update_entry(
+            entry, options=migrate_v2_options(dict(entry.options)), version=3
         )
     return True
 

@@ -122,3 +122,27 @@ def migrate_options(options: dict, dids: list[str]) -> dict:
     migrated[CONF_PRIMARY_STREAM] = primary
     migrated[CONF_CAMERA_STREAMS] = {did: [primary] for did in dids}
     return migrated
+
+
+def migrate_v2_options(options: dict) -> dict:
+    """v2→v3: 'h265' meant the root then; now the root is 'original'.
+
+    Kept for correctness rather than compatibility: without the rewrite, an
+    old entry's primary would silently rebind the bare `<did>` entity to the
+    *transcoded* H.265 variant and start re-encoding where it did not before.
+    The URL does not change (both keys point at the same root stream), so the
+    entity's identity and behaviour survive the rename.
+    """
+
+    def _rewrite(keys: list[str]) -> list[str]:
+        return ["original" if key == "h265" else key for key in keys]
+
+    migrated = dict(options)
+    if migrated.get(CONF_PRIMARY_STREAM) == "h265":
+        migrated[CONF_PRIMARY_STREAM] = "original"
+    camera_streams = migrated.get(CONF_CAMERA_STREAMS)
+    if isinstance(camera_streams, dict):
+        migrated[CONF_CAMERA_STREAMS] = {
+            did: _rewrite(keys) for did, keys in camera_streams.items()
+        }
+    return migrated

@@ -57,7 +57,7 @@ _MANUAL_SCHEMA = vol.Schema(
 class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Xiaomi Camera."""
 
-    VERSION = 2
+    VERSION = 3
 
     def __init__(self) -> None:
         self._host: str = DEFAULT_HOST

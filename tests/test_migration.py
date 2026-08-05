@@ -47,7 +47,31 @@ async def test_a_version_one_entry_is_migrated(hass) -> None:
 
     assert await async_migrate_entry(hass, entry) is True
 
-    assert entry.version == 2
+    # The migration chains in one call, so a v1 entry reaches the current
+    # version (3), not the intermediate one.
+    assert entry.version == 3
     assert entry.options["primary_stream"] == "h264"
     assert entry.options["camera_streams"] == {"42": ["h264"]}
     assert "stream_codec" not in entry.options
+
+
+async def test_a_version_two_entry_is_migrated(hass) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={"host": "127.0.0.1", "port": 8099},
+        options={
+            "cameras": ["42"],
+            "primary_stream": "h265",
+            "camera_streams": {"42": ["h265", "h264"]},
+        },
+    )
+    entry.add_to_hass(hass)
+
+    from custom_components.xiaomi_camera import async_migrate_entry
+
+    assert await async_migrate_entry(hass, entry) is True
+
+    assert entry.version == 3
+    assert entry.options["primary_stream"] == "original"
+    assert entry.options["camera_streams"] == {"42": ["original", "h264"]}
