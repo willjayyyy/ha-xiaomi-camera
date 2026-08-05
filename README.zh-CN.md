@@ -193,4 +193,11 @@ Home Assistant 可以显示，局域网上的其他设备无法访问。
 
 本项目自身的代码采用 Apache-2.0。见 [LICENSE](LICENSE)。
 
+## 许可证
+
+本项目采用 Apache-2.0 许可证。加载项镜像内置了来自
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 的静态
+[ffmpeg](https://ffmpeg.org/)（GPL 版本），该组件遵循 GPL 许可证，
+其源代码可从上述项目获取。
+
 实现参考了 [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco)。

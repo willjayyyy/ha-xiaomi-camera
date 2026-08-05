@@ -212,4 +212,11 @@ is covered by their licence, not ours.
 
 This project's own code is Apache-2.0. See [LICENSE](LICENSE).
 
+## Licence
+
+This project is Apache-2.0. The add-on image bundles a static
+[ffmpeg](https://ffmpeg.org/) from
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), GPL variant,
+which is licensed under the GPL. Its sources are available from that project.
+
 Built by studying [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco).

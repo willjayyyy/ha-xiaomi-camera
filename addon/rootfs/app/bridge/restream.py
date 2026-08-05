@@ -55,21 +55,25 @@ _GO2RTC_LOG_LEVELS = {
 }
 
 
-#: How go2rtc should encode H.264. Its own default is `-c:v libx264`, which is
-#: GPL and therefore absent from the LGPL ffmpeg this image ships. openh264 is
-#: Cisco's BSD-licensed encoder and is present in that build; the Dockerfile
-#: checks for it so a build that lost it fails there rather than here.
+#: How go2rtc should encode. Its own defaults are close to this, but pin
+#: `-g 25` rather than the default 50: a keyframe roughly every second at these
+#: frame rates. Home Assistant's live view is HLS, which cannot begin at
+#: anything else and buffers a segment or two first, so the keyframe interval
+#: is most of the wait before a picture appears. Halving it halves that wait,
+#: and more keyframes at a fixed bitrate costs a little detail -- worth it for
+#: a view someone is waiting on.
 #:
-#: The x264-only knobs go with it: `-preset` and `-tune` are not openh264
-#: options. A bitrate takes their place, because openh264 targets one rather
-#: than a quality level.
-#: `-g 25` rather than go2rtc's default of 50: a keyframe roughly every second
-#: at these frame rates. Home Assistant's live view is HLS, which cannot begin
-#: at anything else and buffers a segment or two first, so the keyframe
-#: interval is most of the wait before a picture appears. Halving it halves
-#: that wait, and more keyframes at a fixed bitrate costs a little detail --
-#: worth it for a view someone is waiting on.
-_H264_ENCODER = "-c:v libopenh264 -g 25 -profile:v high -b:v 2M -pix_fmt:v yuv420p"
+#: x264 and x265 are the standard encoders for their formats and are present
+#: in the GPL build this image ships. The image previously carried the LGPL
+#: build, where neither exists.
+_H264_ENCODER = (
+    "-c:v libx264 -g 25 -preset:v superfast -tune:v zerolatency "
+    "-profile:v high -pix_fmt:v yuv420p"
+)
+_H265_ENCODER = (
+    "-c:v libx265 -g 25 -preset:v superfast -tune:v zerolatency "
+    "-profile:v main -pix_fmt:v yuv420p"
+)
 
 
 def stream_name(did: str) -> str:
@@ -132,7 +136,7 @@ def build_config(options: Options, dids: list[str]) -> dict:
         # contradict the loopback-only guarantee of `local` mode.
         "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
         "streams": streams,
-        "ffmpeg": {"h264": _H264_ENCODER},
+        "ffmpeg": {"h264": _H264_ENCODER, "h265": _H265_ENCODER},
     }
 
     if options.requires_credentials:

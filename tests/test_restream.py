@@ -104,15 +104,26 @@ class TestStreamSources:
         assert config["streams"][h264_stream_name("42")].endswith("#video=h264")
         assert h264_stream_name("42") != stream_name("42")
 
-    def test_h264_is_encoded_with_an_encoder_this_image_has(self) -> None:
-        """go2rtc defaults to libx264, which is GPL and not in this build.
+    def test_h264_is_encoded_with_the_standard_encoder(self) -> None:
+        """libx264 rather than libopenh264.
 
-        Left to the default, every H.264 request would fail at the point a
-        user opens a camera -- with the reason buried in go2rtc's output.
+        The image ships the GPL ffmpeg build, where libx264 is present and is
+        the better encoder at a given bitrate.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "libopenh264" in config["ffmpeg"]["h264"]
-        assert "libx264" not in config["ffmpeg"]["h264"]
+        assert "libx264" in config["ffmpeg"]["h264"]
+        assert "libopenh264" not in config["ffmpeg"]["h264"]
+
+    def test_h265_is_encoded_with_the_standard_encoder(self) -> None:
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "libx265" in config["ffmpeg"]["h265"]
+        assert "kvazaar" not in config["ffmpeg"]["h265"]
+
+    def test_both_encoders_shorten_the_keyframe_interval(self) -> None:
+        """go2rtc defaults to -g 50; HLS cannot start anywhere but a keyframe."""
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "-g 25" in config["ffmpeg"]["h264"]
+        assert "-g 25" in config["ffmpeg"]["h265"]
 
     def test_the_compatibility_stream_reuses_the_original(self) -> None:
         # Naming the stream rather than repeating the URL keeps both on one
