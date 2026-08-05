@@ -20,7 +20,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     SelectSelector,
@@ -291,7 +290,9 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._chosen_cameras = list(user_input[CONF_CAMERAS])
+            self._chosen_cameras = _camera_labels_to_dids(
+                user_input[CONF_CAMERAS], self._cameras
+            )
             self._auto_add = bool(user_input[CONF_AUTO_ADD])
             return await self.async_step_streams()
         return self.async_show_form(
@@ -412,7 +413,9 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         """Step one of two: tick the cameras to keep in Home Assistant."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._chosen_cameras = list(user_input[CONF_CAMERAS])
+            self._chosen_cameras = _camera_labels_to_dids(
+                user_input[CONF_CAMERAS], self._cameras
+            )
             self._auto_add = bool(user_input[CONF_AUTO_ADD])
             return await self.async_step_streams()
 
@@ -506,12 +509,25 @@ def _camera_checklist_schema(
     chosen: list[str],
     auto_add: bool,
 ) -> vol.Schema:
-    """A checklist of cameras, labelled the way the Mi Home app labels them."""
+    """A dropdown of cameras, labelled the way the Mi Home app labels them.
+
+    Keyed by name plus device id, exactly like the stream step's fields, so a
+    person can tell which camera is which; the id in the label keeps the
+    values unique even when two cameras share a name.
+    """
+    labels = {did: f"{name} ({did})" for did, name in cameras.items()}
     return vol.Schema(
         {
             vol.Required(
-                CONF_CAMERAS, default=[did for did in chosen if did in cameras]
-            ): cv.multi_select(cameras),
+                CONF_CAMERAS,
+                default=[labels[did] for did in chosen if did in labels],
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=list(labels.values()),
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
         }
     )
@@ -572,6 +588,12 @@ def _stream_labels_to_dids(
         for label, value in user_input.items()
         if label in label_to_did
     }
+
+
+def _camera_labels_to_dids(labels: list[str], cameras: dict[str, str]) -> list[str]:
+    """Map the name+(id) camera labels back to device ids."""
+    label_to_did = {f"{name} ({did})": did for did, name in cameras.items()}
+    return [label_to_did[label] for label in labels if label in label_to_did]
 
 
 def _with_defaulted_streams(

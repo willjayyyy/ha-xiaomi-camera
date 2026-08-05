@@ -85,7 +85,10 @@ async def test_ticking_a_new_camera_defaults_it_to_the_primary_stream(hass) -> N
         # default is the primary stream.
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={"cameras": ["42", "43"], "auto_add": False},
+            user_input={
+                "cameras": ["Camera 42 (42)", "Camera 43 (43)"],
+                "auto_add": False,
+            },
         )
         assert result["step_id"] == "streams"
         assert "Camera 43 (43)" in result["data_schema"].schema
@@ -126,7 +129,7 @@ async def test_setup_completes_when_a_camera_declares_no_streams(hass) -> None:
 
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            user_input={"cameras": ["42"], "auto_add": True},
+            user_input={"cameras": ["Camera 42 (42)"], "auto_add": True},
         )
         assert result["step_id"] == "streams"
 
@@ -169,7 +172,7 @@ async def test_options_flow_completes_when_a_camera_declares_no_streams(
 
         result = await hass.config_entries.options.async_configure(
             result["flow_id"],
-            user_input={"cameras": ["42"], "auto_add": False},
+            user_input={"cameras": ["Camera 42 (42)"], "auto_add": False},
         )
         assert result["step_id"] == "streams"
 

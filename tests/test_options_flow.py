@@ -96,7 +96,7 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["42"])
+    result = await _pick_cameras(hass, entry, ["Living room (42)"])
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "streams"
@@ -128,7 +128,7 @@ async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["42"])
+    result = await _pick_cameras(hass, entry, ["Living room (42)"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={"Living room (42)": []},
@@ -148,7 +148,7 @@ async def test_choosing_streams_stores_them_per_camera(hass) -> None:
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["42"])
+    result = await _pick_cameras(hass, entry, ["Living room (42)"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={"Living room (42)": ["h265", "h264_360"]},
@@ -174,7 +174,7 @@ async def test_the_primary_stream_is_not_rewritten_by_editing_options(hass) -> N
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["42"])
+    result = await _pick_cameras(hass, entry, ["Living room (42)"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         user_input={"Living room (42)": ["h264", "h264_360"]},
