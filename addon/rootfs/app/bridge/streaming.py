@@ -1,4 +1,4 @@
-"""Camera sessions and fan-out of the raw video stream.
+"""Camera sessions and fan-out of the camera's media units, video and audio.
 
 One peer-to-peer session per camera is shared by every consumer -- the RTSP
 restreamer, snapshot requests, anything else that subscribes. Sessions start
@@ -55,8 +55,13 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 #: Bounded so a stalled consumer drops frames instead of growing without limit.
-#: Sized to about a second of video at 25 fps.
-_CONSUMER_QUEUE_SIZE = 30
+#: A unit is one video frame or one audio packet -- the queue carries both since
+#: this branch added audio. Video runs about 20 units/s; Opus adds one packet
+#: every 20ms, about 50 units/s more, when a camera sends audio at all. Sized
+#: for the worst case (audio flowing) to keep the original one second of
+#: headroom: 20 + 50 = 70. A video-only session gets more headroom than that,
+#: not less.
+_CONSUMER_QUEUE_SIZE = 70
 
 #: Grace period before tearing down a session whose last user left, so a client
 #: reconnecting (a browser reloading a stream) reuses the live session rather
