@@ -8,14 +8,18 @@ than on the logic being wrong.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+from bridge.api import BridgeApi
 from bridge.framing import Consumer as _Consumer
 from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.framing import ParameterSets as _ParameterSets
-from bridge.mux import AUDIO_CODEC_OPUS, StreamMuxer
+from bridge.mux import AUDIO_CODEC_OPUS
 from bridge.nal import Codec
 from bridge.streaming import CameraSession, audio_codec_for
 from miot.types import MIoTCameraCodec, MIoTCameraVideoQuality
@@ -244,12 +248,88 @@ class TestAudioStatistics:
         stats.dropped_timestamps += 2
         assert stats.as_dict()["dropped_timestamps"] == 2
 
-    def test_the_counter_has_a_writer(self) -> None:
+    async def test_the_counter_has_a_writer(self) -> None:
         """A statistic nothing assigns is an indicator wired to nothing --
-        which is the defect this change exists to remove, not to repeat."""
-        muxer = StreamMuxer(Codec.H265, None)
-        muxer.write(MediaUnit(MediaKind.VIDEO, 0, b"\x00\x00\x00\x01\x26\x01"))
-        muxer.write(MediaUnit(MediaKind.VIDEO, 0xFFFFFFFFFFFFFFFF, b"\x00"))
-        stats = SessionStats()
-        stats.dropped_timestamps += muxer.dropped
-        assert stats.as_dict()["dropped_timestamps"] == 1
+        which is the defect this change exists to remove, not to repeat.
+
+        This drives the real ``BridgeApi._stream`` handler over a real
+        ``aiohttp`` request/response, through ``TestClient``/``TestServer`` --
+        the same seam ``tests/test_webauth.py`` uses -- rather than doing the
+        muxer-to-stats arithmetic here. A version of this test that performed
+        `stats.dropped_timestamps += muxer.dropped` itself would still pass
+        with the production write in ``api.py`` deleted: it would be
+        checking its own arithmetic, not the endpoint's.
+        """
+        closed = asyncio.Event()
+        units = [
+            MediaUnit(MediaKind.VIDEO, 0, b"\x00\x00\x00\x01\x26\x01"),
+            # The documented undecodable sentinel: the muxer cannot use it
+            # and must count it as dropped rather than send it.
+            MediaUnit(MediaKind.VIDEO, 0xFFFFFFFFFFFFFFFF, b"\x00"),
+        ]
+
+        class _DrainingQueue:
+            """Yields the fixed units, then ends the pump loop.
+
+            `_pump` races `consumer.queue.get()` against `consumer.closed.wait()`
+            on `asyncio.wait(..., FIRST_COMPLETED)`, and neither coroutine here
+            ever suspends -- both complete on their very first step. Setting
+            `closed` once the queue empties would therefore make both tasks
+            finish within the same poll, and `_pump` checks the `closed` branch
+            first: the still-unread final unit would be discarded along with
+            it, and this test would never reach the muxer at all.
+
+            Raising once exhausted avoids that tie: `_pump` calls
+            `unit_task.result()`, which re-raises, unwinding through the same
+            `finally` production disconnects take -- exercised elsewhere by
+            `except (ConnectionResetError, asyncio.CancelledError): pass` in
+            `_stream` -- so the loop ends deterministically, driven by how many
+            units were provided rather than by timing.
+            """
+
+            def __init__(self, items: list[MediaUnit]) -> None:
+                self._items = list(items)
+
+            async def get(self) -> MediaUnit:
+                if not self._items:
+                    raise asyncio.CancelledError()
+                return self._items.pop(0)
+
+        class _FakeSession:
+            def __init__(self) -> None:
+                self.codec = Codec.H265
+                self.audio_codec = None
+                self.stats = SessionStats()
+
+            @contextlib.asynccontextmanager
+            async def subscribe(self):
+                # Never set: closing the loop is entirely the queue's job
+                # here, so this only needs to be a legitimate, always-pending
+                # partner in `_pump`'s race.
+                consumer = SimpleNamespace(queue=_DrainingQueue(units), closed=closed)
+                yield consumer
+
+        session = _FakeSession()
+        registry = SimpleNamespace(get=lambda did: object())
+        sessions = SimpleNamespace(session_for=lambda info: session)
+
+        api = BridgeApi(
+            account=None,
+            registry_provider=lambda: registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=None,
+        )
+        app = web.Application()
+        app.router.add_get("/api/stream/{did}", api._stream)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            resp = await client.get("/api/stream/42")
+            await resp.read()
+        finally:
+            await client.close()
+
+        assert session.stats.dropped_timestamps == 1

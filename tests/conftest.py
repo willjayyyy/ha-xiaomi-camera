@@ -70,6 +70,19 @@ class MIoTCameraCodec(int, enum.Enum):
     AUDIO_OPUS = 1032
 
 
+class MIoTClient:
+    """Stands in for ``miot.client.MIoTClient``.
+
+    ``bridge.account`` imports the real class unconditionally (not under
+    ``TYPE_CHECKING``), and ``bridge.api`` imports ``bridge.account``, so
+    nothing under ``bridge.api`` -- including ``BridgeApi`` itself -- can be
+    imported without this name existing, even in a test that never
+    constructs an ``AccountManager``. Unlike the enums above this carries no
+    behaviour to drift, so there is nothing here to verify against the real
+    SDK -- it exists only so the import machinery has a name to bind.
+    """
+
+
 def _verify_against_real_sdk() -> None:
     """Fail loudly if the stub and the installed SDK disagree.
 
@@ -103,10 +116,14 @@ _types = types.ModuleType("miot.types")
 _types.MIoTCameraStatus = MIoTCameraStatus
 _types.MIoTCameraVideoQuality = MIoTCameraVideoQuality
 _types.MIoTCameraCodec = MIoTCameraCodec
+_client = types.ModuleType("miot.client")
+_client.MIoTClient = MIoTClient
 _miot = types.ModuleType("miot")
 _miot.types = _types
+_miot.client = _client
 sys.modules["miot"] = _miot
 sys.modules["miot.types"] = _types
+sys.modules["miot.client"] = _client
 
 
 # `pytest-homeassistant-custom-component` requires Python >= 3.14, so it
