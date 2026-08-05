@@ -69,6 +69,7 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         XiaomiCameraEntity.__init__(self, coordinator, did)
         Camera.__init__(self)
         self._stream_key = stream_key
+        self._primary_key = primary_key
         self._attr_unique_id = unique_id(did, stream_key, primary_key)
         # The primary entity keeps the device's own name, unchanged for anyone
         # upgrading. The others carry the device name in their own name, so a
@@ -77,16 +78,41 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         # Assistant's device-name prefixing (`has_entity_name`) leaves those
         # consumers showing only "H.264 360p".
         if stream_key != primary_key:
+            # `has_entity_name` is off for these so Home Assistant does not
+            # prepend the device name a second time; the name carries it
+            # explicitly. With `has_entity_name` off Home Assistant ignores
+            # `translation_key` for the name, so the label is read by hand
+            # in `_stream_label`.
             self._attr_has_entity_name = False
             self._attr_translation_key = stream_key
         else:
             self._attr_name = None
 
     @property
-    def translation_placeholders(self) -> dict[str, str]:
-        """The device name, substituted into variant entities' names."""
+    def name(self) -> str | None:
+        """Variant entities name the camera themselves; the primary keeps
+        just the device name, unchanged for anyone upgrading."""
+        if self._stream_key == self._primary_key:
+            return None
         camera = self.camera
-        return {"camera": camera.name if camera else self._did}
+        device = camera.name if camera else self._did
+        return f"{device} {self._stream_label()}"
+
+    def _stream_label(self) -> str:
+        """The translated stream name.
+
+        Read from the same platform translations table `has_entity_name`
+        entities use, so there is exactly one source of labels; the `{camera}`
+        placeholder is dropped because the device name is already prepended.
+        """
+        if self.platform_data is None:
+            return self._stream_key
+        key = (
+            f"component.{self.platform_data.platform_name}."
+            f"entity.{self.platform_data.domain}.{self._stream_key}.name"
+        )
+        template = self.platform_data.platform_translations.get(key, self._stream_key)
+        return template.replace("{camera}", "").strip()
 
     @property
     def is_streaming(self) -> bool:

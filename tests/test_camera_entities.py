@@ -84,6 +84,33 @@ async def test_one_entity_is_created_per_selected_stream(hass) -> None:
     assert registry.async_get_entity_id("camera", DOMAIN, "42_h264_360") is not None
 
 
+async def test_variant_entities_name_the_camera(hass) -> None:
+    """Variant entities carry the device name in their own name.
+
+    The primary can rely on Home Assistant's device-name prefixing. Variants
+    cannot: HomeKit and voice assistants show only the entity name, so it has
+    to say which camera it is by itself.
+    """
+    await _setup(
+        hass,
+        {
+            "cameras": ["42"],
+            "primary_stream": "h264",
+            "camera_streams": {"42": ["h264", "h264_360"]},
+        },
+    )
+
+    registry = er.async_get(hass)
+    primary = registry.async_get_entity_id("camera", DOMAIN, "42")
+    variant = registry.async_get_entity_id("camera", DOMAIN, "42_h264_360")
+    assert primary is not None and variant is not None
+
+    assert hass.states.get(primary).attributes["friendly_name"] == "Living room"
+    assert (
+        hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
+    )
+
+
 async def test_the_primary_entity_keeps_the_bare_device_id(hass) -> None:
     """The identity every HomeKit pairing and automation is bound to.
 

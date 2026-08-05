@@ -20,6 +20,7 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     SelectSelector,
@@ -290,9 +291,7 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         """
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._chosen_cameras = _camera_labels_to_dids(
-                user_input[CONF_CAMERAS], self._cameras
-            )
+            self._chosen_cameras = list(user_input[CONF_CAMERAS])
             self._auto_add = bool(user_input[CONF_AUTO_ADD])
             return await self.async_step_streams()
         return self.async_show_form(
@@ -314,7 +313,12 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             chosen_streams = _with_defaulted_streams(
                 self._chosen_cameras,
-                _stream_labels_to_dids(user_input, self._cameras, self._chosen_cameras),
+                _stream_fields_to_keys(
+                    user_input,
+                    self._cameras,
+                    self._chosen_cameras,
+                    self._available_streams,
+                ),
                 self._available_streams,
                 ROOT_KEY,
             )
@@ -413,9 +417,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         """Step one of two: tick the cameras to keep in Home Assistant."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._chosen_cameras = _camera_labels_to_dids(
-                user_input[CONF_CAMERAS], self._cameras
-            )
+            self._chosen_cameras = list(user_input[CONF_CAMERAS])
             self._auto_add = bool(user_input[CONF_AUTO_ADD])
             return await self.async_step_streams()
 
@@ -464,7 +466,12 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         if user_input is not None:
             chosen_streams = _with_defaulted_streams(
                 self._chosen_cameras,
-                _stream_labels_to_dids(user_input, self._cameras, self._chosen_cameras),
+                _stream_fields_to_keys(
+                    user_input,
+                    self._cameras,
+                    self._chosen_cameras,
+                    self._available_streams,
+                ),
                 self._available_streams,
                 primary,
             )
@@ -498,6 +505,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
                 self._chosen_cameras,
                 self._available_streams,
                 primary,
+                stream_options=self.config_entry.options.get(CONF_CAMERA_STREAMS, {}),
             ),
             errors=errors,
             last_step=True,
@@ -509,28 +517,18 @@ def _camera_checklist_schema(
     chosen: list[str],
     auto_add: bool,
 ) -> vol.Schema:
-    """A dropdown of cameras, labelled the way the Mi Home app labels them.
-
-    Keyed by name plus device id, exactly like the stream step's fields, so a
-    person can tell which camera is which; the id in the label keeps the
-    values unique even when two cameras share a name.
-    """
-    labels = {did: f"{name} ({did})" for did, name in cameras.items()}
+    """A checklist of cameras, labelled the way the Mi Home app labels them."""
     return vol.Schema(
         {
             vol.Required(
-                CONF_CAMERAS,
-                default=[labels[did] for did in chosen if did in labels],
-            ): SelectSelector(
-                SelectSelectorConfig(
-                    options=list(labels.values()),
-                    multiple=True,
-                    mode=SelectSelectorMode.DROPDOWN,
-                )
-            ),
+                CONF_CAMERAS, default=[did for did in chosen if did in cameras]
+            ): cv.multi_select(cameras),
             vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
         }
     )
+
+
+_ORIGINAL = "original"
 
 
 def _streams_schema(
@@ -538,62 +536,85 @@ def _streams_schema(
     chosen_cameras: list[str],
     available: dict[str, list[str]],
     primary: str,
+    stream_options: dict[str, list[str]] | None = None,
 ) -> vol.Schema:
-    """One stream selector per selected camera.
+    """One codec dropdown and a resolution checklist per selected camera.
 
-    A separate field per camera rather than a shared list, so one camera's
-    choice can never be confused with another's. The field is keyed by the
-    camera's name plus its device id -- Home Assistant labels a dynamic field
-    by its schema key, so the id alone would show as an opaque number. The id
-    in the label is what keeps the key unique even when two cameras share a
-    name. Defaults to `primary` -- the same stream the camera's bare `<did>`
-    entity is already bound to (see `streams.py`), not a value that might
-    disagree with it.
+    A camera's streams are a codec times a resolution, so the form asks for
+    the two separately -- a multi-select codec dropdown and a resolution
+    checklist -- rather than one long list of stream keys. Each field's key
+    carries the camera's name plus id, because Home Assistant labels a dynamic
+    field by its schema key; the id keeps the key unique even when two cameras
+    share a name. Defaults to the primary stream (see `streams.py`), or to the
+    entry's current choice in the options flow.
 
     A camera reporting no streams at all -- an add-on predating
-    `/api/cameras.streams` -- gets no selector here. Offering one with no
-    options either strands the user on `no_streams` forever or accepts a
-    default `SelectSelector` rejects outright, since nothing it could submit
-    is among the (empty) options.
+    `/api/cameras.streams` -- gets no selector here.
     """
-    streams = {
-        vol.Required(f"{cameras[did]} ({did})", default=[primary]): SelectSelector(
-            SelectSelectorConfig(
-                options=available.get(did, []),
-                multiple=True,
-                translation_key="stream_key",
-                mode=SelectSelectorMode.LIST,
+    fields: dict[Any, Any] = {}
+    for did in chosen_cameras:
+        if did not in cameras or not available.get(did):
+            continue
+        label = f"{cameras[did]} ({did})"
+        codecs = sorted({key.split("_", 1)[0] for key in available[did]})
+        resolutions = {
+            (key.split("_", 1)[1] if "_" in key else _ORIGINAL): (
+                f"{key.split('_', 1)[1]}p" if "_" in key else "Original"
+            )
+            for key in available[did]
+        }
+        current = stream_options.get(did, [primary]) if stream_options else [primary]
+        default_codecs = {key.split("_", 1)[0] for key in current}
+        default_res = {
+            key.split("_", 1)[1] if "_" in key else _ORIGINAL for key in current
+        }
+        fields[vol.Required(f"{label} · Codec", default=default_codecs)] = (
+            SelectSelector(
+                SelectSelectorConfig(
+                    options=codecs,
+                    multiple=True,
+                    translation_key="stream_key",
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
             )
         )
-        for did in chosen_cameras
-        if did in cameras and available.get(did)
-    }
-    return vol.Schema(streams)
+        fields[vol.Required(f"{label} · Resolution", default=default_res)] = (
+            cv.multi_select(resolutions)
+        )
+    return vol.Schema(fields)
 
 
-def _stream_labels_to_dids(
+def _stream_fields_to_keys(
     user_input: dict[str, Any],
     cameras: dict[str, str],
     chosen_cameras: list[str],
+    available: dict[str, list[str]],
 ) -> dict[str, list[str]]:
-    """Turn the name+(id) form labels back into device ids.
+    """Turn the per-camera codec/resolution fields back into stream keys.
 
-    The stream step's schema is keyed by `"name (did)"` so the form reads
-    like something a person recognises. Submission arrives keyed the same way,
-    so the labels have to be resolved to the ids the options dict stores.
+    The stream step asks for a codec list and a resolution list per camera;
+    the streams the add-on actually publishes are their cartesian product,
+    filtered to what it declared. Submission arrives keyed by the same
+    `"name (did)"` labels the form shows.
     """
-    label_to_did = {f"{cameras[did]} ({did})": did for did in chosen_cameras}
-    return {
-        label_to_did[label]: value
-        for label, value in user_input.items()
-        if label in label_to_did
-    }
-
-
-def _camera_labels_to_dids(labels: list[str], cameras: dict[str, str]) -> list[str]:
-    """Map the name+(id) camera labels back to device ids."""
-    label_to_did = {f"{name} ({did})": did for did, name in cameras.items()}
-    return [label_to_did[label] for label in labels if label in label_to_did]
+    streams: dict[str, list[str]] = {}
+    for did in chosen_cameras:
+        if not available.get(did):
+            # An add-on predating `/api/cameras.streams` declares nothing for
+            # this camera, so the form had no field for it and there is nothing
+            # to recombine.
+            continue
+        label = f"{cameras[did]} ({did})"
+        codecs = user_input.get(f"{label} · Codec", [])
+        resolutions = user_input.get(f"{label} · Resolution", [])
+        keys = []
+        for codec in codecs:
+            for res in resolutions:
+                key = f"{codec}_{res}" if res != _ORIGINAL else codec
+                if key in available.get(did, []):
+                    keys.append(key)
+        streams[did] = keys
+    return streams
 
 
 def _with_defaulted_streams(

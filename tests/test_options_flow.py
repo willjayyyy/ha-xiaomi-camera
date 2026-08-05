@@ -96,23 +96,27 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["Living room (42)"])
+    result = await _pick_cameras(hass, entry, ["42"])
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "streams"
-    # Each ticked camera is its own field, so the choices live directly on
-    # the step's schema keyed by device id -- not inside a shared section.
-    stream_selector = result["data_schema"].schema["Living room (42)"]
-    stream_choices = stream_selector.config["options"]
-    assert set(stream_choices) == set(_KEYS)
-    assert "h264_720" not in stream_choices
+    # The codec dropdown offers the codecs this camera publishes -- one per
+    # codec, not one per stream key.
+    codec_selector = result["data_schema"].schema["Living room (42) · Codec"]
+    codec_choices = codec_selector.config["options"]
+    assert set(codec_choices) == {"h265", "h264"}
+    assert "h265_360" not in codec_choices
+
+    # The resolution checklist is present, keyed by raw resolution so the
+    # codec/resolution product can be recombined into stream keys on submit.
+    assert result["data_schema"].schema["Living room (42) · Resolution"] is not None
 
     # A plain `cv.multi_select` renders its labels verbatim -- raw identifiers
     # like "h264_360" -- because it has no notion of translation at all. Only
     # a selector with a `translation_key` resolves labels from
     # `selector.stream_key.options.*`, so asserting the key here is what
     # would catch a regression back to `cv.multi_select` before it ships.
-    assert stream_selector.config["translation_key"] == "stream_key"
+    assert codec_selector.config["translation_key"] == "stream_key"
 
 
 async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:
@@ -128,10 +132,13 @@ async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["Living room (42)"])
+    result = await _pick_cameras(hass, entry, ["42"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={"Living room (42)": []},
+        user_input={
+            "Living room (42) · Codec": [],
+            "Living room (42) · Resolution": [],
+        },
     )
 
     assert result["type"] == FlowResultType.FORM
@@ -148,15 +155,18 @@ async def test_choosing_streams_stores_them_per_camera(hass) -> None:
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["Living room (42)"])
+    result = await _pick_cameras(hass, entry, ["42"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={"Living room (42)": ["h265", "h264_360"]},
+        user_input={
+            "Living room (42) · Codec": ["h264"],
+            "Living room (42) · Resolution": ["original", "360"],
+        },
     )
     await hass.async_block_till_done()
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
-    assert entry.options["camera_streams"] == {"42": ["h265", "h264_360"]}
+    assert entry.options["camera_streams"] == {"42": ["h264", "h264_360"]}
 
 
 async def test_the_primary_stream_is_not_rewritten_by_editing_options(hass) -> None:
@@ -174,10 +184,13 @@ async def test_the_primary_stream_is_not_rewritten_by_editing_options(hass) -> N
         },
     )
 
-    result = await _pick_cameras(hass, entry, ["Living room (42)"])
+    result = await _pick_cameras(hass, entry, ["42"])
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={"Living room (42)": ["h264", "h264_360"]},
+        user_input={
+            "Living room (42) · Codec": ["h264"],
+            "Living room (42) · Resolution": ["original", "360"],
+        },
     )
     await hass.async_block_till_done()
 

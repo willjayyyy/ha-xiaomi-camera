@@ -470,16 +470,6 @@ class CameraSession:
                 elif is_keyframe(unit_type, self._codec):
                     self.stats.keyframes += 1
 
-        if self.stats.frames <= 5:
-            _LOGGER.warning(
-                "TSDUMP %s frame%d len=%d ts=%d head=%s",
-                self._info.name,
-                self.stats.frames,
-                len(payload),
-                ts,
-                payload[:24].hex(),
-            )
-
         self._fan_out(MediaUnit(MediaKind.VIDEO, ts, payload))
 
     async def _on_audio(
