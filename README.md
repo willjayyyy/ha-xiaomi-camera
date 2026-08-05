@@ -63,13 +63,14 @@ in the integration's options, under **Video streams**.
 
 | Stream | Good for |
 |---|---|
-| H.265 · Original quality | Recording, NVR software. The camera's own encoding, no re-encoding. |
-| H.264 · Original quality | Browsers and players that cannot decode H.265. |
+| Original | Recording, NVR software. The camera's own encoding at its own resolution, never re-encoded — whatever codec the camera sends. |
+| H.264 · Full size | Browsers and players that cannot decode H.265. Re-encoded to H.264. |
 | 360p / 180p | Apple Home, remote viewing, dashboards showing several cameras at once. |
 | 720p | A middle ground when the camera's own resolution is higher. |
 
-A camera starts with its original encoding. If the picture will not play in
-your browser, add an H.264 stream — most browsers cannot decode H.265.
+A camera starts with its original stream. If the picture will not play in
+your browser, add an H.264 stream — those are re-encoded to a codec every
+browser can decode.
 
 **Apple Home:** add a 360p stream and point the HomeKit bridge at that entity.
 Home Assistant re-encodes at a bitrate HomeKit chooses, which is low, so a
@@ -168,9 +169,9 @@ entity so an automation can turn a camera on before taking a snapshot.
 ## Audio
 
 Turn on **Include audio** and the camera's microphone rides along on every
-published stream. The H.265 streams carry it in the camera's own encoding —
-nothing is re-encoded to carry those. The H.264 streams, produced for players
-that cannot decode H.265, additionally offer an AAC copy of the same audio.
+published stream. The original stream carries it in the camera's own encoding,
+passed through untouched. The H.264 streams — produced for players that cannot
+decode H.265 — additionally offer an AAC copy of the same audio.
 
 Whether you hear it depends on what plays the stream:
 
@@ -214,8 +215,10 @@ does not appear is almost certainly on that list.
 
 ## Known limits
 
-- Cameras send H.265 video. Every other stream variant is produced by
-  converting it, and only while something is watching.
+- The original stream is the camera's own encoding, never re-encoded; its
+  codec is whatever the camera sends, known only once a session starts. Every
+  other variant is re-encoded to its named codec, and only while something is
+  watching.
 - Only Xiaomi's China account region has been tested.
 - No two-way audio, no pan/tilt control, no SD-card playback.
 
