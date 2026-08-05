@@ -146,16 +146,16 @@ class TestColdStart:
 
     An H.265 decoder cannot start without the parameter sets, and a camera
     sends them only ahead of a keyframe -- about every three seconds here. The
-    session waits for a first delivery before handing out any consumer, and
-    prepends the held sets to the next unit a joining consumer receives, but
-    on a cold start it holds none yet, so whoever arrived first got an
-    undecodable stream and gave up. go2rtc's transcode allows five seconds,
-    the session took nearly two to produce anything, and what remained was a
-    coin toss against the keyframe interval.
+    session now waits for a first delivery before handing out any consumer,
+    and prepends the held sets to the next unit a joining consumer receives.
 
-    The camera that worked was not healthier: its dashboard fetched a snapshot
-    first, which warmed the session, so by the time the stream connected the
-    parameter sets were already held.
+    Before this wait existed, a cold start held no parameter sets yet, so
+    whoever arrived first got an undecodable stream and gave up. go2rtc's
+    transcode allowed five seconds, the session took nearly two to produce
+    anything, and what remained was a coin toss against the keyframe interval.
+    The camera that worked was not healthier: its dashboard had fetched a
+    snapshot first, which warmed the session, so by the time the stream
+    connected the parameter sets were already held by luck rather than design.
     """
 
     async def test_subscribe_waits_for_parameter_sets(self) -> None:
