@@ -168,15 +168,16 @@ entity so an automation can turn a camera on before taking a snapshot.
 ## Audio
 
 Turn on **Include audio** and the camera's microphone rides along on every
-published stream, in the camera's own encoding. Nothing is re-encoded to carry
-it.
+published stream. The H.265 streams carry it in the camera's own encoding —
+nothing is re-encoded to carry those. The H.264 streams, produced for players
+that cannot decode H.265, additionally offer an AAC copy of the same audio.
 
 Whether you hear it depends on what plays the stream:
 
 | Playing it | Audio |
 |---|---|
 | Home Assistant camera card, over WebRTC | yes |
-| Home Assistant camera card, falling back to HLS | no — use one of the H.264 streams, which also carry AAC |
+| Home Assistant camera card, falling back to HLS | no — use one of the H.264 streams, which carry an AAC copy |
 | HomeKit | yes, once `support_audio: true` is set for the camera in your HomeKit configuration |
 | Frigate or another NVR reading the stream directly | yes |
 
