@@ -60,7 +60,21 @@ class TestUniqueId:
 class TestSelection:
     def test_an_unconfigured_camera_gets_the_root_stream(self) -> None:
         """The camera's own encoding, nothing chosen on the user's behalf."""
-        assert selected_streams({}, "42", available=["h265", "h264"]) == [ROOT_KEY]
+        assert selected_streams({}, "42", available=["h265", "h264"]) == ["h265"]
+
+    def test_an_unconfigured_camera_follows_the_entrys_primary_not_root(
+        self,
+    ) -> None:
+        """The selection default and the identity default must agree.
+
+        A camera absent from `camera_streams` has no ticked selection, but its
+        pre-existing entity is still bound to whatever `primary_stream` says.
+        If the fallback here answered something else, `wanted_unique_ids`
+        would compute an identity that does not match the entity Home
+        Assistant already has -- and delete it.
+        """
+        options = {"primary_stream": "h264"}
+        assert selected_streams(options, "42", available=["h265", "h264"]) == ["h264"]
 
     def test_a_configured_camera_gets_what_was_ticked(self) -> None:
         options = {"camera_streams": {"42": ["h264", "h264_360"]}}

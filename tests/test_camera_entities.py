@@ -213,6 +213,31 @@ async def test_all_of_a_cameras_entities_share_one_device(hass) -> None:
     assert device.identifiers == {(DOMAIN, "42")}
 
 
+async def test_a_camera_absent_from_camera_streams_keeps_its_bare_id(hass) -> None:
+    """A migrated entry with a non-default primary and no stored selection.
+
+    Two real populations land here: entries created before the Xiaomi account
+    was linked, and cameras added later by `auto_add`, which is on by default
+    while `camera_streams` is only written when the checklist is saved. Either
+    way, the entity that already exists for this camera carries the bare
+    `<did>` unique_id, bound to `primary_stream`. If the stream selection
+    disagreed with that, `wanted_unique_ids` would compute a different
+    identity for the very entity it is supposed to keep -- deleting it.
+    """
+    await _setup(
+        hass,
+        {
+            "cameras": ["42"],
+            "primary_stream": "h264",
+            # No "camera_streams" key for "42" at all.
+        },
+    )
+
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
+    assert registry.async_get_entity_id("camera", DOMAIN, "42_h265") is None
+
+
 async def test_an_entry_with_no_stream_options_still_has_a_primary(hass) -> None:
     """A fresh entry that predates the per-camera options.
 

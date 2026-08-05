@@ -56,7 +56,15 @@ def selected_streams(options: dict, did: str, available: list[str]) -> list[str]
     """
     chosen = (options.get(CONF_CAMERA_STREAMS) or {}).get(did)
     if not chosen:
-        return [ROOT_KEY] if ROOT_KEY in available else available[:1]
+        # Falls back to the entry's primary stream, not a hardcoded key: the
+        # bare `<did>` entity's identity (see `unique_id`) is always bound to
+        # `primary_stream`, and this default must agree with it by
+        # construction. A camera absent here -- never configured, or added
+        # later by `auto_add` -- must still select the stream its existing
+        # entity is bound to, or `wanted_unique_ids` computes an identity
+        # that does not match and the entity is deleted.
+        primary = primary_stream(options)
+        return [primary] if primary in available else available[:1]
     wanted = set(chosen)
     return [key for key in available if key in wanted]
 
