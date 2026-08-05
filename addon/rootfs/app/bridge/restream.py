@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
@@ -76,24 +77,88 @@ _H265_ENCODER = (
 )
 
 
-def stream_name(did: str) -> str:
-    """Stable go2rtc stream name for a camera.
+@dataclass(frozen=True)
+class StreamSpec:
+    """One published variant of a camera's video.
 
-    Device identifiers are numeric, and go2rtc stream names appear in URLs, so
-    they are prefixed to keep them readable and collision-free.
+    Height is the only dimension given: width follows the source's aspect
+    ratio, so a 16:9 camera yields 640x360 and a 4:3 one 480x360 -- both of
+    which are resolutions consumers ask for. Fixing the width instead would
+    letterbox one of them.
     """
-    return f"camera_{did}"
+
+    key: str
+    codec: str
+    height: int | None
+    bitrate: str
+
+    @property
+    def template(self) -> str:
+        """The go2rtc encoder template this variant asks for.
+
+        go2rtc looks the name up in its `ffmpeg` map, so a variant needs its
+        own entry there -- `h264/360` and friends, generated below. Passing
+        scale and bitrate through `#raw=` instead does not work: go2rtc
+        appends the `#video=` template's arguments afterwards, and ffmpeg
+        takes the last `-b:v` it is given.
+        """
+        if self.height is None:
+            return self.codec
+        return f"{self.codec}/{self.height}"
 
 
-def h264_stream_name(did: str) -> str:
-    """Name of the camera's compatibility stream.
+#: Heights above the source are not suppressed. This configuration is written
+#: when the camera list changes, and the source resolution is unknown until a
+#: peer-to-peer session runs -- so there is no moment at which a height could
+#: be filtered out. An upscale wastes nothing that is not already idle: no
+#: producer starts until a consumer connects.
+STREAM_SPECS: tuple[StreamSpec, ...] = (
+    StreamSpec("hevc", "h265", None, "2M"),
+    StreamSpec("hevc_720", "h265", 720, "2M"),
+    StreamSpec("hevc_360", "h265", 360, "512k"),
+    StreamSpec("hevc_180", "h265", 180, "256k"),
+    StreamSpec("h264", "h264", None, "2M"),
+    StreamSpec("h264_720", "h264", 720, "2M"),
+    StreamSpec("h264_360", "h264", 360, "512k"),
+    StreamSpec("h264_180", "h264", 180, "256k"),
+)
 
-    A separate stream rather than a second source on the same one. Offering
-    both codecs under one name leaves the choice to whatever connects, so an
-    NVR that accepts either could end up recording a re-encode of a stream it
-    could have copied. Two names mean each URL says exactly what it carries.
+#: The variant every other one is derived from: the camera's own encoding at
+#: its own resolution, repackaged without re-encoding.
+ROOT_KEY = "hevc"
+
+
+def stream_name(did: str, key: str = ROOT_KEY) -> str:
+    """Stable go2rtc stream name for one variant of a camera.
+
+    Device identifiers are numeric and these names appear in URLs, so they are
+    prefixed to stay readable and collision-free. The root keeps the bare name
+    it has always had, so URLs already in someone's NVR keep working.
     """
-    return f"{stream_name(did)}_h264"
+    if key == ROOT_KEY:
+        return f"camera_{did}"
+    # H.265 is the camera's own encoding, so its variants are named by height
+    # alone -- `camera_42_360`. Only the transcoded ones carry a codec in the
+    # name, which keeps the common URLs short.
+    suffix = key.removeprefix("hevc_")
+    return f"camera_{did}_{suffix}"
+
+
+def _encoder_templates() -> dict[str, str]:
+    """One go2rtc encoder template per published variant.
+
+    Merged into go2rtc's own table, so these names -- `h264`, `h264/360` and
+    so on -- become valid `#video=` values.
+    """
+    base = {"h264": _H264_ENCODER, "h265": _H265_ENCODER}
+    templates = dict(base)
+    for spec in STREAM_SPECS:
+        if spec.height is None:
+            continue
+        templates[spec.template] = (
+            f"{base[spec.codec]} -b:v {spec.bitrate} -vf scale=-2:{spec.height}"
+        )
+    return templates
 
 
 def build_config(options: Options, dids: list[str]) -> dict:
@@ -114,12 +179,16 @@ def build_config(options: Options, dids: list[str]) -> dict:
     bind = options.bind_address
     streams: dict[str, str] = {}
     for did in dids:
-        streams[stream_name(did)] = (
+        root = stream_name(did)
+        streams[root] = (
             f"ffmpeg:http://{LOOPBACK}:{API_PORT}/api/stream/{did}#video=copy"
         )
-        # Names the stream above rather than repeating the URL, so the two
-        # share one session on the camera instead of opening a second.
-        streams[h264_stream_name(did)] = f"ffmpeg:{stream_name(did)}#video=h264"
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            # Named after the root rather than repeating its URL, so all of
+            # them share one session on the camera instead of opening several.
+            streams[stream_name(did, spec.key)] = f"ffmpeg:{root}#video={spec.template}"
 
     config: dict = {
         # Quiet by default, but follows the add-on's own level when raised.
@@ -136,7 +205,7 @@ def build_config(options: Options, dids: list[str]) -> dict:
         # contradict the loopback-only guarantee of `local` mode.
         "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
         "streams": streams,
-        "ffmpeg": {"h264": _H264_ENCODER, "h265": _H265_ENCODER},
+        "ffmpeg": _encoder_templates(),
     }
 
     if options.requires_credentials:
@@ -175,7 +244,7 @@ class Restreamer:
 
     def rtsp_url_h264(self, did: str) -> str:
         """RTSP URL for the H.264 version of a camera's stream."""
-        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{h264_stream_name(did)}"
+        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did, 'h264')}"
 
     def internal_rtsp_url(self, did: str) -> str:
         """RTSP URL for this process's own use, credentials included.

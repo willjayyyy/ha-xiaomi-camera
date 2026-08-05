@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
 from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
-from bridge.restream import build_config, h264_stream_name, stream_name
+from bridge.restream import build_config, stream_name
 
 
 def make_options(mode: AccessMode, user: str = "", password: str = "") -> Options:
@@ -88,10 +88,10 @@ class TestStreamSources:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert config["streams"][stream_name("42")].endswith("#video=copy")
 
-    def test_two_streams_per_camera(self) -> None:
-        """The original, and one re-encoded for whatever cannot play it."""
+    def test_eight_streams_per_camera(self) -> None:
+        """Four heights across both codecs."""
         config = build_config(make_options(AccessMode.LOCAL), ["1", "2", "3"])
-        assert len(config["streams"]) == 6
+        assert len(config["streams"]) == 24
 
     def test_the_compatibility_stream_has_its_own_name(self) -> None:
         """Two names rather than two codecs under one.
@@ -101,8 +101,8 @@ class TestStreamSources:
         stream it could have copied. Each URL says what it carries.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][h264_stream_name("42")].endswith("#video=h264")
-        assert h264_stream_name("42") != stream_name("42")
+        assert config["streams"][stream_name("42", "h264")].endswith("#video=h264")
+        assert stream_name("42", "h264") != stream_name("42")
 
     def test_h264_is_encoded_with_the_standard_encoder(self) -> None:
         """libx264 rather than libopenh264.
@@ -129,9 +129,69 @@ class TestStreamSources:
         # Naming the stream rather than repeating the URL keeps both on one
         # session against the camera.
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][h264_stream_name("42")].startswith(
+        assert config["streams"][stream_name("42", "h264")].startswith(
             f"ffmpeg:{stream_name('42')}#"
         )
+
+
+class TestStreamCatalogue:
+    """Eight streams per camera: four heights across two codecs."""
+
+    def test_every_camera_gets_eight_streams(self) -> None:
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        mine = [name for name in config["streams"] if name.startswith("camera_42")]
+        assert len(mine) == 8, sorted(mine)
+
+    def test_derived_streams_source_the_root_not_the_http_endpoint(self) -> None:
+        """One peer-to-peer session per camera, however many streams are open.
+
+        Pointing a derived stream at the add-on's HTTP endpoint would open a
+        second session on the camera.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        root = stream_name("42")
+        for name, source in config["streams"].items():
+            if name.startswith("camera_42") and name != root:
+                assert source.startswith(f"ffmpeg:{root}"), (name, source)
+
+    def test_the_root_is_the_only_stream_reading_http(self) -> None:
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        readers = [n for n, s in config["streams"].items() if "http://" in s]
+        assert readers == [stream_name("42")]
+
+    def test_scaled_streams_name_a_variant_template(self) -> None:
+        """Scale and bitrate live in the ffmpeg template, not in the source.
+
+        go2rtc appends the `#video=` template's arguments *after* any `#raw=`
+        ones, so a bitrate passed through `#raw=` is overridden by the
+        template's own. Naming a variant template is the only way to vary it.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert config["streams"][stream_name("42", "h264_360")].endswith(
+            "#video=h264/360"
+        )
+
+    def test_each_variant_template_sets_its_own_scale_and_bitrate(self) -> None:
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        template = config["ffmpeg"]["h264/360"]
+        assert "scale=-2:360" in template
+        assert "-b:v 512k" in template
+
+    def test_scaling_keeps_the_width_even(self) -> None:
+        """`-2` derives an even width; `yuv420p` requires both dimensions even.
+
+        go2rtc's own `#height=` parameter emits `-1`, which can produce an odd
+        width, so it is deliberately not used.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        for name, template in config["ffmpeg"].items():
+            if "/" in name:
+                assert "scale=-2:" in template, name
+
+    def test_the_source_resolution_streams_do_not_scale(self) -> None:
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "scale" not in config["ffmpeg"]["h264"]
+        assert "scale" not in config["streams"][stream_name("42")]
 
 
 class TestPorts:
