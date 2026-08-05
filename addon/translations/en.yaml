@@ -36,8 +36,12 @@ configuration:
   enable_audio:
     name: Include audio
     description: >-
-      Carry the camera's microphone alongside the video. Leave it off unless
-      something you use actually plays it: it costs bandwidth either way.
+      Carry the camera's microphone on the published streams. Off by default:
+      a microphone recording a room is your decision to make, not an upgrade's.
+      Where you can hear it depends on what is playing the stream — Home
+      Assistant's camera card can when it uses WebRTC, HomeKit can once you
+      turn its own audio support on, and an NVR reading the stream directly
+      can. Cameras without a microphone are unaffected either way.
   log_level:
     name: Log level
     description: >-
