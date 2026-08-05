@@ -162,8 +162,27 @@ entity so an automation can turn a camera on before taking a snapshot.
 | RTSP username / password | — | Required when stream access is `lan` |
 | Web page password | — | Required when stream access is `lan`. Optional otherwise, but **if you set it, it is always asked for** — through the Home Assistant panel too. |
 | Video quality | `low` | Enough for a dashboard tile. Higher quality uses more bandwidth. |
-| Include audio | off | Carry the camera's sound as well |
+| Include audio | off | Carry the camera's microphone on the published streams |
 | Log level | `info` | Turn up to `debug` when reporting a problem |
+
+## Audio
+
+Turn on **Include audio** and the camera's microphone rides along on every
+published stream. The H.265 streams carry it in the camera's own encoding —
+nothing is re-encoded to carry those. The H.264 streams, produced for players
+that cannot decode H.265, additionally offer an AAC copy of the same audio.
+
+Whether you hear it depends on what plays the stream:
+
+| Playing it | Audio |
+|---|---|
+| Home Assistant camera card, over WebRTC | yes |
+| Home Assistant camera card, falling back to HLS | no — use one of the H.264 streams, which carry an AAC copy |
+| HomeKit | yes, once `support_audio: true` is set for the camera in your HomeKit configuration |
+| Frigate or another NVR reading the stream directly | yes |
+
+A camera with no microphone simply publishes video, with no delay and no
+warning.
 
 ## Privacy
 

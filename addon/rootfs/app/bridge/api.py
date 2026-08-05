@@ -2,11 +2,11 @@
 
 Two listeners with deliberately different exposure:
 
-* **Control plane** -- machine-facing. Serves the raw elementary stream to the
-  restreamer and answers the integration's queries. It has no authentication of
-  its own, so it is bound to loopback unconditionally and never follows
-  ``access_mode``: publishing it would hand out live video, camera power control
-  and session teardown to anyone on the network.
+* **Control plane** -- machine-facing. Serves the camera streams, muxed as
+  MPEG-TS, to the restreamer and answers the integration's queries. It has no
+  authentication of its own, so it is bound to loopback unconditionally and
+  never follows ``access_mode``: publishing it would hand out live video,
+  camera power control and session teardown to anyone on the network.
 * **Ingress UI** -- the account-linking page. Supervisor's ingress proxy runs in
   its own container and reaches a host-network add-on over the Docker bridge
   rather than loopback, so this listener cannot be bound to loopback. Instead
@@ -30,11 +30,14 @@ import logging
 import secrets
 from typing import TYPE_CHECKING, Any
 
+import av.error
 from aiohttp import web
 
 from .account import AccountManager, LinkFailedError
 from .config import Options
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
+from .framing import MediaKind
+from .mux import StreamMuxer
 from .preview import QUALITIES, PreviewError, PreviewManager
 from .redact import safe_error
 from .streaming import CameraOffError, StreamError
@@ -238,6 +241,12 @@ class BridgeApi:
                         # here, which would be wrong the moment a camera ships
                         # that sends more.
                         "stream_fps": (stats.get(description.did, {}).get("fps")),
+                        # What the camera is actually sending, not what the
+                        # configuration asked for. The two disagreed for this
+                        # option's entire existence and nothing said so.
+                        "stream_audio": (
+                            stats.get(description.did, {}).get("audio_codec")
+                        ),
                         # Credential-free by construction: a URL carrying
                         # user:password@ would be copied into Home Assistant
                         # config state, diagnostics and the UI.
@@ -256,6 +265,14 @@ class BridgeApi:
                         ),
                         "rtsp_requires_credentials": (
                             self._restreamer.requires_credentials
+                        ),
+                        # Whether the address above is reachable from anything
+                        # other than this host -- distinct from whether a
+                        # password is required. The page needs this to decide
+                        # whether rewriting the loopback hostname it was sent
+                        # would produce a working address or a dead one.
+                        "rtsp_reachable_off_host": (
+                            self._restreamer.rtsp_reachable_off_host
                         ),
                     }
                     for description in descriptions
@@ -289,25 +306,50 @@ class BridgeApi:
         )
 
     async def _stream(self, request: web.Request) -> web.StreamResponse:
-        """Serve the raw elementary stream as a chunked response for go2rtc."""
+        """Serve the camera as MPEG-TS, for go2rtc to demux."""
         did = request.match_info["did"]
         session = self._session_for(did)
         if session is None:
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
-        # The body is a bare Annex-B elementary stream, not a container.
-        # Declaring a container type here would be a lie that misleads whatever
-        # probes the response; an opaque type lets the reader detect the format
-        # from the bitstream's own start codes.
+        # A container, and declared as one. An elementary stream could not say
+        # what it was and had to be probed; this can, which is what lets go2rtc
+        # read it without an ffmpeg process in between.
         response = web.StreamResponse(
-            status=200, headers={"Content-Type": "application/octet-stream"}
+            status=200, headers={"Content-Type": "video/mp2t"}
         )
         await response.prepare(request)
 
         try:
             async with session.subscribe() as consumer:
-                await self._pump(consumer, response)
-        except StreamError as err:
+                # Read here rather than passed out of subscribe(): the fact has
+                # one home, on the session. A container fixes its tracks before
+                # its first byte, so this is the moment the decision is made.
+                muxer = StreamMuxer(session.codec, session.audio_codec)
+                try:
+                    await self._pump(consumer, response, muxer, session.stats, did)
+                finally:
+                    # Accumulated before the muxer is discarded. They are
+                    # per-consumer and short-lived; the session's counters are
+                    # the totals across every reader it has served.
+                    session.stats.dropped_timestamps += muxer.dropped
+                    session.stats.clock_reanchors += muxer.reanchors
+                    # Attempted independently: a failing write must not skip
+                    # the close (it releases the underlying AVFormatContext),
+                    # and a failing close is suppressed on its own rather than
+                    # also swallowing a write that would otherwise succeed.
+                    trailer = b""
+                    with contextlib.suppress(Exception):
+                        trailer = muxer.close()
+                    if trailer:
+                        with contextlib.suppress(Exception):
+                            await response.write(trailer)
+        except (StreamError, av.error.FFmpegError) as err:
+            # The muxer's own exceptions land here too: a malformed unit (a
+            # zero-length payload, observed from the SDK after a peer-to-peer
+            # reconnect) makes PyAV raise, and letting that escape means an
+            # unredacted traceback in the response instead of the safe_error
+            # discipline every other failure on this path already gets.
             _LOGGER.warning("stream for %s failed: %s", did, safe_error(err))
         except (ConnectionResetError, asyncio.CancelledError):
             # go2rtc disconnecting is routine -- it reconnects on demand.
@@ -318,25 +360,55 @@ class BridgeApi:
         return response
 
     @staticmethod
-    async def _pump(consumer, response: web.StreamResponse) -> None:
-        """Forward chunks until the session closes or the client goes away.
+    async def _pump(
+        consumer,
+        response: web.StreamResponse,
+        muxer: StreamMuxer,
+        stats,
+        did: str,
+    ) -> None:
+        """Package units into the response until the session or client ends.
 
         The close signal is an event rather than a queue sentinel because the
         queue is bounded: a stalled consumer can fill it, and a dropped sentinel
         would leave this loop waiting forever and block shutdown.
         """
         while True:
-            chunk_task = asyncio.ensure_future(consumer.queue.get())
+            unit_task = asyncio.ensure_future(consumer.queue.get())
             closed_task = asyncio.ensure_future(consumer.closed.wait())
             done, pending = await asyncio.wait(
-                {chunk_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
+                {unit_task, closed_task}, return_when=asyncio.FIRST_COMPLETED
             )
             for task in pending:
                 task.cancel()
             if closed_task in done:
-                chunk_task.cancel()
+                unit_task.cancel()
                 return
-            await response.write(chunk_task.result())
+            unit = unit_task.result()
+            if unit.kind is MediaKind.AUDIO and not muxer.has_audio:
+                # Audio started after this container was built, and a container
+                # cannot gain a track. Ending the response is the whole remedy:
+                # go2rtc reconnects within about a second onto a session that
+                # is already warm, and gets a container that has the track.
+                #
+                # The spec treats this as a rare safety net rather than the
+                # normal path, on the unverified assumption that a camera
+                # sending audio at all sends some before subscribe()'s
+                # parameter-set wait finishes. Counted and logged so release
+                # verification can tell "fired once" from "fires on every
+                # connect" without a packet capture.
+                stats.late_audio_reconnects += 1
+                _LOGGER.info(
+                    "%s: audio arrived after the stream started without it; "
+                    "ending the response so go2rtc reconnects with an audio "
+                    "track (%d such reconnect(s) so far)",
+                    did,
+                    stats.late_audio_reconnects,
+                )
+                return
+            chunk = muxer.write(unit)
+            if chunk:
+                await response.write(chunk)
 
     async def _set_power(self, request: web.Request) -> web.Response:
         did = request.match_info["did"]

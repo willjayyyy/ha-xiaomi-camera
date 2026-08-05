@@ -1,4 +1,4 @@
-"""Camera sessions and fan-out of the raw video stream.
+"""Camera sessions and fan-out of the camera's media units, video and audio.
 
 One peer-to-peer session per camera is shared by every consumer -- the RTSP
 restreamer, snapshot requests, anything else that subscribes. Sessions start
@@ -27,7 +27,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING
 
-from miot.types import MIoTCameraStatus, MIoTCameraVideoQuality
+from miot.types import MIoTCameraCodec, MIoTCameraStatus, MIoTCameraVideoQuality
 
 from .const import (
     CONNECT_TIMEOUT_SECONDS,
@@ -35,8 +35,9 @@ from .const import (
     SNAPSHOT_TIMEOUT_SECONDS,
 )
 from .framing import Consumer as _Consumer
+from .framing import MediaKind, MediaUnit, SessionStats
 from .framing import ParameterSets as _ParameterSets
-from .framing import SessionStats
+from .mux import AUDIO_CODEC_OPUS
 from .nal import (
     Codec,
     detect_codec,
@@ -54,8 +55,13 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 #: Bounded so a stalled consumer drops frames instead of growing without limit.
-#: Sized to about a second of video at 25 fps.
-_CONSUMER_QUEUE_SIZE = 30
+#: A unit is one video frame or one audio packet -- the queue carries both since
+#: this branch added audio. Video runs about 20 units/s; Opus adds one packet
+#: every 20ms, about 50 units/s more, when a camera sends audio at all. Sized
+#: for the worst case (audio flowing) to keep the original one second of
+#: headroom: 20 + 50 = 70. A video-only session gets more headroom than that,
+#: not less.
+_CONSUMER_QUEUE_SIZE = 70
 
 #: Grace period before tearing down a session whose last user left, so a client
 #: reconnecting (a browser reloading a stream) reuses the live session rather
@@ -66,6 +72,21 @@ _LINGER_SECONDS = 20.0
 #: its session CONNECTED while delivering nothing, so without an age check a
 #: dashboard would show the frame from before power-off indefinitely.
 _SNAPSHOT_MAX_AGE_SECONDS = 3.0
+
+
+def audio_codec_for(codec_id: MIoTCameraCodec) -> str | None:
+    """The container codec for an SDK audio codec, or None if unpublishable.
+
+    Only Opus can be carried. MPEG-TS has no stream type that identifies A-law
+    or mu-law: the muxer writes them without complaint and they demux back as a
+    `data` stream with no codec context, which is a declared track that carries
+    nothing usable -- the very defect being fixed here.
+
+    Refusing rather than transcoding is deliberate. No camera in scope is known
+    to send G.711, and the log line this produces names the codec, so the
+    decision can be revisited with evidence instead of pre-empted without any.
+    """
+    return AUDIO_CODEC_OPUS if codec_id is MIoTCameraCodec.AUDIO_OPUS else None
 
 
 class StreamError(RuntimeError):
@@ -108,6 +129,15 @@ class CameraSession:
         self._linger_task: asyncio.Task[None] | None = None
         self._codec: Codec | None = None
         self._parameter_sets = _ParameterSets()
+        #: The container codec for this camera's audio, once a usable packet
+        #: has arrived. The single source of truth for whether a container
+        #: gets an audio track -- evidence, not configuration, because a track
+        #: that is declared and never fed costs 11 to 25 extra seconds of cold
+        #: start and is discarded anyway.
+        self._audio_codec: str | None = None
+        #: Guards the log line below, so an unsupported codec is explained once
+        #: rather than fifty times a second.
+        self._audio_codec_reported = False
         self._latest_jpeg: bytes | None = None
         self._latest_jpeg_at: float | None = None
         #: Replaced, never cleared, on each decoded frame. A waiter takes a
@@ -129,6 +159,22 @@ class CameraSession:
     @property
     def running(self) -> bool:
         return self._instance is not None
+
+    @property
+    def audio_codec(self) -> str | None:
+        return self._audio_codec
+
+    @property
+    def codec(self) -> Codec:
+        """The video encoding, known by the time a consumer is handed out.
+
+        `subscribe` waits for the parameter sets, and detection happens on the
+        first payload, so this cannot be unset by the time it is read. H.265 is
+        the fallback rather than an error: every camera in scope sends it, and
+        refusing to serve a stream over a detection that has not landed yet
+        would be worse than serving the overwhelmingly likely one.
+        """
+        return self._codec or Codec.H265
 
     # ------------------------------------------------------------------
     # Lifetime
@@ -195,6 +241,13 @@ class CameraSession:
             await instance.register_decode_jpg_async(
                 self._on_jpeg, channel=self._channel
             )
+            if self._enable_audio:
+                # Requested from the camera by start_async above; without this
+                # registration the SDK receives every audio frame and discards
+                # it, which is what the option did for its entire existence.
+                await instance.register_raw_audio_async(
+                    self._on_audio, channel=self._channel
+                )
 
             self._instance = instance
             self.stats = SessionStats(started_at=time.monotonic())
@@ -235,6 +288,8 @@ class CameraSession:
         self._instance = None
         self._codec = None
         self._parameter_sets = _ParameterSets()
+        self._audio_codec = None
+        self._audio_codec_reported = False
         self._latest_jpeg = None
         self._latest_jpeg_at = None
         # Released rather than discarded, so anything waiting for a frame
@@ -304,16 +359,10 @@ class CameraSession:
 
     @contextlib.asynccontextmanager
     async def subscribe(self) -> AsyncIterator[_Consumer]:
-        """Yield a consumer of Annex-B chunks for the lifetime of the context."""
+        """Yield a consumer of stamped media units for the context's lifetime."""
         async with self._hold():
             await self._async_wait_for_parameter_sets()
             consumer = _Consumer(queue=asyncio.Queue(maxsize=_CONSUMER_QUEUE_SIZE))
-            # Replay the parameter sets so a decoder can start without waiting
-            # for the camera to send the next set. Guaranteed to be present by
-            # the wait above; before it existed, a consumer arriving during a
-            # cold start got nothing here and had to gamble on catching the
-            # next keyframe within its own reader's timeout.
-            consumer.queue.put_nowait(self._parameter_sets.as_annex_b())
             self._consumers.add(consumer)
             self.stats.consumers = len(self._consumers)
             try:
@@ -395,13 +444,13 @@ class CameraSession:
         # an exception escaping here would produce no log output at all while
         # frames silently stopped reaching consumers.
         try:
-            self._handle_video(bytes(data))
+            self._handle_video(bytes(data), ts)
         except Exception as err:  # pragma: no cover - defensive
             _LOGGER.error(
                 "Dropping a frame from %s: %s", self._info.name, safe_error(err)
             )
 
-    def _handle_video(self, payload: bytes) -> None:
+    def _handle_video(self, payload: bytes, ts: int) -> None:
         self.stats.frames += 1
         self.stats.bytes_total += len(payload)
         self.stats.last_frame_at = time.monotonic()
@@ -421,10 +470,46 @@ class CameraSession:
                 elif is_keyframe(unit_type, self._codec):
                     self.stats.keyframes += 1
 
-        self._fan_out(payload)
+        self._fan_out(MediaUnit(MediaKind.VIDEO, ts, payload))
 
-    def _fan_out(self, payload: bytes) -> None:
-        """Hand a chunk to every subscriber, dropping in whole groups.
+    async def _on_audio(
+        self,
+        did: str,
+        data: bytes,
+        ts: int,
+        seq: int,
+        channel: int,
+        codec_id: MIoTCameraCodec,
+    ) -> None:
+        try:
+            self._handle_audio(bytes(data), ts, codec_id)
+        except Exception as err:  # pragma: no cover - defensive
+            _LOGGER.error(
+                "Dropping audio from %s: %s", self._info.name, safe_error(err)
+            )
+
+    def _handle_audio(self, payload: bytes, ts: int, codec_id: MIoTCameraCodec) -> None:
+        codec = audio_codec_for(codec_id)
+        if codec is None:
+            if not self._audio_codec_reported:
+                self._audio_codec_reported = True
+                _LOGGER.info(
+                    "%s sends %s audio, which cannot be published; its stream "
+                    "will carry video only",
+                    self._info.name,
+                    codec_id.name,
+                )
+            return
+        if self._audio_codec is None:
+            self._audio_codec = codec
+            self.stats.audio_codec = codec
+            _LOGGER.info("%s audio codec: %s", self._info.name, codec)
+        self.stats.audio_frames += 1
+        self.stats.audio_bytes += len(payload)
+        self._fan_out(MediaUnit(MediaKind.AUDIO, ts, payload))
+
+    def _fan_out(self, unit: MediaUnit) -> None:
+        """Hand a unit to every subscriber, dropping in whole groups.
 
         A consumer that falls behind loses data, and from that moment its
         decoder cannot use anything until the next keyframe. Sending it the
@@ -432,19 +517,29 @@ class CameraSession:
         remainder is skipped and delivery resumes cleanly at the next keyframe
         -- the same amount of lost time, without the mess in between.
         """
-        starts_group = self._starts_group(payload)
+        is_video = unit.kind is MediaKind.VIDEO
+        starts_group = is_video and self._starts_group(unit.payload)
         for consumer in list(self._consumers):
             if consumer.resyncing:
                 if not starts_group:
                     continue
                 consumer.resyncing = False
-                if self._parameter_sets.units:
-                    # A decoder joining at this keyframe needs them, and they
-                    # were in the part that was skipped.
-                    with contextlib.suppress(asyncio.QueueFull):
-                        consumer.queue.put_nowait(self._parameter_sets.as_annex_b())
+                # A decoder joining at this keyframe needs the parameter sets,
+                # and they were in the part that was skipped.
+                consumer.needs_parameters = True
+            payload = unit.payload
+            if is_video and consumer.needs_parameters and self._parameter_sets.units:
+                # Prepended to a real, stamped unit rather than sent as a chunk
+                # of its own: a container has nowhere to put a payload that has
+                # no time, and inventing one would be inventing sync.
+                payload = self._parameter_sets.as_annex_b() + payload
+                consumer.needs_parameters = False
             try:
-                consumer.queue.put_nowait(payload)
+                consumer.queue.put_nowait(
+                    unit
+                    if payload is unit.payload
+                    else MediaUnit(unit.kind, unit.ts_ms, payload)
+                )
             except asyncio.QueueFull:
                 # Emptied rather than trimmed: what is in there is now the
                 # middle of a group whose start this consumer will never see.

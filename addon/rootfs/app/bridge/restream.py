@@ -1,9 +1,10 @@
 """go2rtc supervision.
 
-The SDK hands over an Annex-B elementary stream, which no player can consume
-directly: it carries no container, no timestamps a decoder can seek on, and no
-transport. go2rtc adds all three, and speaks RTSP, WebRTC and HLS so the same
-session serves Home Assistant, a browser and an external NVR alike.
+The add-on's HTTP endpoint serves MPEG-TS directly: a container carrying both
+video and audio, with proper timestamps for seeking and timeline sync. go2rtc
+demuxes the container, applies its own transport (RTSP, WebRTC, HLS), and
+handles reconnection and client negotiation. The same session thus serves Home
+Assistant, a browser, and an external NVR alike.
 
 Streams are pulled from this bridge's own HTTP endpoint rather than pushed,
 which keeps go2rtc's supervision (retry, backoff, client tracking) in charge of
@@ -113,9 +114,9 @@ class StreamSpec:
 #: be filtered out. An upscale wastes nothing that is not already idle: no
 #: producer starts until a consumer connects.
 STREAM_SPECS: tuple[StreamSpec, ...] = (
-    # The root's bitrate is documentary only: it is always `#video=copy` (see
-    # `build_config`), so no template is ever generated for it and this value
-    # is never read.
+    # The root's bitrate is documentary only: the root carries no `#video=`
+    # argument at all (see `build_config`), so no template is ever generated
+    # for it and this value is never read.
     StreamSpec("h265", "h265", None, "2M"),
     StreamSpec("h265_720", "h265", 720, "2M"),
     StreamSpec("h265_360", "h265", 360, "512k"),
@@ -129,6 +130,27 @@ STREAM_SPECS: tuple[StreamSpec, ...] = (
 #: The variant every other one is derived from: the camera's own encoding at
 #: its own resolution, repackaged without re-encoding.
 ROOT_KEY = "h265"
+
+#: The codec the root publishes, read from the root's own spec rather than
+#: written out again. A second copy is a second thing to drift.
+ROOT_CODEC = next(spec.codec for spec in STREAM_SPECS if spec.key == ROOT_KEY)
+
+
+def _audio_codecs(spec: StreamSpec) -> tuple[str, ...]:
+    """The audio a variant offers, negotiated per consumer by go2rtc.
+
+    A variant's audio serves the same consumer its video codec serves. The
+    H.264 family exists for consumers that cannot decode H.265, which is
+    overwhelmingly the same population that cannot decode Opus -- Home
+    Assistant's own HLS path among them, which accepts aac and mp3 only. An
+    H.264 variant carrying Opus alone would be half-compatible, and silently.
+
+    Nothing is transcoded that was not already: those variants re-encode the
+    picture regardless, so the second encoding rides along on a process that
+    is running anyway. `copy` is listed first, so a consumer that asks for
+    nothing gets the camera's own encoding untouched.
+    """
+    return ("copy",) if spec.codec == ROOT_CODEC else ("copy", "aac")
 
 
 def stream_name(did: str, key: str = ROOT_KEY) -> str:
@@ -153,8 +175,8 @@ def _encoder_templates() -> dict[str, str]:
     templates = dict(base)
     for spec in STREAM_SPECS:
         if spec.key == ROOT_KEY:
-            # The root is `#video=copy` -- repackaged, never encoded -- so it
-            # keeps no template here.
+            # The root is served directly from the endpoint and carries no
+            # `#video=` argument, so it keeps no template here.
             continue
         template = f"{base[spec.codec]} -b:v {spec.bitrate}"
         if spec.height is not None:
@@ -166,11 +188,13 @@ def _encoder_templates() -> dict[str, str]:
 def build_config(options: Options, dids: list[str]) -> dict:
     """Render the go2rtc configuration.
 
-    ``#video=copy`` matters: the elementary stream is repackaged without
-    re-encoding. Cameras deliver H.265, and transcoding it would cost more CPU
-    than most Home Assistant hosts have to spare. Clients that cannot decode
-    H.265 are handled by go2rtc negotiating per client, not by transcoding
-    everything up front.
+    The root is read straight from this add-on's own endpoint, with no ffmpeg
+    in between: it serves MPEG-TS, which go2rtc demuxes itself. Both of the
+    camera's tracks reach RTSP exactly as the camera encoded them.
+
+    Derived variants do re-encode the picture, which is what they are for.
+    Clients that cannot decode H.265 take one of those rather than forcing a
+    transcode on everyone.
 
     There is deliberately no MJPEG source here. An earlier version added one so
     the add-on page could show a preview, which meant ffmpeg re-encoding H.265
@@ -182,15 +206,20 @@ def build_config(options: Options, dids: list[str]) -> dict:
     streams: dict[str, str] = {}
     for did in dids:
         root = stream_name(did)
-        streams[root] = (
-            f"ffmpeg:http://{LOOPBACK}:{API_PORT}/api/stream/{did}#video=copy"
-        )
+        # No ffmpeg in front of it: go2rtc demuxes the MPEG-TS this endpoint
+        # serves and passes both tracks through untouched. An ffmpeg hop here
+        # would spend three seconds of cold start probing a container it did
+        # not need to, to do a job go2rtc already does.
+        streams[root] = f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
         for spec in STREAM_SPECS:
             if spec.key == ROOT_KEY:
                 continue
+            audio = "".join(f"#audio={codec}" for codec in _audio_codecs(spec))
             # Named after the root rather than repeating its URL, so all of
             # them share one session on the camera instead of opening several.
-            streams[stream_name(did, spec.key)] = f"ffmpeg:{root}#video={spec.template}"
+            streams[stream_name(did, spec.key)] = (
+                f"ffmpeg:{root}#video={spec.template}{audio}"
+            )
 
     config: dict = {
         # Quiet by default, but follows the add-on's own level when raised.
@@ -229,6 +258,20 @@ class Restreamer:
     @property
     def requires_credentials(self) -> bool:
         return self._options.requires_credentials
+
+    @property
+    def rtsp_reachable_off_host(self) -> bool:
+        """Whether the published RTSP listener can be reached from another machine.
+
+        Derived from `bind_address` rather than `access_mode` directly, and
+        kept separate from `requires_credentials`: the two happen to agree
+        today -- `lan` mode is the only mode that both requires a password and
+        binds beyond loopback -- but they answer different questions, and nothing
+        forces them to keep agreeing. `requires_credentials` speaks for whether a
+        password is mandatory; this speaks for whether a listener is reachable
+        off-box, which is what a page rewriting a displayed hostname needs to know.
+        """
+        return self._options.bind_address != LOOPBACK
 
     def rtsp_url(self, did: str) -> str:
         """RTSP URL for a camera, always without embedded credentials.

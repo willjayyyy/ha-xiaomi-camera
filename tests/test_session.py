@@ -9,6 +9,7 @@ why they survived review and why the camera that worked kept working.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from bridge import streaming
@@ -61,7 +62,13 @@ class _FakeInstance:
     async def _feed(self) -> None:
         await asyncio.sleep(self._first_frame_delay)
         assert self._on_video is not None
-        await self._on_video(_FakeInfo.did, _PARAMETER_SETS + _KEYFRAME, 0, 0, 0)
+        # Repeats, as a real camera resends its parameter sets ahead of every
+        # keyframe: a consumer that joins after the first delivery still needs
+        # a video unit to arrive before it sees anything, since the parameter
+        # sets are now carried on a unit rather than pushed on their own.
+        while True:
+            await self._on_video(_FakeInfo.did, _PARAMETER_SETS + _KEYFRAME, 0, 0, 0)
+            await asyncio.sleep(0.01)
 
     async def stop_async(self) -> None:
         self.stopped = True
@@ -139,28 +146,36 @@ class TestColdStart:
 
     An H.265 decoder cannot start without the parameter sets, and a camera
     sends them only ahead of a keyframe -- about every three seconds here. The
-    session replays the ones it holds to a joining consumer, but on a cold
-    start it holds none yet, so whoever arrived first got an undecodable
-    stream and gave up. go2rtc's transcode allows five seconds, the session
-    took nearly two to produce anything, and what remained was a coin toss
-    against the keyframe interval.
+    session now waits for a first delivery before handing out any consumer,
+    and prepends the held sets to the next unit a joining consumer receives.
 
-    The camera that worked was not healthier: its dashboard fetched a snapshot
-    first, which warmed the session, so by the time the stream connected the
-    parameter sets were already held.
+    Before this wait existed, a cold start held no parameter sets yet, so
+    whoever arrived first got an undecodable stream and gave up. go2rtc's
+    transcode allowed five seconds, the session took nearly two to produce
+    anything, and what remained was a coin toss against the keyframe interval.
+    The camera that worked was not healthier: its dashboard had fetched a
+    snapshot first, which warmed the session, so by the time the stream
+    connected the parameter sets were already held by luck rather than design.
     """
 
     async def test_subscribe_waits_for_parameter_sets(self) -> None:
+        """`subscribe()` itself must not return before the camera has sent
+        anything -- not merely "the first unit happens to carry a VPS", which
+        the feeder guarantees on every delivery regardless of whether anyone
+        waited for it."""
         client = _FakeClient(first_frame_delay=0.05)
         session = _session(client)
 
+        started = time.monotonic()
         async with session.subscribe() as consumer:
-            assert not consumer.queue.empty(), (
-                "consumer was handed a stream with no parameter sets to decode it"
-            )
-            first = consumer.queue.get_nowait()
+            elapsed = time.monotonic() - started
+            first = await asyncio.wait_for(consumer.queue.get(), timeout=1.0)
 
-        assert b"\x40\x01" in first, "the replayed chunk carries no VPS"
+        assert elapsed >= 0.04, (
+            "subscribe() returned before the camera sent its first frame -- "
+            "the wait for parameter sets was skipped"
+        )
+        assert b"\x40\x01" in first.payload, "the first unit carries no VPS"
         await session.async_stop()
 
     async def test_a_warm_session_does_not_wait(self) -> None:
@@ -180,7 +195,7 @@ class TestColdStart:
 
         async with asyncio.timeout(0.05):
             async with session.subscribe() as consumer:
-                assert not consumer.queue.empty()
+                await consumer.queue.get()
 
         await session.async_stop()
 

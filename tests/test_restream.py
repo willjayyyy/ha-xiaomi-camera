@@ -10,11 +10,28 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
-from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
-from bridge.restream import STREAM_SPECS, Restreamer, build_config, stream_name
+from bridge.const import (
+    ALL_INTERFACES,
+    GO2RTC_API_PORT,
+    LOOPBACK,
+    RTSP_PORT,
+    SRTP_PORT,
+    WEBRTC_PORT,
+)
+from bridge.restream import (
+    ROOT_CODEC,
+    ROOT_KEY,
+    STREAM_SPECS,
+    Restreamer,
+    StreamSpec,
+    _audio_codecs,
+    build_config,
+    stream_name,
+)
 
 _STRINGS_JSON = (
     Path(__file__).resolve().parent.parent
@@ -84,19 +101,20 @@ class TestStreamSources:
     def test_the_source_is_pulled_from_loopback(self) -> None:
         """The bridge's own control plane is never reachable off-box."""
         config = build_config(make_options(AccessMode.LAN, "u", "p"), ["42"])
-        assert config["streams"][stream_name("42")].startswith(
-            f"ffmpeg:http://{LOOPBACK}:"
-        )
+        assert config["streams"][stream_name("42")].startswith(f"http://{LOOPBACK}:")
 
-    def test_streams_are_copied_not_transcoded(self) -> None:
-        """Nothing here may re-encode.
+    def test_the_root_runs_no_ffmpeg(self) -> None:
+        """go2rtc demuxes MPEG-TS itself.
 
-        Every consumer would pay for it, on a host that generally cannot
-        afford it. The add-on page's preview is served from the vendor
-        library's own decoded stills instead -- see `BridgeApi._preview`.
+        Putting ffmpeg in front of it costs three seconds of cold start --
+        ffmpeg probes MPEG-TS for five by default -- and a process per camera,
+        to do a job go2rtc already does. Measured: 3.11s native against 7.24s
+        through ffmpeg, where today's elementary stream took 4.20s.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][stream_name("42")].endswith("#video=copy")
+        source = config["streams"][stream_name("42")]
+        assert not source.startswith("ffmpeg:")
+        assert "#video=" not in source
 
     def test_eight_streams_per_camera(self) -> None:
         """Four heights across both codecs."""
@@ -111,7 +129,9 @@ class TestStreamSources:
         stream it could have copied. Each URL says what it carries.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][stream_name("42", "h264")].endswith("#video=h264")
+        assert config["streams"][stream_name("42", "h264")].endswith(
+            "#video=h264#audio=copy#audio=aac"
+        )
         assert stream_name("42", "h264") != stream_name("42")
 
     def test_h264_is_encoded_with_the_standard_encoder(self) -> None:
@@ -151,6 +171,52 @@ class TestStreamSources:
         assert config["streams"][stream_name("42", "h264")].startswith(
             f"ffmpeg:{stream_name('42')}#"
         )
+
+
+class TestAudioFollowsVideo:
+    """One rule: a variant's audio serves the same consumer its video does.
+
+    Derived from `spec.codec` rather than declared per spec, so there is no
+    second table to keep aligned with the first. This project has shipped that
+    defect four times.
+    """
+
+    @pytest.fixture
+    def sources(self) -> dict[str, str]:
+        return build_config(make_options(AccessMode.LOCAL), ["42"])["streams"]
+
+    def test_every_derived_stream_offers_the_cameras_own_audio(
+        self, sources: dict[str, str]
+    ) -> None:
+        """Without `#audio=`, go2rtc passes `-an` and the sound is gone with
+        no error anywhere."""
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            assert "#audio=copy" in sources[stream_name("42", spec.key)], spec.key
+
+    def test_only_the_compatibility_family_also_offers_aac(
+        self, sources: dict[str, str]
+    ) -> None:
+        """A consumer that needs H.264 because it cannot decode H.265 is
+        overwhelmingly the same consumer that cannot decode Opus. Home
+        Assistant's own HLS path is one: it accepts aac and mp3 only."""
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            source = sources[stream_name("42", spec.key)]
+            assert ("#audio=aac" in source) is (spec.codec != ROOT_CODEC), spec.key
+
+    def test_the_rule_is_derived_not_listed(self) -> None:
+        """A spec that never existed when the rule was written still gets the
+        right answer -- which is what makes the rule a guard rather than a
+        table someone has to remember to update.
+        """
+        assert _audio_codecs(StreamSpec("h264_90", "h264", 90, "128k")) == (
+            "copy",
+            "aac",
+        )
+        assert _audio_codecs(StreamSpec("h265_90", "h265", 90, "128k")) == ("copy",)
 
 
 class TestStreamCatalogue:
@@ -197,7 +263,7 @@ class TestStreamCatalogue:
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert config["streams"][stream_name("42", "h264_360")].endswith(
-            "#video=h264/360"
+            "#video=h264/360#audio=copy#audio=aac"
         )
 
     def test_each_variant_template_sets_its_own_scale_and_bitrate(self) -> None:
@@ -268,6 +334,37 @@ class TestStreamDescriptions:
         by_key = {d["key"]: d for d in restreamer.stream_descriptions("42")}
         assert by_key["h265"]["height"] is None
         assert by_key["h264_360"]["height"] == 360
+
+
+class TestRtspReachableOffHost:
+    """Whether the published RTSP listener can be reached from another
+    machine -- what the page needs before it may rewrite the loopback
+    hostname it was sent into something else.
+
+    This is a different fact from `requires_credentials`, even though the two
+    happen to agree for every real `Options` today (`lan` mode is the only
+    mode that both requires a password and binds beyond loopback). Pinned to
+    a fake whose two flags disagree, so this fails if the property is ever
+    re-pointed at `requires_credentials` instead of `bind_address`.
+    """
+
+    def test_real_options_agree_in_local_mode(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        assert restreamer.rtsp_reachable_off_host is False
+
+    def test_real_options_agree_in_lan_mode(self) -> None:
+        restreamer = Restreamer(make_options(AccessMode.LAN, "user", "secret"))
+        assert restreamer.rtsp_reachable_off_host is True
+
+    def test_it_reads_bind_address_even_when_credentials_disagree(self) -> None:
+        fake_options = SimpleNamespace(
+            bind_address=ALL_INTERFACES, requires_credentials=False
+        )
+        assert Restreamer(fake_options).rtsp_reachable_off_host is True
+
+    def test_it_is_false_on_loopback_even_when_credentials_are_required(self) -> None:
+        fake_options = SimpleNamespace(bind_address=LOOPBACK, requires_credentials=True)
+        assert Restreamer(fake_options).rtsp_reachable_off_host is False
 
 
 class TestPorts:

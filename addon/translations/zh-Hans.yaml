@@ -27,7 +27,9 @@ configuration:
   enable_audio:
     name: 包含声音
     description: >-
-      把摄像头的麦克风声音一并传输。除非你用的软件确实会播放，否则建议关闭：开着就会占用带宽。
+      在发布的视频流里带上摄像头的麦克风声音。默认关闭：麦克风录下房间里的声音是你自己的决定，不该由一次升级替你做。
+      能不能听到取决于播放方——Home Assistant 的摄像头卡片走 WebRTC 时可以，HomeKit 需要你自己打开它那边的声音支持，
+      直接读取视频流的 NVR 可以。没有麦克风的摄像头不受影响。
   log_level:
     name: 日志级别
     description: >-

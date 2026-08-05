@@ -10,8 +10,32 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 _ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
+
+
+class MediaKind(StrEnum):
+    """Which track a unit belongs to."""
+
+    VIDEO = "video"
+    AUDIO = "audio"
+
+
+@dataclass(frozen=True)
+class MediaUnit:
+    """One encoded chunk, stamped on the camera's own clock.
+
+    The timestamp is what makes audio possible at all. H.26x start codes carry
+    their own frame boundaries, so video survived being passed around as bare
+    bytes; Opus carries no such thing and needs a container, and a container
+    needs the time. Both media arrive through one SDK callback stamped from one
+    device clock, so carrying that number here is all synchronisation costs.
+    """
+
+    kind: MediaKind
+    ts_ms: int
+    payload: bytes
 
 
 # eq=False keeps the default identity-based __eq__ and __hash__. A dataclass
@@ -22,7 +46,7 @@ _ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 class Consumer:
     """A subscriber to the raw stream."""
 
-    queue: asyncio.Queue[bytes]
+    queue: asyncio.Queue[MediaUnit]
     #: Set when the session ends, so the reader stops waiting on the queue.
     #: A queue sentinel cannot serve this purpose: the queue is bounded and may
     #: be full exactly when the session is torn down, in which case the sentinel
@@ -34,6 +58,11 @@ class Consumer:
     #: produces artefacts instead of video and delays the recovery it is
     #: waiting for.
     resyncing: bool = False
+    #: Set while this consumer still needs the parameter sets prepended to the
+    #: next video unit it is sent. True on arrival and true again after a
+    #: resync, so a consumer joining and a consumer recovering take one path
+    #: rather than two that have to be kept in step.
+    needs_parameters: bool = True
 
 
 @dataclass
@@ -65,6 +94,29 @@ class SessionStats:
     #: reports as "it stutters every few seconds". Left as a debug log, it was
     #: invisible to anyone trying to explain the stutter.
     resyncs: int = 0
+    #: The container codec of the audio track, or None when the camera sends
+    #: none. Not derived from the option: the option says what was asked for,
+    #: this says what arrived.
+    audio_codec: str | None = None
+    audio_frames: int = 0
+    audio_bytes: int = 0
+    #: Units whose device timestamp could not be used -- the sentinel the SDK
+    #: reports after a reconnect, mostly. Counted rather than merely logged, so
+    #: a stream that is quietly short of frames can be recognised as one.
+    dropped_timestamps: int = 0
+    #: Times the muxer judged the device clock to have restarted and
+    #: re-anchored its shared offset. Frequent re-anchoring on a camera that
+    #: never actually reconnects would mean the audio and video timestamps do
+    #: not share an epoch after all -- the one assumption this design could
+    #: not verify in CI.
+    clock_reanchors: int = 0
+    #: Times a container without an audio track outlived the arrival of an
+    #: audio unit, so the response was ended for go2rtc to reconnect onto a
+    #: session that already has the track. The design treats this as a rare
+    #: safety net rather than the normal path; if it fires on every connect
+    #: instead of almost never, that assumption is wrong and cold start is
+    #: paying for an extra reconnect cycle every time.
+    late_audio_reconnects: int = 0
     started_at: float | None = None
     last_frame_at: float | None = None
     consumers: int = 0
@@ -82,6 +134,12 @@ class SessionStats:
             "fps": round(self.frames / uptime, 1) if uptime > 1 else None,
             "consumers": self.consumers,
             "resyncs": self.resyncs,
+            "audio_codec": self.audio_codec,
+            "audio_frames": self.audio_frames,
+            "audio_bytes": self.audio_bytes,
+            "dropped_timestamps": self.dropped_timestamps,
+            "clock_reanchors": self.clock_reanchors,
+            "late_audio_reconnects": self.late_audio_reconnects,
             "stalled": self.is_stalled(),
         }
 
