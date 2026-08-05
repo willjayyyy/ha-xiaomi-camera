@@ -56,6 +56,26 @@ After signing in, Xiaomi redirects your browser to an address that **will not
 open**. A blank page or an error there is expected. Copy the full address from
 the address bar and paste it into the add-on page to complete sign-in.
 
+### Choosing streams
+
+Each camera can publish several versions of the same picture. Pick per camera
+in the integration's options, under **Video streams**.
+
+| Stream | Good for |
+|---|---|
+| H.265 · Original quality | Recording, NVR software. The camera's own encoding, no re-encoding. |
+| H.264 · Original quality | Browsers and players that cannot decode H.265. |
+| 360p / 180p | Apple Home, remote viewing, dashboards showing several cameras at once. |
+| 720p | A middle ground when the camera's own resolution is higher. |
+
+A camera starts with its original encoding. If the picture will not play in
+your browser, add an H.264 stream — most browsers cannot decode H.265.
+
+**Apple Home:** add a 360p stream and point the HomeKit bridge at that entity.
+Home Assistant re-encodes at a bitrate HomeKit chooses, which is low, so a
+smaller picture looks considerably better than a larger one. Leave *Cameras
+that support native H.264 streams* unticked.
+
 ## Without Home Assistant
 
 The bridge is a self-contained service: it talks to the cameras and publishes
