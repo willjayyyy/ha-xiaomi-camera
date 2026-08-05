@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.0
+
+Make the original (un-transcoded) stream codec-neutral, and publish a separate
+H.265 transcode at full resolution.
+
+- The root stream is no longer assumed to be H.265. It is named for the camera
+  (`camera_<did>`) and its entity carries the device name only, so a camera
+  whose native codec is H.264 is no longer mislabelled.
+- `h265` is now a real transcode to H.265 at full resolution, alongside the
+  existing `h264` family. Choosing a codec-named stream always means a
+  transcode; the original stream is the only one that is not.
+- Existing entries keep their entities: the stored "h265" root selection is
+  migrated to "original" on upgrade.
+
 ## 1.1.1
 
 Fix the regression that froze video after 1.1.0, and clean up stream setup.
