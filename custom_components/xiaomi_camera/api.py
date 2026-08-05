@@ -23,6 +23,26 @@ class CameraOffError(BridgeError):
 
 
 @dataclass(frozen=True)
+class CameraStream:
+    """One published variant of a camera's video, as the add-on describes it."""
+
+    key: str
+    codec: str
+    height: int | None
+    url: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CameraStream:
+        height = data.get("height")
+        return cls(
+            key=str(data.get("key") or ""),
+            codec=str(data.get("codec") or ""),
+            height=int(height) if height is not None else None,
+            url=str(data.get("url") or ""),
+        )
+
+
+@dataclass(frozen=True)
 class BridgeCamera:
     """A camera as reported by the bridge."""
 
@@ -38,6 +58,10 @@ class BridgeCamera:
     #: The same pictures re-encoded as H.264. Empty on an older add-on, which
     #: is why nothing may assume it is there.
     rtsp_url_h264: str = ""
+    #: Every variant the add-on publishes. Empty on an add-on that predates
+    #: this list, which the integration reports rather than working around --
+    #: see `coordinator._async_report_outdated_addon`.
+    streams: tuple[CameraStream, ...] = ()
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> BridgeCamera:
@@ -52,7 +76,17 @@ class BridgeCamera:
             powered_on=data.get("powered_on"),
             rtsp_url=str(data.get("rtsp_url") or ""),
             rtsp_url_h264=str(data.get("rtsp_url_h264") or ""),
+            streams=tuple(
+                CameraStream.from_dict(item) for item in data.get("streams") or ()
+            ),
         )
+
+    def stream_url(self, key: str) -> str:
+        """The URL for one variant, or empty if it is not published."""
+        for stream in self.streams:
+            if stream.key == key:
+                return stream.url
+        return ""
 
 
 class BridgeClient:
