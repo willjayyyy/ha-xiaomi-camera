@@ -121,7 +121,9 @@ class TestStreamSources:
         stream it could have copied. Each URL says what it carries.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "#video=h264" in config["streams"][stream_name("42", "h264")]
+        assert config["streams"][stream_name("42", "h264")].endswith(
+            "#video=h264#audio=copy#audio=aac"
+        )
         assert stream_name("42", "h264") != stream_name("42")
 
     def test_h264_is_encoded_with_the_standard_encoder(self) -> None:
@@ -252,7 +254,9 @@ class TestStreamCatalogue:
         template's own. Naming a variant template is the only way to vary it.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "#video=h264/360" in config["streams"][stream_name("42", "h264_360")]
+        assert config["streams"][stream_name("42", "h264_360")].endswith(
+            "#video=h264/360#audio=copy#audio=aac"
+        )
 
     def test_each_variant_template_sets_its_own_scale_and_bitrate(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])

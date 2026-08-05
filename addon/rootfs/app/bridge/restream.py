@@ -1,9 +1,10 @@
 """go2rtc supervision.
 
-The SDK hands over an Annex-B elementary stream, which no player can consume
-directly: it carries no container, no timestamps a decoder can seek on, and no
-transport. go2rtc adds all three, and speaks RTSP, WebRTC and HLS so the same
-session serves Home Assistant, a browser and an external NVR alike.
+The add-on's HTTP endpoint serves MPEG-TS directly: a container carrying both
+video and audio, with proper timestamps for seeking and timeline sync. go2rtc
+demuxes the container, applies its own transport (RTSP, WebRTC, HLS), and
+handles reconnection and client negotiation. The same session thus serves Home
+Assistant, a browser, and an external NVR alike.
 
 Streams are pulled from this bridge's own HTTP endpoint rather than pushed,
 which keeps go2rtc's supervision (retry, backoff, client tracking) in charge of
@@ -113,9 +114,9 @@ class StreamSpec:
 #: be filtered out. An upscale wastes nothing that is not already idle: no
 #: producer starts until a consumer connects.
 STREAM_SPECS: tuple[StreamSpec, ...] = (
-    # The root's bitrate is documentary only: it is always `#video=copy` (see
-    # `build_config`), so no template is ever generated for it and this value
-    # is never read.
+    # The root's bitrate is documentary only: the root carries no `#video=`
+    # argument at all (see `build_config`), so no template is ever generated
+    # for it and this value is never read.
     StreamSpec("h265", "h265", None, "2M"),
     StreamSpec("h265_720", "h265", 720, "2M"),
     StreamSpec("h265_360", "h265", 360, "512k"),
@@ -174,8 +175,8 @@ def _encoder_templates() -> dict[str, str]:
     templates = dict(base)
     for spec in STREAM_SPECS:
         if spec.key == ROOT_KEY:
-            # The root is `#video=copy` -- repackaged, never encoded -- so it
-            # keeps no template here.
+            # The root is served directly from the endpoint and carries no
+            # `#video=` argument, so it keeps no template here.
             continue
         template = f"{base[spec.codec]} -b:v {spec.bitrate}"
         if spec.height is not None:
