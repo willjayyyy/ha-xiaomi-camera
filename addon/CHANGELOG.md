@@ -13,6 +13,11 @@ H.265 transcode at full resolution.
   transcode; the original stream is the only one that is not.
 - Existing entries keep their entities: the stored "h265" root selection is
   migrated to "original" on upgrade.
+- Every stream is now called the same thing in the options form and on the
+  device page, in your own language -- the form previously showed English
+  labels, and worded them differently from the entities.
+- The full-resolution transcodes are now called "H.264 full size" rather than
+  just "H.264", so they read as comparable to the scaled ones next to them.
 
 ## 1.1.1
 

@@ -63,8 +63,8 @@ in the integration's options, under **Video streams**.
 
 | Stream | Good for |
 |---|---|
-| Original | Recording, NVR software. The camera's own encoding at its own resolution, never re-encoded — whatever codec the camera sends. |
-| H.264 · Full size | Browsers and players that cannot decode H.265. Re-encoded to H.264. |
+| Original stream | Recording, NVR software. The camera's own encoding at its own resolution, never re-encoded — whatever codec the camera sends. |
+| H.264 full size | Browsers and players that cannot decode H.265. Re-encoded to H.264. |
 | 360p / 180p | Apple Home, remote viewing, dashboards showing several cameras at once. |
 | 720p | A middle ground when the camera's own resolution is higher. |
 
