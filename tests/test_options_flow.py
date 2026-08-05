@@ -92,9 +92,17 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
     # not its contents -- voluptuous does not repr into it -- so the offered
     # keys have to be read from the section's own inner schema instead.
     section_field = result["data_schema"].schema["camera_streams"]
-    stream_choices = section_field.schema.schema["42"].options
+    stream_selector = section_field.schema.schema["42"]
+    stream_choices = stream_selector.config["options"]
     assert set(stream_choices) == set(_KEYS)
     assert "h264_720" not in stream_choices
+
+    # A plain `cv.multi_select` renders its labels verbatim -- raw identifiers
+    # like "h264_360" -- because it has no notion of translation at all. Only
+    # a selector with a `translation_key` resolves labels from
+    # `selector.stream_key.options.*`, so asserting the key here is what
+    # would catch a regression back to `cv.multi_select` before it ships.
+    assert stream_selector.config["translation_key"] == "stream_key"
 
 
 async def test_a_camera_with_no_streams_chosen_is_rejected(hass) -> None:

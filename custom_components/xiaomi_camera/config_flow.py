@@ -23,6 +23,11 @@ from homeassistant.core import callback
 from homeassistant.data_entry_flow import section
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
 
 from .api import BridgeCamera, BridgeClient, BridgeError, BridgeNotLinkedError
@@ -435,7 +440,14 @@ def _cameras_schema(
     streams = {
         vol.Required(
             did, default=stream_options.get(did) or [ROOT_KEY]
-        ): cv.multi_select({key: key for key in available.get(did, [])})
+        ): SelectSelector(
+            SelectSelectorConfig(
+                options=available.get(did, []),
+                multiple=True,
+                translation_key="stream_key",
+                mode=SelectSelectorMode.LIST,
+            )
+        )
         for did in chosen
         if did in cameras
     }
