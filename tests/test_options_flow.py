@@ -25,7 +25,7 @@ if sys.version_info >= (3, 14):
     from custom_components.xiaomi_camera.api import BridgeCamera, CameraStream
     from custom_components.xiaomi_camera.const import DOMAIN
 
-_KEYS = ("h265", "h264", "h264_360")
+_KEYS = ("original", "h265", "h264", "h264_360")
 
 
 def _camera(did: str = "42") -> BridgeCamera:
@@ -43,9 +43,17 @@ def _camera(did: str = "42") -> BridgeCamera:
         streams=tuple(
             CameraStream(
                 key=key,
-                codec="h265" if key.startswith("h265") else "h264",
+                codec=(
+                    key
+                    if key == "original"
+                    else ("h265" if key.startswith("h265") else "h264")
+                ),
                 height=360 if key.endswith("360") else None,
-                url=f"rtsp://127.0.0.1:8554/camera_{did}_{key}",
+                url=(
+                    f"rtsp://127.0.0.1:8554/camera_{did}"
+                    if key == "original"
+                    else f"rtsp://127.0.0.1:8554/camera_{did}_{key}"
+                ),
             )
             for key in _KEYS
         ),
@@ -83,9 +91,9 @@ async def test_the_stream_choices_come_from_what_the_add_on_declared(hass) -> No
     """Not from a list hardcoded in the integration.
 
     The add-on and the integration ship separately. A camera here publishes
-    only three variants; the stream step must offer exactly those, so that an
-    add-on which gains or loses a variant is reflected without changing this
-    code.
+    only the variants its fixture declares; the stream step must offer exactly
+    those, so that an add-on which gains or loses a variant is reflected
+    without changing this code.
     """
     entry = await _loaded_entry(
         hass,

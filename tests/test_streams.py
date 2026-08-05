@@ -57,7 +57,7 @@ class TestUniqueId:
         assert unique_id("42", "h264_360", primary_key="h264") == "42_h264_360"
 
     def test_which_stream_is_primary_depends_on_the_entry(self) -> None:
-        """An entry migrated from `original` has h265 as its primary."""
+        """The bare id follows the entry's primary, whatever key that is."""
         assert unique_id("42", "h265", primary_key="h265") == "42"
         assert unique_id("42", "h264", primary_key="h265") == "42_h264"
 
@@ -156,6 +156,27 @@ class TestMigration:
     def test_a_v2_entry_without_h265_is_untouched(self) -> None:
         options = {"primary_stream": "h264", "camera_streams": {"42": ["h264"]}}
         assert migrate_v2_options(options) == options
+
+    def test_a_v2_entry_rewrites_h265_in_camera_streams_even_when_not_primary(
+        self,
+    ) -> None:
+        """The per-camera rewrite runs independently of the primary rewrite."""
+        options = {
+            "primary_stream": "h264",
+            "camera_streams": {"42": ["h264", "h265"], "7": ["h265"]},
+        }
+        migrated = migrate_v2_options(options)
+        assert migrated["primary_stream"] == "h264"
+        assert migrated["camera_streams"] == {
+            "42": ["h264", INTEGRATION_ROOT_KEY],
+            "7": [INTEGRATION_ROOT_KEY],
+        }
+
+    def test_a_v2_entry_with_h265_primary_and_no_camera_streams(self) -> None:
+        """A missing per-camera list still rewrites the primary."""
+        migrated = migrate_v2_options({"primary_stream": "h265"})
+        assert migrated["primary_stream"] == INTEGRATION_ROOT_KEY
+        assert "camera_streams" not in migrated
 
 
 class TestEntityCleanup:

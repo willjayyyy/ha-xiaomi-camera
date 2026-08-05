@@ -21,6 +21,7 @@ if sys.version_info >= (3, 14):
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.xiaomi_camera.api import BridgeCamera, CameraStream
+    from custom_components.xiaomi_camera.config_flow import _stream_label_map
     from custom_components.xiaomi_camera.const import DOMAIN
 
 
@@ -136,6 +137,71 @@ async def test_setup_completes_when_a_camera_declares_no_streams(hass) -> None:
         await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
+
+
+def test_stream_label_map_reads_the_runtime_selector_labels() -> None:
+    """The dropdown labels come from `translations/en.json`, not entity names.
+
+    `_stream_label_map` reads the runtime translation file on purpose -- the
+    original entity is named after the device, so its entity label is the bare
+    `{camera}`, which would read as a section header if it doubled as the
+    dropdown option. Reading `entity.camera` instead would render `original`
+    as the bare camera name and `h265` as "H.265" rather than "H.265 · Full
+    size"; this pins the mapping so that regression fails.
+    """
+    assert _stream_label_map(["original", "h265", "h264_360"]) == {
+        "original": "Original",
+        "h265": "H.265 · Full size",
+        "h264_360": "H.264 · 360p",
+    }
+
+
+async def test_the_stream_default_falls_back_when_the_add_on_has_no_root(
+    hass,
+) -> None:
+    """C6: the stream default must be an option the add-on actually offers.
+
+    The entry's primary is `original` (fixed at creation), but an older add-on
+    never gained that stream and publishes only, say, `h264`. If the dropdown
+    still defaulted to `["original"]`, the default would not be among the
+    options and the flow could not be completed. The fallback mirrors
+    `selected_streams`: the first published stream when the primary is not
+    among them.
+    """
+    with patch("custom_components.xiaomi_camera.config_flow.BridgeClient") as client:
+        client.return_value.async_health = AsyncMock(return_value={"status": "ok"})
+        client.return_value.async_cameras = AsyncMock(
+            return_value=[_camera("42", (_stream("42", "h264"),))]
+        )
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": "user"}
+        )
+        assert result["step_id"] == "manual"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"host": "127.0.0.1", "port": 8099},
+        )
+        assert result["step_id"] == "cameras"
+
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            user_input={"cameras": ["42"], "auto_add": True},
+        )
+        assert result["step_id"] == "streams"
+
+        # An empty submission is what the form sends when nothing is changed,
+        # so the default has to survive schema validation -- "original" would
+        # not be a valid option here and would fail the flow.
+        assert result["data_schema"]({}) == {"Camera 42 (42)": ["h264"]}
+
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert result["options"]["camera_streams"]["42"] == ["h264"]
+    assert result["options"]["primary_stream"] == "original"
 
 
 async def test_options_flow_completes_when_a_camera_declares_no_streams(

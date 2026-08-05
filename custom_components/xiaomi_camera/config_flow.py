@@ -541,6 +541,17 @@ def _stream_label_map(keys: list[str]) -> dict[str, str]:
     return {key: options.get(key, key) for key in keys}
 
 
+def _default_selection(available: list[str], primary: str) -> list[str]:
+    """The stream a camera defaults to when nothing has been chosen for it.
+
+    Mirrors `selected_streams`'s fallback: the primary when the add-on
+    publishes it, otherwise the first stream it does publish. A default naming
+    a stream the dropdown does not offer would fail validation on submit -- an
+    older add-on that never gained the `original` stream is exactly that case.
+    """
+    return [primary] if primary in available else available[:1]
+
+
 def _streams_schema(
     cameras: dict[str, str],
     chosen_cameras: list[str],
@@ -557,8 +568,9 @@ def _streams_schema(
     confused with another's. The field is keyed by the camera's name plus its
     device id, so the form reads like something a person recognises and the id
     keeps the key unique even when two cameras share a name. Defaults to the
-    primary stream (see `streams.py`), or to the entry's current choice in the
-    options flow.
+    primary stream (see `streams.py`) -- or to the first published stream when
+    the add-on does not publish it -- and in the options flow to the entry's
+    current choice where one exists.
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here.
@@ -567,7 +579,12 @@ def _streams_schema(
     for did in chosen_cameras:
         if did not in cameras or not available.get(did):
             continue
-        default = stream_options.get(did, [primary]) if stream_options else [primary]
+        current = stream_options.get(did) if stream_options else None
+        default = (
+            current
+            if current is not None
+            else _default_selection(available[did], primary)
+        )
         streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
             cv.multi_select(_stream_label_map(available[did]))
         )
@@ -615,7 +632,7 @@ def _with_defaulted_streams(
     return {
         **chosen_streams,
         **{
-            did: [primary]
+            did: _default_selection(available[did], primary)
             for did in ticked_cameras
             if did not in chosen_streams and available.get(did)
         },

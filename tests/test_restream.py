@@ -38,6 +38,15 @@ _STRINGS_JSON = (
     / "xiaomi_camera"
     / "strings.json"
 )
+#: The file the dropdown actually reads at runtime -- `config_flow._stream_label_map`
+#: loads this rather than `strings.json`, so this guard watches the right file.
+_TRANSLATIONS_EN_JSON = (
+    Path(__file__).resolve().parent.parent
+    / "custom_components"
+    / "xiaomi_camera"
+    / "translations"
+    / "en.json"
+)
 
 
 def make_options(mode: AccessMode, user: str = "", password: str = "") -> Options:
@@ -394,4 +403,15 @@ class TestStreamKeysMatchTranslationLabels:
     def test_every_stream_key_has_a_translation_label(self) -> None:
         strings = json.loads(_STRINGS_JSON.read_text(encoding="utf-8"))
         labelled = set(strings["selector"]["stream_key"]["options"])
+        assert {spec.key for spec in STREAM_SPECS} == labelled
+
+    def test_every_stream_key_has_a_runtime_selector_label(self) -> None:
+        """The dropdown reads `translations/en.json`, not `strings.json`.
+
+        `config_flow._stream_label_map` loads the runtime translation file, so
+        this guard watches that file: a stream spec without a label there would
+        show as a raw identifier in the dropdown again.
+        """
+        en = json.loads(_TRANSLATIONS_EN_JSON.read_text(encoding="utf-8"))
+        labelled = set(en["selector"]["stream_key"]["options"])
         assert {spec.key for spec in STREAM_SPECS} == labelled
