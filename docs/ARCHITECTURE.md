@@ -305,12 +305,14 @@ they are the standard encoders for their formats. The Dockerfile greps the
 built ffmpeg's encoder list for both after compiling it, so a build that loses
 one fails there rather than when a user opens a camera.
 
-The build was permissively licensed, without either encoder, until this
-branch. That earlier choice rested on the add-on only ever copying streams,
-never encoding them — a build without `libx264` or `libx265` was enough to
-remux H.265 into RTSP. Publishing re-encoded and rescaled variants stopped
-that being true, and the standard encoders for both formats require the
-copyleft build, so the build had to move with it.
+The image shipped the LGPL build, which carries neither encoder, until this
+branch. LGPL's weak copyleft (its library-linking exception) was enough for
+that build to be acceptable, and that earlier choice rested on the add-on
+only ever copying streams, never encoding them — a build without `libx264`
+or `libx265` was enough to remux H.265 into RTSP. Publishing re-encoded and
+rescaled variants stopped that being true: the standard encoders for both
+formats are available only under GPL's strong copyleft, so the build had to
+move with it.
 
 The integration hands Home Assistant the URL for whichever variants a user
 selects per camera; `Restreamer.rtsp_url` reports the root regardless of what
