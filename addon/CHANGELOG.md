@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.1
+## 1.1.1-preview
 
 Fix the regression that froze video after 1.1.0, and clean up stream setup.
 
