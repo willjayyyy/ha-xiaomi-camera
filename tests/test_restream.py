@@ -32,21 +32,17 @@ from bridge.restream import (
     stream_name,
 )
 
-_STRINGS_JSON = (
-    Path(__file__).resolve().parent.parent
-    / "custom_components"
-    / "xiaomi_camera"
-    / "strings.json"
+_COMPONENT = (
+    Path(__file__).resolve().parent.parent / "custom_components" / "xiaomi_camera"
 )
-#: The file the dropdown actually reads at runtime -- `config_flow._stream_label_map`
-#: loads its `entity.camera` table rather than `strings.json`, so this guard
-#: watches the right file.
-_TRANSLATIONS_EN_JSON = (
-    Path(__file__).resolve().parent.parent
-    / "custom_components"
-    / "xiaomi_camera"
-    / "translations"
-    / "en.json"
+#: Every file carrying stream labels. `strings.json` is what Home Assistant
+#: validates, the two under `translations/` are what it actually serves --
+#: and a user-visible string has to exist in both languages to count as done,
+#: so all three are checked rather than only the English one.
+_LABEL_FILES = (
+    _COMPONENT / "strings.json",
+    _COMPONENT / "translations" / "en.json",
+    _COMPONENT / "translations" / "zh-Hans.json",
 )
 
 
@@ -401,19 +397,44 @@ class TestStreamKeysMatchTranslationLabels:
     the exact defect already found once on this branch.
     """
 
-    def test_every_stream_key_has_a_translation_label(self) -> None:
-        strings = json.loads(_STRINGS_JSON.read_text(encoding="utf-8"))
-        labelled = set(strings["selector"]["stream_key"]["options"])
-        assert {spec.key for spec in STREAM_SPECS} == labelled
+    @pytest.mark.parametrize("path", _LABEL_FILES)
+    def test_every_stream_key_has_a_dropdown_label(self, path: Path) -> None:
+        """`selector.stream_key.options` names every stream, root included.
 
-    def test_every_stream_key_has_a_runtime_entity_label(self) -> None:
-        """The dropdown reads `translations/en.json`'s `entity.camera`.
-
-        `config_flow._stream_label_map` loads the runtime translation file's
-        entity-name table, so this guard watches that table: a stream spec
-        without an entity label there would show as a raw identifier in the
-        dropdown again.
+        This is the table the stream dropdown reads at runtime, so a spec
+        missing from it shows a raw identifier in the form.
         """
-        en = json.loads(_TRANSLATIONS_EN_JSON.read_text(encoding="utf-8"))
-        labelled = set(en["entity"]["camera"])
+        table = json.loads(path.read_text(encoding="utf-8"))["selector"]
+        labelled = set(table["stream_key"]["options"])
         assert {spec.key for spec in STREAM_SPECS} == labelled
+
+    @pytest.mark.parametrize("path", _LABEL_FILES)
+    def test_entity_labels_cover_every_stream_but_the_root(self, path: Path) -> None:
+        """`entity.camera` names every stream *except* the root one.
+
+        The root stream's entity takes the device's own name -- it declares
+        `_attr_name = None` (see `streams.takes_device_name`) -- so a label
+        for it would never be read. An entry here would be dead text that
+        looks live, which is how the empty `"original": {"name": ""}` string
+        survived: it read as a deliberate label and was really a lookup miss.
+        """
+        table = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
+        expected = {spec.key for spec in STREAM_SPECS} - {ROOT_KEY}
+        assert set(table) == expected
+
+    @pytest.mark.parametrize("path", _LABEL_FILES)
+    def test_the_two_tables_say_the_same_words(self, path: Path) -> None:
+        """A stream is called the same thing in the form and on the device page.
+
+        Two tables exist because Home Assistant puts selector options and
+        entity names in different places, and neither can reference the other
+        -- so the agreement cannot be structural and has to be a test. Without
+        it they drift: the dropdown once read "H.265 · Full size" for the
+        stream whose entity was named "H.265".
+        """
+        data = json.loads(path.read_text(encoding="utf-8"))
+        options = data["selector"]["stream_key"]["options"]
+        entities = data["entity"]["camera"]
+        assert {key: options[key] for key in entities} == {
+            key: entry["name"] for key, entry in entities.items()
+        }

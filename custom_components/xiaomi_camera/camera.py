@@ -14,7 +14,7 @@ from .const import ATTR_LAN_ONLINE, ATTR_MODEL, ATTR_POWERED_ON
 from .coordinator import XiaomiCameraCoordinator
 from .entity import XiaomiCameraEntity
 from .selection import selected
-from .streams import primary_stream, selected_streams, unique_id
+from .streams import primary_stream, selected_streams, takes_device_name, unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -75,10 +75,20 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         # the entity name as the device name plus the translated stream label,
         # on every surface -- the device page, the entity list, the states --
         # from one source of truth. The labels are therefore label-only
-        # ("H.265 720p"), never "{camera} ...", so the device name is not
-        # doubled, and the registry never strips a device prefix it then has to
-        # add back by hand.
-        self._attr_translation_key = stream_key
+        # ("H.265 720p"), never "{camera} ...". Writing the device name into
+        # the label does not survive anyway: both `_async_get_entity_name` in
+        # the registry and `computeEntityEntryName` in the frontend strip a
+        # device-name prefix back off, including one written into the
+        # user-rename field.
+        if takes_device_name(stream_key):
+            # Not an empty label: `_attr_name = None` is the declaration that
+            # this entity *is* the device, which is what makes Home Assistant
+            # fall back to the device's own name. An empty translation happens
+            # to produce the same name today only because the lookup treats it
+            # as a miss.
+            self._attr_name = None
+        else:
+            self._attr_translation_key = stream_key
 
     @property
     def is_streaming(self) -> bool:

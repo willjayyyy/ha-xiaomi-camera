@@ -21,7 +21,7 @@ if sys.version_info >= (3, 14):
     from pytest_homeassistant_custom_component.common import MockConfigEntry
 
     from custom_components.xiaomi_camera.api import BridgeCamera, CameraStream
-    from custom_components.xiaomi_camera.config_flow import _stream_label_map
+    from custom_components.xiaomi_camera.config_flow import _stream_labels
     from custom_components.xiaomi_camera.const import DOMAIN
 
 
@@ -139,21 +139,46 @@ async def test_setup_completes_when_a_camera_declares_no_streams(hass) -> None:
     assert result["type"] == "create_entry"
 
 
-def test_stream_label_map_embeds_the_camera_name() -> None:
-    """The dropdown options carry the device name, from `entity.camera`.
+async def test_the_dropdown_labels_follow_the_users_language(hass) -> None:
+    """Stream labels come from the user's language, not a fixed file.
 
-    `_stream_label_map` reads the entity-name translation table -- the same
-    one the entities' own names come from -- and substitutes the camera name
-    into the `{camera}` placeholder. The original stream's label is the bare
-    `{camera}`, so its option is the device's own name; every other option
-    reads "Living room H.265" and the like. Pinning this mapping keeps the
-    dropdown from regressing to bare codec labels or the literal "Original".
+    The form and the device page have to call a stream the same thing, or a
+    user cannot match what they ticked against what appeared. Reading
+    `translations/en.json` directly -- which this did before -- gave a Chinese
+    user an English form over a Chinese device page.
+
+    Both languages are asserted, because reading one file happens to pass an
+    English-only check.
     """
-    assert _stream_label_map(["original", "h265", "h264_360"], "Living room") == {
-        "original": "Living room",
-        "h265": "Living room H.265",
-        "h264_360": "Living room H.264 360p",
+    hass.config.language = "en"
+    assert await _stream_labels(hass) == {
+        "original": "Original stream",
+        "h265": "H.265 full size",
+        "h265_720": "H.265 720p",
+        "h265_360": "H.265 360p",
+        "h265_180": "H.265 180p",
+        "h264": "H.264 full size",
+        "h264_720": "H.264 720p",
+        "h264_360": "H.264 360p",
+        "h264_180": "H.264 180p",
     }
+
+    hass.config.language = "zh-Hans"
+    chinese = await _stream_labels(hass)
+    assert chinese["original"] == "原始码流"
+    assert chinese["h265"] == "H.265 原始尺寸"
+
+
+async def test_the_dropdown_options_do_not_repeat_the_camera_name(hass) -> None:
+    """The option labels carry no camera name; their field already does.
+
+    Each camera gets its own field, labelled "name (did)". Prefixing the
+    camera name onto every option too made the form read "Living room (123)"
+    over a list of "Living room H.264 360p".
+    """
+    labels = await _stream_labels(hass)
+    assert not any("{camera}" in label for label in labels.values())
+    assert labels["h264_360"] == "H.264 360p"
 
 
 async def test_the_stream_default_falls_back_when_the_add_on_has_no_root(

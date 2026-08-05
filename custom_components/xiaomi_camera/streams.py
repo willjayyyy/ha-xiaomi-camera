@@ -21,6 +21,22 @@ from .const import CONF_CAMERA_STREAMS, CONF_PRIMARY_STREAM
 ROOT_KEY = "original"
 
 
+def takes_device_name(key: str) -> bool:
+    """Whether this stream's entity carries the device's own name.
+
+    The root stream is the camera's picture as the camera produces it, so its
+    entity *is* the device -- which Home Assistant spells `_attr_name = None`.
+    Every other stream is one aspect of the device and carries a label.
+
+    Here rather than inline in `camera.py` so the rule sits in the module that
+    can be imported and tested without Home Assistant, next to the other
+    decisions about what identity an entity carries. It also states which
+    translation entries can exist: a stream named after its device has no
+    label to translate, and `tests/test_restream.py` holds the tables to that.
+    """
+    return key == ROOT_KEY
+
+
 def unique_id(did: str, key: str, primary_key: str) -> str:
     """The permanent identity of the entity for one stream.
 

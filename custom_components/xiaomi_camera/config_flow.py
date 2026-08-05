@@ -9,9 +9,7 @@ running on another machine) the same flow accepts an address instead.
 
 from __future__ import annotations
 
-import json
 import logging
-from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
@@ -21,10 +19,11 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service_info.hassio import HassioServiceInfo
+from homeassistant.helpers.translation import async_get_translations
 
 from .api import BridgeCamera, BridgeClient, BridgeError, BridgeNotLinkedError
 from .const import (
@@ -345,6 +344,7 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._chosen_cameras,
                 self._available_streams,
                 ROOT_KEY,
+                await _stream_labels(self.hass),
             ),
             errors=errors,
             last_step=True,
@@ -492,6 +492,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
                 self._chosen_cameras,
                 self._available_streams,
                 primary,
+                await _stream_labels(self.hass),
                 stream_options=self.config_entry.options.get(CONF_CAMERA_STREAMS, {}),
             ),
             errors=errors,
@@ -523,26 +524,38 @@ def _camera_checklist_schema(
     )
 
 
-def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
-    """Stream key -> display label, from the entity-name translation table.
+async def _stream_labels(hass: HomeAssistant) -> dict[str, str]:
+    """Stream key -> dropdown label, in the user's own language.
 
-    The dropdown options read the same `entity.camera` table the entities'
-    own names come from. The labels are codec-only ("H.264 360p") -- Home
-    Assistant composes the entity name by prefixing the device name -- so the
-    dropdown prefixes it here the same way, reading "Living room H.264 360p".
-    The original stream's label is empty, so its option is the device name.
+    Read through Home Assistant's translation helper rather than by opening
+    `en.json`: a Chinese user picking "H.265 720p" in the form and finding
+    "H.265 720p" on the device page is the whole point, and reading one fixed
+    file gives them an English form and a Chinese device page.
+
+    `selector.stream_key.options` is the table, because it is the only one
+    naming every stream. The entity table deliberately has no entry for the
+    root stream -- that entity takes the device's own name (see
+    `streams.takes_device_name`) -- but the dropdown still has to call it
+    something. A test keeps the two tables saying the same words for every
+    stream they share.
+
+    The camera's name is not prefixed onto the options: the field these
+    options belong to is already labelled with it, so prefixing made the form
+    read "Living room (123)" over a list of "Living room H.264 360p".
+
+    Resolved in the server's language, not each user's: `cv.multi_select`
+    bakes its labels into the schema here, so there is no later point at which
+    the frontend could translate them per viewer.
     """
-    path = Path(__file__).with_name("translations") / "en.json"
-    try:
-        entities = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
-    except (OSError, KeyError, ValueError):
-        entities = {}
-    labels = {}
-    for key in keys:
-        entry = entities.get(key)
-        label = entry.get("name", key) if isinstance(entry, dict) else entry or key
-        labels[key] = f"{camera_name} {label}".strip() if label else camera_name
-    return labels
+    prefix = f"component.{DOMAIN}.selector.stream_key.options."
+    translations = await async_get_translations(
+        hass, hass.config.language, "selector", {DOMAIN}
+    )
+    return {
+        key.removeprefix(prefix): label
+        for key, label in translations.items()
+        if key.startswith(prefix)
+    }
 
 
 def _default_selection(available: list[str], primary: str) -> list[str]:
@@ -561,6 +574,7 @@ def _streams_schema(
     chosen_cameras: list[str],
     available: dict[str, list[str]],
     primary: str,
+    labels: dict[str, str],
     stream_options: dict[str, list[str]] | None = None,
 ) -> vol.Schema:
     """One stream checklist per selected camera, opening from a dropdown.
@@ -578,6 +592,9 @@ def _streams_schema(
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here.
+
+    `labels` comes from `_stream_labels`; a key missing from it falls back to
+    the raw key, which reads as an identifier but still lets the form work.
     """
     streams = {}
     for did in chosen_cameras:
@@ -590,7 +607,7 @@ def _streams_schema(
             else _default_selection(available[did], primary)
         )
         streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
-            cv.multi_select(_stream_label_map(available[did], cameras[did]))
+            cv.multi_select({key: labels.get(key, key) for key in available[did]})
         )
     return vol.Schema(streams)
 

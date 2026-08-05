@@ -93,11 +93,13 @@ async def test_one_entity_is_created_per_selected_stream(hass) -> None:
 
 
 async def test_variant_entities_name_the_camera(hass) -> None:
-    """Variant entities carry the device name in their own name.
+    """Every stream entity's full name carries the device name.
 
-    The primary can rely on Home Assistant's device-name prefixing. Variants
-    cannot: HomeKit and voice assistants show only the entity name, so it has
-    to say which camera it is by itself.
+    Home Assistant composes it from the device name and the label, so the
+    integration never writes the device name into a label itself -- both the
+    registry and the frontend strip such a prefix back off. This asserts the
+    composed result that HomeKit, voice assistants and the entity picker read,
+    which is where knowing *which* camera actually matters.
     """
     await _setup(
         hass,
@@ -113,7 +115,10 @@ async def test_variant_entities_name_the_camera(hass) -> None:
     variant = registry.async_get_entity_id("camera", DOMAIN, "42_h264_360")
     assert primary is not None and variant is not None
 
-    assert hass.states.get(primary).attributes["friendly_name"] == "Living room H.264"
+    assert (
+        hass.states.get(primary).attributes["friendly_name"]
+        == "Living room H.264 full size"
+    )
     assert (
         hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
     )
