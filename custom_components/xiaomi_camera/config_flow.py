@@ -283,7 +283,12 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         """Choose which cameras to bring into Home Assistant."""
         errors: dict[str, str] = {}
         if user_input is not None:
-            chosen_streams = user_input[CONF_CAMERA_STREAMS]
+            chosen_streams = _with_defaulted_streams(
+                user_input[CONF_CAMERAS],
+                user_input[CONF_CAMERA_STREAMS],
+                self._available_streams,
+                ROOT_KEY,
+            )
             if any(not keys for keys in chosen_streams.values()):
                 # The camera was ticked one field above, so an empty stream
                 # list is a contradiction rather than a choice. Saying so
@@ -293,7 +298,10 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 return self._create(
                     {
-                        **_options_from(self._cameras, user_input),
+                        **_options_from(
+                            self._cameras,
+                            {**user_input, CONF_CAMERA_STREAMS: chosen_streams},
+                        ),
                         # Fixed at creation and never revisited: this is what
                         # binds the bare `<did>` entity to a stream.
                         # Recomputing it later would change an existing
@@ -304,7 +312,12 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="cameras",
             data_schema=_cameras_schema(
-                self._cameras, list(self._cameras), True, {}, self._available_streams
+                self._cameras,
+                list(self._cameras),
+                True,
+                {},
+                self._available_streams,
+                ROOT_KEY,
             ),
             errors=errors,
         )
@@ -363,7 +376,13 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            chosen_streams = user_input[CONF_CAMERA_STREAMS]
+            primary = primary_stream(dict(self.config_entry.options))
+            chosen_streams = _with_defaulted_streams(
+                user_input[CONF_CAMERAS],
+                user_input[CONF_CAMERA_STREAMS],
+                self._available_streams,
+                primary,
+            )
             if any(not keys for keys in chosen_streams.values()):
                 # The camera was ticked one field above, so an empty stream
                 # list is a contradiction rather than a choice. Saying so
@@ -373,13 +392,14 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
             else:
                 return self.async_create_entry(
                     data={
-                        **_options_from(self._cameras, user_input),
+                        **_options_from(
+                            self._cameras,
+                            {**user_input, CONF_CAMERA_STREAMS: chosen_streams},
+                        ),
                         # Carried forward, not recomputed: it fixes which
                         # stream the bare `<did>` entity is bound to, and
                         # this flow never revisits that decision.
-                        CONF_PRIMARY_STREAM: primary_stream(
-                            dict(self.config_entry.options)
-                        ),
+                        CONF_PRIMARY_STREAM: primary,
                     }
                 )
 
@@ -418,6 +438,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
                 auto_add,
                 self.config_entry.options.get(CONF_CAMERA_STREAMS, {}),
                 self._available_streams,
+                primary_stream(dict(self.config_entry.options)),
             ),
             errors=errors,
         )
@@ -429,18 +450,25 @@ def _cameras_schema(
     auto_add: bool,
     stream_options: dict[str, list[str]],
     available: dict[str, list[str]],
+    primary: str,
 ) -> vol.Schema:
     """A checklist of cameras, labelled the way the Mi Home app labels them.
 
     Stream choice sits in a collapsed section: first-time setup asks nothing
     about it, and the eight checkboxes per camera only appear for someone who
     goes looking. A default that most users never revisit is the one that has
-    to be right, which is why it is the camera's own encoding.
+    to be right, which is why it defaults to `primary` -- the same stream the
+    camera's bare `<did>` entity is already bound to (see `streams.py`), not a
+    value that might disagree with it.
+
+    A camera reporting no streams at all -- an add-on predating
+    `/api/cameras.streams` -- gets no selector here. Offering one with no
+    options either strands the user on `no_streams` forever or accepts a
+    default `SelectSelector` rejects outright, since nothing it could submit
+    is among the (empty) options.
     """
     streams = {
-        vol.Required(
-            did, default=stream_options.get(did) or [ROOT_KEY]
-        ): SelectSelector(
+        vol.Required(did, default=stream_options.get(did) or [primary]): SelectSelector(
             SelectSelectorConfig(
                 options=available.get(did, []),
                 multiple=True,
@@ -449,7 +477,7 @@ def _cameras_schema(
             )
         )
         for did in chosen
-        if did in cameras
+        if did in cameras and available.get(did)
     }
     return vol.Schema(
         {
@@ -462,6 +490,35 @@ def _cameras_schema(
             ),
         }
     )
+
+
+def _with_defaulted_streams(
+    ticked_cameras: list[str],
+    chosen_streams: dict[str, list[str]],
+    available: dict[str, list[str]],
+    primary: str,
+) -> dict[str, list[str]]:
+    """Fill in a stream selection for every ticked camera the form omitted.
+
+    `_cameras_schema` only builds a selector for a camera already ticked when
+    the form was rendered, so ticking a *new* camera in the same submission
+    leaves it with no key here at all -- not an empty one, which the
+    `no_streams` check already catches. Left unfilled, the eventual entities
+    would be decided by `selected_streams`'s own fallback instead of an
+    explicit choice recorded alongside the others.
+
+    A camera with nothing to choose from (`available` empty) is left out
+    entirely: forcing a key that names no real stream would ask for an entity
+    pointing at a stream that does not exist.
+    """
+    return {
+        **chosen_streams,
+        **{
+            did: [primary]
+            for did in ticked_cameras
+            if did not in chosen_streams and available.get(did)
+        },
+    }
 
 
 def _options_from(
