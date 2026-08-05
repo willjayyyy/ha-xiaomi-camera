@@ -52,7 +52,7 @@ https://github.com/willjayyyy/ha-xiaomi-camera
 登录后，小米会将浏览器重定向到一个**无法打开的地址**，出现空白页或报错属于
 正常现象。复制地址栏中的完整地址，粘贴回加载项页面即可完成登录。
 
-### 选择视频流
+## 选择视频流
 
 每台摄像头可以发布同一画面的多个版本，在集成选项的 **视频流** 中按摄像头选择。
 
@@ -68,7 +68,8 @@ https://github.com/willjayyyy/ha-xiaomi-camera
 
 **Apple 家庭：** 添加一路 360p，并让 HomeKit 桥接指向该实体。Home Assistant
 会按 HomeKit 指定的码率重新编码，而该码率很低，因此画面尺寸小反而更清晰。
-请不要勾选 *支持原生 H.264 流的摄像机*。
+请不要勾选「支持原生 H.264 流的摄像机」（*Cameras that support native H.264
+streams*）。
 
 ## 不用 Home Assistant 也能跑
 

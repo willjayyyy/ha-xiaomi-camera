@@ -56,7 +56,7 @@ After signing in, Xiaomi redirects your browser to an address that **will not
 open**. A blank page or an error there is expected. Copy the full address from
 the address bar and paste it into the add-on page to complete sign-in.
 
-### Choosing streams
+## Choosing streams
 
 Each camera can publish several versions of the same picture. Pick per camera
 in the integration's options, under **Video streams**.
