@@ -9,6 +9,7 @@ why they survived review and why the camera that worked kept working.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from bridge import streaming
@@ -158,12 +159,22 @@ class TestColdStart:
     """
 
     async def test_subscribe_waits_for_parameter_sets(self) -> None:
+        """`subscribe()` itself must not return before the camera has sent
+        anything -- not merely "the first unit happens to carry a VPS", which
+        the feeder guarantees on every delivery regardless of whether anyone
+        waited for it."""
         client = _FakeClient(first_frame_delay=0.05)
         session = _session(client)
 
+        started = time.monotonic()
         async with session.subscribe() as consumer:
+            elapsed = time.monotonic() - started
             first = await asyncio.wait_for(consumer.queue.get(), timeout=1.0)
 
+        assert elapsed >= 0.04, (
+            "subscribe() returned before the camera sent its first frame -- "
+            "the wait for parameter sets was skipped"
+        )
         assert b"\x40\x01" in first.payload, "the first unit carries no VPS"
         await session.async_stop()
 

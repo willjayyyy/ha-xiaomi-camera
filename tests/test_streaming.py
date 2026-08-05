@@ -9,14 +9,43 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 from bridge.framing import Consumer as _Consumer
 from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.framing import ParameterSets as _ParameterSets
 from bridge.mux import AUDIO_CODEC_OPUS
-from bridge.streaming import audio_codec_for
-from miot.types import MIoTCameraCodec
+from bridge.nal import Codec
+from bridge.streaming import CameraSession, audio_codec_for
+from miot.types import MIoTCameraCodec, MIoTCameraVideoQuality
+
+_SC = b"\x00\x00\x00\x01"
+#: H.265 VPS (type 32) and SPS (type 33): (byte >> 1) & 0x3F recovers the type.
+_VPS = b"\x40\x01"
+_SPS = b"\x42\x01"
+#: An IRAP slice (type 19, within the 16..23 keyframe range) and an ordinary
+#: non-IRAP, non-parameter-set slice (type 1), both without a start code --
+#: `_fan_out` is given whole payloads, which carry their own start codes.
+_KEYFRAME_PAYLOAD = _SC + b"\x26\x01\x02\x03"
+_ORDINARY_PAYLOAD = _SC + b"\x02\x01\x02\x03"
+
+
+def _bare_session() -> CameraSession:
+    """A session with no live camera behind it -- enough state for `_fan_out`.
+
+    `_fan_out` neither touches the client nor awaits anything, so building a
+    real `CameraSession` and calling it directly exercises the merged
+    mechanism itself rather than a hand-rolled copy of its logic.
+    """
+    session = CameraSession(
+        client=None,
+        info=SimpleNamespace(name="Test camera", did="0"),
+        quality=MIoTCameraVideoQuality.LOW,
+        enable_audio=False,
+    )
+    session._codec = Codec.H265
+    return session
 
 
 class TestConsumer:
@@ -95,27 +124,59 @@ class TestFallingBehind:
 
 
 class TestParameterReplay:
-    """One mechanism, not two.
+    """One mechanism, not two, exercised through the real `_fan_out`.
 
     A joining consumer and a resyncing one both need the parameter sets, and
     the code used to answer that in two places -- a free-standing chunk pushed
     at subscribe time, and a re-injection after a resync. A free-standing chunk
     has no timestamp, and under a container that is a special case with nothing
-    to fill it in with.
+    to fill it in with. These tests drive `CameraSession._fan_out` itself, not
+    a copy of its logic, so a regression in the merged mechanism fails one of
+    them.
     """
 
     def test_a_new_consumer_starts_needing_parameters(self) -> None:
         assert _Consumer(queue=asyncio.Queue()).needs_parameters is True
 
-    def test_a_resync_asks_for_them_again(self) -> None:
+    def test_a_joining_consumer_gets_them_prepended_once(self) -> None:
+        session = _bare_session()
+        session._parameter_sets.remember(_VPS)
+        session._parameter_sets.remember(_SPS)
+        consumer = _Consumer(queue=asyncio.Queue())
+        session._consumers.add(consumer)
+
+        session._fan_out(MediaUnit(MediaKind.VIDEO, 1_000, _ORDINARY_PAYLOAD))
+
+        unit = consumer.queue.get_nowait()
+        assert unit.payload == session._parameter_sets.as_annex_b() + _ORDINARY_PAYLOAD
+        assert consumer.needs_parameters is False
+
+    def test_a_resynced_consumer_gets_them_again_at_the_next_keyframe(self) -> None:
+        session = _bare_session()
+        session._parameter_sets.remember(_VPS)
+        consumer = _Consumer(queue=asyncio.Queue())
+        consumer.needs_parameters = False  # already served once, before falling behind
+        consumer.resyncing = True
+        session._consumers.add(consumer)
+
+        session._fan_out(MediaUnit(MediaKind.VIDEO, 2_000, _KEYFRAME_PAYLOAD))
+
+        unit = consumer.queue.get_nowait()
+        assert unit.payload == session._parameter_sets.as_annex_b() + _KEYFRAME_PAYLOAD
+        assert consumer.resyncing is False
+        assert consumer.needs_parameters is False
+
+    def test_a_consumer_that_already_has_them_is_not_sent_them_again(self) -> None:
+        session = _bare_session()
+        session._parameter_sets.remember(_VPS)
         consumer = _Consumer(queue=asyncio.Queue())
         consumer.needs_parameters = False
-        consumer.resyncing = True
-        # What the fan-out does when a resyncing consumer reaches a keyframe.
-        if consumer.resyncing:
-            consumer.resyncing = False
-            consumer.needs_parameters = True
-        assert consumer.needs_parameters is True
+        session._consumers.add(consumer)
+
+        session._fan_out(MediaUnit(MediaKind.VIDEO, 3_000, _ORDINARY_PAYLOAD))
+
+        unit = consumer.queue.get_nowait()
+        assert unit.payload == _ORDINARY_PAYLOAD
 
 
 class TestMediaUnits:
