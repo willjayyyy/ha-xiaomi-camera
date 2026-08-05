@@ -193,6 +193,17 @@ class TestStreamCatalogue:
         assert "scale" not in config["ffmpeg"]["h264"]
         assert "scale" not in config["streams"][stream_name("42")]
 
+    def test_the_source_resolution_h264_stream_is_bitrate_capped(self) -> None:
+        """The full-resolution H.264 variant is a real transcode, not a copy.
+
+        Unlike the H.265 root, it is not `#video=copy`, so leaving it without
+        `-b:v` would let libx264 fall back to CRF-based rate control instead
+        of the documented 2M ceiling.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "-b:v 2M" in config["ffmpeg"]["h264"]
+        assert "scale" not in config["ffmpeg"]["h264"]
+
 
 class TestPorts:
     def test_listeners_do_not_collide(self) -> None:

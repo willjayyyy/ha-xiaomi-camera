@@ -113,6 +113,9 @@ class StreamSpec:
 #: be filtered out. An upscale wastes nothing that is not already idle: no
 #: producer starts until a consumer connects.
 STREAM_SPECS: tuple[StreamSpec, ...] = (
+    # The root's bitrate is documentary only: it is always `#video=copy` (see
+    # `build_config`), so no template is ever generated for it and this value
+    # is never read.
     StreamSpec("hevc", "h265", None, "2M"),
     StreamSpec("hevc_720", "h265", 720, "2M"),
     StreamSpec("hevc_360", "h265", 360, "512k"),
@@ -153,11 +156,14 @@ def _encoder_templates() -> dict[str, str]:
     base = {"h264": _H264_ENCODER, "h265": _H265_ENCODER}
     templates = dict(base)
     for spec in STREAM_SPECS:
-        if spec.height is None:
+        if spec.key == ROOT_KEY:
+            # The root is `#video=copy` -- repackaged, never encoded -- so it
+            # keeps no template here.
             continue
-        templates[spec.template] = (
-            f"{base[spec.codec]} -b:v {spec.bitrate} -vf scale=-2:{spec.height}"
-        )
+        template = f"{base[spec.codec]} -b:v {spec.bitrate}"
+        if spec.height is not None:
+            template += f" -vf scale=-2:{spec.height}"
+        templates[spec.template] = template
     return templates
 
 
