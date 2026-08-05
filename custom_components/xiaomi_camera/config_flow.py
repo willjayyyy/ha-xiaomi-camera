@@ -313,7 +313,7 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             chosen_streams = _with_defaulted_streams(
                 self._chosen_cameras,
-                user_input,
+                _stream_labels_to_dids(user_input, self._cameras, self._chosen_cameras),
                 self._available_streams,
                 ROOT_KEY,
             )
@@ -461,7 +461,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
         if user_input is not None:
             chosen_streams = _with_defaulted_streams(
                 self._chosen_cameras,
-                user_input,
+                _stream_labels_to_dids(user_input, self._cameras, self._chosen_cameras),
                 self._available_streams,
                 primary,
             )
@@ -526,9 +526,13 @@ def _streams_schema(
     """One stream selector per selected camera.
 
     A separate field per camera rather than a shared list, so one camera's
-    choice can never be confused with another's. Defaults to `primary` -- the
-    same stream the camera's bare `<did>` entity is already bound to (see
-    `streams.py`), not a value that might disagree with it.
+    choice can never be confused with another's. The field is keyed by the
+    camera's name plus its device id -- Home Assistant labels a dynamic field
+    by its schema key, so the id alone would show as an opaque number. The id
+    in the label is what keeps the key unique even when two cameras share a
+    name. Defaults to `primary` -- the same stream the camera's bare `<did>`
+    entity is already bound to (see `streams.py`), not a value that might
+    disagree with it.
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here. Offering one with no
@@ -537,7 +541,7 @@ def _streams_schema(
     is among the (empty) options.
     """
     streams = {
-        vol.Required(did, default=[primary]): SelectSelector(
+        vol.Required(f"{cameras[did]} ({did})", default=[primary]): SelectSelector(
             SelectSelectorConfig(
                 options=available.get(did, []),
                 multiple=True,
@@ -549,6 +553,25 @@ def _streams_schema(
         if did in cameras and available.get(did)
     }
     return vol.Schema(streams)
+
+
+def _stream_labels_to_dids(
+    user_input: dict[str, Any],
+    cameras: dict[str, str],
+    chosen_cameras: list[str],
+) -> dict[str, list[str]]:
+    """Turn the name+(id) form labels back into device ids.
+
+    The stream step's schema is keyed by `"name (did)"` so the form reads
+    like something a person recognises. Submission arrives keyed the same way,
+    so the labels have to be resolved to the ids the options dict stores.
+    """
+    label_to_did = {f"{cameras[did]} ({did})": did for did in chosen_cameras}
+    return {
+        label_to_did[label]: value
+        for label, value in user_input.items()
+        if label in label_to_did
+    }
 
 
 def _with_defaulted_streams(
