@@ -14,7 +14,16 @@ from pathlib import Path
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
 from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
-from bridge.restream import STREAM_SPECS, Restreamer, build_config, stream_name
+from bridge.restream import (
+    ROOT_CODEC,
+    ROOT_KEY,
+    STREAM_SPECS,
+    Restreamer,
+    StreamSpec,
+    _audio_codecs,
+    build_config,
+    stream_name,
+)
 
 _STRINGS_JSON = (
     Path(__file__).resolve().parent.parent
@@ -84,19 +93,20 @@ class TestStreamSources:
     def test_the_source_is_pulled_from_loopback(self) -> None:
         """The bridge's own control plane is never reachable off-box."""
         config = build_config(make_options(AccessMode.LAN, "u", "p"), ["42"])
-        assert config["streams"][stream_name("42")].startswith(
-            f"ffmpeg:http://{LOOPBACK}:"
-        )
+        assert config["streams"][stream_name("42")].startswith(f"http://{LOOPBACK}:")
 
-    def test_streams_are_copied_not_transcoded(self) -> None:
-        """Nothing here may re-encode.
+    def test_the_root_runs_no_ffmpeg(self) -> None:
+        """go2rtc demuxes MPEG-TS itself.
 
-        Every consumer would pay for it, on a host that generally cannot
-        afford it. The add-on page's preview is served from the vendor
-        library's own decoded stills instead -- see `BridgeApi._preview`.
+        Putting ffmpeg in front of it costs three seconds of cold start --
+        ffmpeg probes MPEG-TS for five by default -- and a process per camera,
+        to do a job go2rtc already does. Measured: 3.11s native against 7.24s
+        through ffmpeg, where today's elementary stream took 4.20s.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][stream_name("42")].endswith("#video=copy")
+        source = config["streams"][stream_name("42")]
+        assert not source.startswith("ffmpeg:")
+        assert "#video=" not in source
 
     def test_eight_streams_per_camera(self) -> None:
         """Four heights across both codecs."""
@@ -111,7 +121,7 @@ class TestStreamSources:
         stream it could have copied. Each URL says what it carries.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][stream_name("42", "h264")].endswith("#video=h264")
+        assert "#video=h264" in config["streams"][stream_name("42", "h264")]
         assert stream_name("42", "h264") != stream_name("42")
 
     def test_h264_is_encoded_with_the_standard_encoder(self) -> None:
@@ -151,6 +161,52 @@ class TestStreamSources:
         assert config["streams"][stream_name("42", "h264")].startswith(
             f"ffmpeg:{stream_name('42')}#"
         )
+
+
+class TestAudioFollowsVideo:
+    """One rule: a variant's audio serves the same consumer its video does.
+
+    Derived from `spec.codec` rather than declared per spec, so there is no
+    second table to keep aligned with the first. This project has shipped that
+    defect four times.
+    """
+
+    @pytest.fixture
+    def sources(self) -> dict[str, str]:
+        return build_config(make_options(AccessMode.LOCAL), ["42"])["streams"]
+
+    def test_every_derived_stream_offers_the_cameras_own_audio(
+        self, sources: dict[str, str]
+    ) -> None:
+        """Without `#audio=`, go2rtc passes `-an` and the sound is gone with
+        no error anywhere."""
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            assert "#audio=copy" in sources[stream_name("42", spec.key)], spec.key
+
+    def test_only_the_compatibility_family_also_offers_aac(
+        self, sources: dict[str, str]
+    ) -> None:
+        """A consumer that needs H.264 because it cannot decode H.265 is
+        overwhelmingly the same consumer that cannot decode Opus. Home
+        Assistant's own HLS path is one: it accepts aac and mp3 only."""
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            source = sources[stream_name("42", spec.key)]
+            assert ("#audio=aac" in source) is (spec.codec != ROOT_CODEC), spec.key
+
+    def test_the_rule_is_derived_not_listed(self) -> None:
+        """A spec that never existed when the rule was written still gets the
+        right answer -- which is what makes the rule a guard rather than a
+        table someone has to remember to update.
+        """
+        assert _audio_codecs(StreamSpec("h264_90", "h264", 90, "128k")) == (
+            "copy",
+            "aac",
+        )
+        assert _audio_codecs(StreamSpec("h265_90", "h265", 90, "128k")) == ("copy",)
 
 
 class TestStreamCatalogue:
@@ -196,9 +252,7 @@ class TestStreamCatalogue:
         template's own. Naming a variant template is the only way to vary it.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert config["streams"][stream_name("42", "h264_360")].endswith(
-            "#video=h264/360"
-        )
+        assert "#video=h264/360" in config["streams"][stream_name("42", "h264_360")]
 
     def test_each_variant_template_sets_its_own_scale_and_bitrate(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])

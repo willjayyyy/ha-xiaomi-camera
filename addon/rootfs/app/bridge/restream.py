@@ -130,6 +130,27 @@ STREAM_SPECS: tuple[StreamSpec, ...] = (
 #: its own resolution, repackaged without re-encoding.
 ROOT_KEY = "h265"
 
+#: The codec the root publishes, read from the root's own spec rather than
+#: written out again. A second copy is a second thing to drift.
+ROOT_CODEC = next(spec.codec for spec in STREAM_SPECS if spec.key == ROOT_KEY)
+
+
+def _audio_codecs(spec: StreamSpec) -> tuple[str, ...]:
+    """The audio a variant offers, negotiated per consumer by go2rtc.
+
+    A variant's audio serves the same consumer its video codec serves. The
+    H.264 family exists for consumers that cannot decode H.265, which is
+    overwhelmingly the same population that cannot decode Opus -- Home
+    Assistant's own HLS path among them, which accepts aac and mp3 only. An
+    H.264 variant carrying Opus alone would be half-compatible, and silently.
+
+    Nothing is transcoded that was not already: those variants re-encode the
+    picture regardless, so the second encoding rides along on a process that
+    is running anyway. `copy` is listed first, so a consumer that asks for
+    nothing gets the camera's own encoding untouched.
+    """
+    return ("copy",) if spec.codec == ROOT_CODEC else ("copy", "aac")
+
 
 def stream_name(did: str, key: str = ROOT_KEY) -> str:
     """Stable go2rtc stream name for one variant of a camera.
@@ -166,11 +187,13 @@ def _encoder_templates() -> dict[str, str]:
 def build_config(options: Options, dids: list[str]) -> dict:
     """Render the go2rtc configuration.
 
-    ``#video=copy`` matters: the elementary stream is repackaged without
-    re-encoding. Cameras deliver H.265, and transcoding it would cost more CPU
-    than most Home Assistant hosts have to spare. Clients that cannot decode
-    H.265 are handled by go2rtc negotiating per client, not by transcoding
-    everything up front.
+    The root is read straight from this add-on's own endpoint, with no ffmpeg
+    in between: it serves MPEG-TS, which go2rtc demuxes itself. Both of the
+    camera's tracks reach RTSP exactly as the camera encoded them.
+
+    Derived variants do re-encode the picture, which is what they are for.
+    Clients that cannot decode H.265 take one of those rather than forcing a
+    transcode on everyone.
 
     There is deliberately no MJPEG source here. An earlier version added one so
     the add-on page could show a preview, which meant ffmpeg re-encoding H.265
@@ -182,15 +205,20 @@ def build_config(options: Options, dids: list[str]) -> dict:
     streams: dict[str, str] = {}
     for did in dids:
         root = stream_name(did)
-        streams[root] = (
-            f"ffmpeg:http://{LOOPBACK}:{API_PORT}/api/stream/{did}#video=copy"
-        )
+        # No ffmpeg in front of it: go2rtc demuxes the MPEG-TS this endpoint
+        # serves and passes both tracks through untouched. An ffmpeg hop here
+        # would spend three seconds of cold start probing a container it did
+        # not need to, to do a job go2rtc already does.
+        streams[root] = f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
         for spec in STREAM_SPECS:
             if spec.key == ROOT_KEY:
                 continue
+            audio = "".join(f"#audio={codec}" for codec in _audio_codecs(spec))
             # Named after the root rather than repeating its URL, so all of
             # them share one session on the camera instead of opening several.
-            streams[stream_name(did, spec.key)] = f"ffmpeg:{root}#video={spec.template}"
+            streams[stream_name(did, spec.key)] = (
+                f"ffmpeg:{root}#video={spec.template}{audio}"
+            )
 
     config: dict = {
         # Quiet by default, but follows the add-on's own level when raised.
