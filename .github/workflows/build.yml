@@ -2,16 +2,11 @@ name: Build add-on
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/*"]
     paths:
       - "addon/**"
       - ".github/workflows/build.yml"
   workflow_dispatch:
-    inputs:
-      force:
-        description: "Rebuild even if this version was already published"
-        type: boolean
-        default: false
 
 env:
   ARCHITECTURES: '["amd64", "aarch64"]'
@@ -33,11 +28,10 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       version: ${{ steps.version.outputs.version }}
-      published: ${{ steps.version.outputs.published }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Read version and check whether it is already published
+      - name: Read version
         id: version
         run: |
           set -euo pipefail
@@ -47,19 +41,6 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-
-          # Skip a rebuild when every architecture is already published, so an
-          # unrelated push to addon/ does not republish an unchanged version.
-          published=true
-          for arch in amd64 aarch64; do
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/${arch}-${IMAGE_NAME}:${version}"
-            if ! docker manifest inspect "$image" >/dev/null 2>&1; then
-              published=false
-              break
-            fi
-          done
-          echo "published=$published" >> "$GITHUB_OUTPUT"
-          echo "version $version, already published: $published"
 
       - name: Get build matrix
         id: matrix
@@ -71,7 +52,6 @@ jobs:
   build:
     name: Build ${{ matrix.arch }}
     needs: init
-    if: needs.init.outputs.published == 'false' || inputs.force
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -122,32 +102,34 @@ jobs:
 
   # HACS learns about versions from GitHub releases and from nothing else:
   # without one it installs from the default branch, offers no version to
-  # choose and never reports an update. Created here rather than by hand,
-  # because a step that has to be remembered is one that will be forgotten --
-  # the two version numbers in this repository drifted apart for that reason.
+  # choose and never reports an update.
   #
-  # After the manifest, never before: a release names a version, and naming one
-  # whose image failed to build points users at something that cannot run.
+  # Every build -- on a release/* branch or on main -- moves the version tag to
+  # the commit just built and keeps the matching release flagged pre-release.
+  # The pre-release is the validation phase: users install it with HACS "Show
+  # beta versions". Promoting it to the official release is deliberately manual
+  # -- the maintainer reviews the hardware-validated result and clicks "Publish
+  # release", which flips the same release to Latest. A release that has already
+  # been promoted is left alone, so the official version is never rewritten by
+  # a later build of the same tag.
   release:
-    name: Publish release
+    name: Refresh pre-release
     needs: [init, manifest]
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create the release if this version has none
+      - name: Move the tag and refresh the pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.init.outputs.version }}
         run: |
           set -euo pipefail
-          if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            echo "v${VERSION} is already released"
-            exit 0
-          fi
+          tag="v${VERSION}"
 
           # The changelog entry for this version, verbatim. It is written for
           # the person deciding whether to update, which is exactly who reads a
@@ -157,10 +139,28 @@ jobs:
             found && /^## / { exit }
             found { print }
           ' addon/CHANGELOG.md > notes.md
-
           if [ ! -s notes.md ]; then
             echo "::error::addon/CHANGELOG.md has no entry for ${VERSION}"
             exit 1
           fi
 
-          gh release create "v${VERSION}" --title "v${VERSION}" --notes-file notes.md
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            # Leave an already-official release alone; only pre-releases are
+            # refreshed as the branch moves.
+            if [ "$(gh release view "${tag}" --json isPrerelease -q .isPrerelease)" = "false" ]; then
+              echo "${tag} is already the official release; leaving it unchanged"
+              exit 0
+            fi
+          fi
+
+          git config user.email "ci@users.noreply.github.com"
+          git config user.name "ci"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git tag -f "${tag}"
+          git push -f origin "${tag}"
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" --prerelease --notes-file notes.md
+          else
+            gh release create "${tag}" --title "v${VERSION}" --notes-file notes.md --prerelease
+          fi

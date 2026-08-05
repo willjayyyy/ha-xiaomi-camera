@@ -36,12 +36,8 @@ def test_the_two_halves_agree() -> None:
 
 
 def test_the_version_is_a_release_number() -> None:
-    """Both Supervisor and HACS sort these, so they have to be sortable.
-
-    A preview build carries a `-preview` suffix on a branch while it is being
-    validated on real hardware; the final release is the plain form.
-    """
-    assert re.fullmatch(r"\d+\.\d+\.\d+(?:-preview)?", addon_version()), addon_version()
+    """Both Supervisor and HACS sort these, so they have to be sortable."""
+    assert re.fullmatch(r"\d+\.\d+\.\d+", addon_version()), addon_version()
 
 
 def test_the_changelog_mentions_it() -> None:
