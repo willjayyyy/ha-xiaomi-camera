@@ -24,10 +24,6 @@ the container registry ended up with thirty tags nobody wanted.
 
 ## Tests
 
-```
-python -m pytest
-```
-
 The suite covers the pure logic — bitstream parsing, options validation,
 credential redaction, the account page's guards — and deliberately avoids
 mocking the vendor SDK. A mock of a closed-source library tests an assumption
@@ -38,6 +34,42 @@ address the page requests is a route the add-on serves, that every name
 imported between modules exists, that the two halves of the repository agree on
 a version. They are cheap, and each one was written the day after it would have
 helped.
+
+### Two virtualenvs, two interpreters
+
+The add-on and the integration are tested under different Python versions,
+because they are constrained by different things:
+
+- **`.venv311`** — Python 3.11, matching the add-on's own target. Runs the
+  add-on's tests (bitstream parsing, options validation, redaction, the
+  account page's guards). Tests under `custom_components/` need
+  `homeassistant`, which requires Python >= 3.14 and is not installed here —
+  they report as **skipped**, not run. A green `.venv311` run alone does not
+  mean the integration was tested.
+
+  ```
+  python3.11 -m venv .venv311   # once
+  .venv311/bin/pip install -r addon/requirements.txt pytest pytest-asyncio ruff   # once
+  .venv311/bin/python -m pytest
+  ```
+
+- **`.venv314`** — Python 3.14, required by
+  `pytest-homeassistant-custom-component`, which pins the Home Assistant
+  release this add-on is deployed against (see `requirements-test.txt`).
+  Runs the **whole** suite: the add-on's tests plus the integration tests
+  that `.venv311` skips, against a real `hass` fixture.
+
+  ```
+  python3.14 -m venv .venv314   # once
+  .venv314/bin/pip install -r requirements-test.txt   # once
+  .venv314/bin/python -m pytest
+  ```
+
+**CI is the real gate, and it runs 3.14** (see `.github/workflows/ci.yml`) —
+nothing merges without the integration tests actually having run. Before
+pushing, prefer `.venv314/bin/python -m pytest` over `.venv311`'s: a
+`.venv311`-only run can look green while having skipped everything under
+`custom_components/`.
 
 Lint and formatting:
 

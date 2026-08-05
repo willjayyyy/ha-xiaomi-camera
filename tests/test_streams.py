@@ -5,20 +5,35 @@ package path (`custom_components.xiaomi_camera.streams`) runs the package's
 `__init__.py` first, which does. That needs `homeassistant`, available under
 `.venv314` but not under `.venv311` -- so this module is skipped there rather
 than erroring at collection.
+
+Gated on the interpreter version, not on whether the import happens to
+succeed: a `.venv314` install that is present but broken should fail this
+module loudly, not be indistinguishable from "not installed here on
+purpose".
 """
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
-pytest.importorskip("homeassistant")
-
-from custom_components.xiaomi_camera.streams import (
-    ROOT_KEY,
-    migrate_options,
-    selected_streams,
-    unique_id,
+pytestmark = pytest.mark.skipif(
+    sys.version_info < (3, 14),
+    reason="needs Python >= 3.14 and homeassistant; run under .venv314",
 )
+
+# Guarded the same way as the marker above, not with `importorskip`: below
+# 3.14 the import is skipped on purpose (nothing to run); at or above 3.14 it
+# is unconditional, so a broken `.venv314` install fails collection loudly
+# instead of reporting a misleading skip.
+if sys.version_info >= (3, 14):
+    from custom_components.xiaomi_camera.streams import (
+        ROOT_KEY,
+        migrate_options,
+        selected_streams,
+        unique_id,
+    )
 
 
 class TestUniqueId:

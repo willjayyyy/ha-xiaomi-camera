@@ -24,7 +24,6 @@ by its real path.
 """
 
 import enum
-import importlib.util
 import sys
 import types
 from pathlib import Path
@@ -90,11 +89,16 @@ sys.modules["miot"] = _miot
 sys.modules["miot.types"] = _types
 
 
-# `pytest-homeassistant-custom-component` lives under `.venv314`, not
-# `.venv311` (it requires Python >= 3.14). The fixture is only defined -- and
-# so only autoused -- when the plugin is present, or every test collected
-# under `.venv311` would fail setup looking for `enable_custom_integrations`.
-if importlib.util.find_spec("pytest_homeassistant_custom_component") is not None:
+# `pytest-homeassistant-custom-component` requires Python >= 3.14, so it
+# lives under `.venv314` and not under `.venv311`. The fixture is only
+# defined -- and so only autoused -- above that version, gated on the
+# interpreter rather than on whether importing the plugin happens to
+# succeed: a `.venv314` install that is present but broken should fail
+# collection loudly, not silently behave as if the plugin were absent on
+# purpose. Below 3.14 there is nothing under `custom_components` for it to
+# gate, since those tests are themselves version-gated the same way (see
+# `test_streams.py`, `test_migration.py`).
+if sys.version_info >= (3, 14):
 
     @pytest.fixture(autouse=True)
     def auto_enable_custom_integrations(enable_custom_integrations):
