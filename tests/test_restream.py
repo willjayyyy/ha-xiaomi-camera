@@ -8,10 +8,20 @@ listeners may ever follow `access_mode`.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 from bridge.config import AccessMode, Options, VideoQuality
 from bridge.const import GO2RTC_API_PORT, LOOPBACK, RTSP_PORT, SRTP_PORT, WEBRTC_PORT
 from bridge.restream import STREAM_SPECS, Restreamer, build_config, stream_name
+
+_STRINGS_JSON = (
+    Path(__file__).resolve().parent.parent
+    / "custom_components"
+    / "xiaomi_camera"
+    / "strings.json"
+)
 
 
 def make_options(mode: AccessMode, user: str = "", password: str = "") -> Options:
@@ -115,15 +125,24 @@ class TestStreamSources:
         assert "libopenh264" not in config["ffmpeg"]["h264"]
 
     def test_h265_is_encoded_with_the_standard_encoder(self) -> None:
+        """Against `h265/360`, not the bare `h265` template.
+
+        `h265` names the root variant's codec, but the root is always
+        `#video=copy` (see `build_config`) -- no `#video=` value ever names
+        the bare template, so asserting against it would pass even if the
+        template were missing the encoder entirely.
+        """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "libx265" in config["ffmpeg"]["h265"]
-        assert "kvazaar" not in config["ffmpeg"]["h265"]
+        assert "libx265" in config["ffmpeg"]["h265/360"]
+        assert "kvazaar" not in config["ffmpeg"]["h265/360"]
 
     def test_both_encoders_shorten_the_keyframe_interval(self) -> None:
         """go2rtc defaults to -g 50; HLS cannot start anywhere but a keyframe."""
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert "-g 25" in config["ffmpeg"]["h264"]
-        assert "-g 25" in config["ffmpeg"]["h265"]
+        # Not the bare `h265` template -- see
+        # `test_h265_is_encoded_with_the_standard_encoder`.
+        assert "-g 25" in config["ffmpeg"]["h265/360"]
 
     def test_the_compatibility_stream_reuses_the_original(self) -> None:
         # Naming the stream rather than repeating the URL keeps both on one
@@ -219,9 +238,24 @@ class TestStreamDescriptions:
     """What the integration reads instead of hardcoding the list."""
 
     def test_it_describes_every_published_stream(self) -> None:
+        """Against the eight keys literally, not `[s.key for s in STREAM_SPECS]`.
+
+        That comparison is a restatement of the implementation under test: it
+        passes for any `STREAM_SPECS`, including an empty one, so it cannot
+        catch a spec that was never added.
+        """
         restreamer = Restreamer(make_options(AccessMode.LOCAL))
         described = restreamer.stream_descriptions("42")
-        assert [d["key"] for d in described] == [s.key for s in STREAM_SPECS]
+        assert [d["key"] for d in described] == [
+            "h265",
+            "h265_720",
+            "h265_360",
+            "h265_180",
+            "h264",
+            "h264_720",
+            "h264_360",
+            "h264_180",
+        ]
 
     def test_urls_carry_no_credentials(self) -> None:
         """These reach Home Assistant's config state, diagnostics and logs."""
@@ -240,3 +274,20 @@ class TestPorts:
     def test_listeners_do_not_collide(self) -> None:
         ports = {GO2RTC_API_PORT, RTSP_PORT, WEBRTC_PORT, SRTP_PORT}
         assert len(ports) == 4
+
+
+class TestStreamKeysMatchTranslationLabels:
+    """A seam between two packages, with nothing else checking they agree.
+
+    The add-on correctly never hardcodes the stream *list* on the integration
+    side -- `/api/cameras` reports it (see `TestStreamDescriptions`). But the
+    eight stream *labels* the integration shows a user are a hardcoded table
+    in `strings.json` (and its translations). Adding a ninth `StreamSpec` here
+    without a matching label would show a raw identifier in the UI again --
+    the exact defect already found once on this branch.
+    """
+
+    def test_every_stream_key_has_a_translation_label(self) -> None:
+        strings = json.loads(_STRINGS_JSON.read_text(encoding="utf-8"))
+        labelled = set(strings["selector"]["stream_key"]["options"])
+        assert {spec.key for spec in STREAM_SPECS} == labelled

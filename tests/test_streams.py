@@ -28,6 +28,11 @@ pytestmark = pytest.mark.skipif(
 # is unconditional, so a broken `.venv314` install fails collection loudly
 # instead of reporting a misleading skip.
 if sys.version_info >= (3, 14):
+    # `conftest.py` puts `addon/rootfs/app` on `sys.path`, so this needs no
+    # separate stub: `bridge.restream` avoids the vendor SDK entirely.
+    from bridge.restream import ROOT_KEY as ADDON_ROOT_KEY
+
+    from custom_components.xiaomi_camera.streams import ROOT_KEY as INTEGRATION_ROOT_KEY
     from custom_components.xiaomi_camera.streams import (
         migrate_options,
         selected_streams,
@@ -166,3 +171,18 @@ class TestEntityCleanup:
         }
         # This poll only reports "h264": the user still has both ticked.
         assert wanted_unique_ids(options, {"42": ["h264"]}) == {"42", "42_h264_360"}
+
+
+class TestRootKeyMatchesTheAddon:
+    """A seam between two independent constants, with nothing else checking.
+
+    `streams.ROOT_KEY` (what the integration treats as "nothing chosen yet")
+    and `restream.ROOT_KEY` (what the add-on treats as the stream that needs
+    no re-encode) must name the same stream. Nothing forces that on its own --
+    they live in separate packages -- so a one-line change on either side
+    could silently point the default entity at a stream the add-on never
+    treats as the root.
+    """
+
+    def test_the_two_root_keys_are_the_same_stream(self) -> None:
+        assert INTEGRATION_ROOT_KEY == ADDON_ROOT_KEY
