@@ -534,9 +534,10 @@ def _stream_label_map(keys: list[str]) -> dict[str, str]:
     labels = {}
     for key in keys:
         entry = entities.get(key)
-        labels[key] = (
-            entry.get("name", key) if isinstance(entry, dict) else entry or key
-        )
+        label = entry.get("name", key) if isinstance(entry, dict) else entry or key
+        # The translations carry a `{camera}` placeholder for the entity-name
+        # path; the form labels only name the stream, so it is dropped here.
+        labels[key] = label.replace("{camera}", "").strip()
     return labels
 
 
