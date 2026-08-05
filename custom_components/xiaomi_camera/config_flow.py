@@ -300,6 +300,9 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._cameras, list(self._cameras), True
             ),
             errors=errors,
+            # Not the last step: the stream choices follow, so the button
+            # reads "Next" rather than "Submit".
+            last_step=False,
         )
 
     async def async_step_streams(
@@ -347,6 +350,7 @@ class XiaomiCameraConfigFlow(ConfigFlow, domain=DOMAIN):
                 ROOT_KEY,
             ),
             errors=errors,
+            last_step=True,
         )
 
     async def _async_fetch_cameras(self) -> list[BridgeCamera]:
@@ -443,6 +447,9 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
             step_id="init",
             data_schema=_camera_checklist_schema(self._cameras, chosen, auto_add),
             errors=errors,
+            # Not the last step: the stream choices follow, so the button
+            # reads "Next" rather than "Submit".
+            last_step=False,
         )
 
     async def async_step_streams(
@@ -490,6 +497,7 @@ class XiaomiCameraOptionsFlow(OptionsFlow):
                 primary,
             ),
             errors=errors,
+            last_step=True,
         )
 
 
