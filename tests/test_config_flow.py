@@ -139,20 +139,20 @@ async def test_setup_completes_when_a_camera_declares_no_streams(hass) -> None:
     assert result["type"] == "create_entry"
 
 
-def test_stream_label_map_reads_the_runtime_selector_labels() -> None:
-    """The dropdown labels come from `translations/en.json`, not entity names.
+def test_stream_label_map_embeds_the_camera_name() -> None:
+    """The dropdown options carry the device name, from `entity.camera`.
 
-    `_stream_label_map` reads the runtime translation file on purpose -- the
-    original entity is named after the device, so its entity label is the bare
-    `{camera}`, which would read as a section header if it doubled as the
-    dropdown option. Reading `entity.camera` instead would render `original`
-    as the bare camera name and `h265` as "H.265" rather than "H.265 · Full
-    size"; this pins the mapping so that regression fails.
+    `_stream_label_map` reads the entity-name translation table -- the same
+    one the entities' own names come from -- and substitutes the camera name
+    into the `{camera}` placeholder. The original stream's label is the bare
+    `{camera}`, so its option is the device's own name; every other option
+    reads "Living room H.265" and the like. Pinning this mapping keeps the
+    dropdown from regressing to bare codec labels or the literal "Original".
     """
-    assert _stream_label_map(["original", "h265", "h264_360"]) == {
-        "original": "Original",
-        "h265": "H.265 · Full size",
-        "h264_360": "H.264 · 360p",
+    assert _stream_label_map(["original", "h265", "h264_360"], "Living room") == {
+        "original": "Living room",
+        "h265": "Living room H.265",
+        "h264_360": "Living room H.264 360p",
     }
 
 

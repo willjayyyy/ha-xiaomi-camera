@@ -523,22 +523,25 @@ def _camera_checklist_schema(
     )
 
 
-def _stream_label_map(keys: list[str]) -> dict[str, str]:
-    """Stream key -> display label, from the selector translations table.
+def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
+    """Stream key -> display label, from the entity-name translation table.
 
-    Read from `selector.stream_key.options` rather than the entity labels:
-    the original entity is named after the device, so its entity label is the
-    bare `{camera}` -- which would read as a section header if it doubled as
-    the dropdown option. Each surface has its own single source of labels.
+    The dropdown options read the same `entity.camera` table the entities'
+    own names come from, with the camera name substituted into the `{camera}`
+    placeholder -- so the form reads "Living room H.264 360p" rather than a
+    bare codec, and the original stream's option is the device's own name.
     """
     path = Path(__file__).with_name("translations") / "en.json"
     try:
-        options = json.loads(path.read_text(encoding="utf-8"))["selector"][
-            "stream_key"
-        ]["options"]
+        entities = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
     except (OSError, KeyError, ValueError):
-        options = {}
-    return {key: options.get(key, key) for key in keys}
+        entities = {}
+    labels = {}
+    for key in keys:
+        entry = entities.get(key)
+        label = entry.get("name", key) if isinstance(entry, dict) else entry or key
+        labels[key] = label.replace("{camera}", camera_name).strip()
+    return labels
 
 
 def _default_selection(available: list[str], primary: str) -> list[str]:
@@ -586,7 +589,7 @@ def _streams_schema(
             else _default_selection(available[did], primary)
         )
         streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
-            cv.multi_select(_stream_label_map(available[did]))
+            cv.multi_select(_stream_label_map(available[did], cameras[did]))
         )
     return vol.Schema(streams)
 

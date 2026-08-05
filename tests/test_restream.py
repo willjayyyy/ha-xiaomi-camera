@@ -39,7 +39,8 @@ _STRINGS_JSON = (
     / "strings.json"
 )
 #: The file the dropdown actually reads at runtime -- `config_flow._stream_label_map`
-#: loads this rather than `strings.json`, so this guard watches the right file.
+#: loads its `entity.camera` table rather than `strings.json`, so this guard
+#: watches the right file.
 _TRANSLATIONS_EN_JSON = (
     Path(__file__).resolve().parent.parent
     / "custom_components"
@@ -405,13 +406,14 @@ class TestStreamKeysMatchTranslationLabels:
         labelled = set(strings["selector"]["stream_key"]["options"])
         assert {spec.key for spec in STREAM_SPECS} == labelled
 
-    def test_every_stream_key_has_a_runtime_selector_label(self) -> None:
-        """The dropdown reads `translations/en.json`, not `strings.json`.
+    def test_every_stream_key_has_a_runtime_entity_label(self) -> None:
+        """The dropdown reads `translations/en.json`'s `entity.camera`.
 
-        `config_flow._stream_label_map` loads the runtime translation file, so
-        this guard watches that file: a stream spec without a label there would
-        show as a raw identifier in the dropdown again.
+        `config_flow._stream_label_map` loads the runtime translation file's
+        entity-name table, so this guard watches that table: a stream spec
+        without an entity label there would show as a raw identifier in the
+        dropdown again.
         """
         en = json.loads(_TRANSLATIONS_EN_JSON.read_text(encoding="utf-8"))
-        labelled = set(en["selector"]["stream_key"]["options"])
+        labelled = set(en["entity"]["camera"])
         assert {spec.key for spec in STREAM_SPECS} == labelled
