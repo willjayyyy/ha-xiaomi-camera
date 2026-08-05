@@ -145,8 +145,9 @@ RUN apt-get update \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# go2rtc turns the raw elementary stream into RTSP, WebRTC and HLS, so one
-# camera session serves Home Assistant, a browser and an external NVR alike.
+# go2rtc reads the bridge's MPEG-TS stream natively and turns it into RTSP,
+# WebRTC and HLS, so one camera session serves Home Assistant, a browser and
+# an external NVR alike.
 COPY go2rtc.sha256 /tmp/go2rtc.sha256
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \

@@ -17,7 +17,7 @@ Add-on (Debian/glibc, host network)     Integration (HA process, Alpine/musl)
     │ peer-to-peer                        camera entities → stream_source()
     ▼                                     switch entities (lens power)
   cameras                                 coordinator polls the bridge
-    │ Annex-B elementary stream
+    │ MPEG-TS (muxed in-process)
     ▼
   go2rtc → RTSP / WebRTC ────────────────► Home Assistant's stream component
 ```

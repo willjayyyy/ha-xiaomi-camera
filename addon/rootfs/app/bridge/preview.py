@@ -11,10 +11,10 @@ The bridge has two paths out of a camera session:
     on_decode_jpg -> snapshots                        a side channel
 
 A preview drawn from the second one keeps producing pictures while the first is
-broken. Every component that matters -- the elementary stream endpoint, go2rtc's
-configuration, its ffmpeg source, the RTSP server, the credentials guarding it
--- can fail without the page showing anything wrong. A green light wired to a
-different circuit is worse than no light.
+broken. Every component that matters -- the MPEG-TS stream endpoint, go2rtc's
+native reading of it, the RTSP server, the credentials guarding it -- can fail
+without the page showing anything wrong. A green light wired to a different
+circuit is worse than no light.
 
 So the preview reads the published stream instead: one ffmpeg per camera being
 watched, pulling RTSP exactly as an NVR would, decoding to JPEG. A picture on
