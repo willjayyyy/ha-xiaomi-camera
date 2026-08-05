@@ -8,29 +8,7 @@ untested until two faults surfaced in production.
 
 from __future__ import annotations
 
-import sys
-import types
-from pathlib import Path
-
-_CUSTOM_COMPONENTS = Path(__file__).resolve().parent.parent / "custom_components"
-sys.path.insert(0, str(_CUSTOM_COMPONENTS))
-
-# `xiaomi_camera` is a real package whose `__init__.py` imports Home
-# Assistant, so a plain `from xiaomi_camera.streams import ...` would run
-# that `__init__.py` first and fail with `ModuleNotFoundError: homeassistant`
-# -- even though `streams.py` itself never touches it. Registering a stub
-# parent module ahead of time makes Python skip `__init__.py` while still
-# resolving `streams.py`'s own `from .const import ...`.
-if "xiaomi_camera" not in sys.modules:
-    _stub = types.ModuleType("xiaomi_camera")
-    _stub.__path__ = [str(_CUSTOM_COMPONENTS / "xiaomi_camera")]
-    sys.modules["xiaomi_camera"] = _stub
-
-from xiaomi_camera.streams import (  # noqa: E402
-    ROOT_KEY,
-    selected_streams,
-    unique_id,
-)
+from xiaomi_camera.streams import ROOT_KEY, selected_streams, unique_id
 
 
 class TestUniqueId:

@@ -1,4 +1,4 @@
-"""Make the add-on's bridge package importable from the tests.
+"""Make the add-on's bridge package and the integration importable from tests.
 
 The vendor SDK is closed source, glibc-only and around 28MB of prebuilt
 libraries, so CI does not install it and most of the bridge is never imported
@@ -16,6 +16,19 @@ The stub is checked against the real enums whenever they happen to be
 installed. Without that, a value drifting in the SDK would leave these tests
 passing against a definition the add-on no longer uses -- an indicator wired
 to a different circuit.
+
+The same problem exists on the integration side: ``custom_components.
+xiaomi_camera`` is a real package, and its ``__init__.py`` imports
+``homeassistant`` unconditionally. Python always runs a package's
+``__init__.py`` before any of its submodules, and CI does not install
+``homeassistant`` -- so without help, nothing under that package can be
+imported at all, including modules like ``streams.py`` (and, later,
+``api.py``) that never touch Home Assistant themselves. Registering a stub
+parent package here, once, before any test module is collected, makes the
+package importable without running its ``__init__.py``. It deliberately
+substitutes only that ``__init__.py``: the modules under test
+(``streams.py``, ``api.py``, ...) are still imported normally from disk, so an
+accidental ``homeassistant`` import inside one of them still fails loudly.
 """
 
 import enum
@@ -25,6 +38,13 @@ from pathlib import Path
 
 _APP = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app"
 sys.path.insert(0, str(_APP))
+
+_CUSTOM_COMPONENTS = Path(__file__).resolve().parent.parent / "custom_components"
+sys.path.insert(0, str(_CUSTOM_COMPONENTS))
+
+_xiaomi_camera = types.ModuleType("xiaomi_camera")
+_xiaomi_camera.__path__ = [str(_CUSTOM_COMPONENTS / "xiaomi_camera")]
+sys.modules["xiaomi_camera"] = _xiaomi_camera
 
 
 class MIoTCameraStatus(int, enum.Enum):
