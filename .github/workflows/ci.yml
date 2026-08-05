@@ -28,13 +28,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      # PyYAML is a real dependency of the module under test. The rest of the
-      # suite covers modules that deliberately carry no vendor-SDK import, so
-      # the closed-source package does not need to be installed here.
-      # aiohttp and pytest-asyncio are needed by the account-page guard tests,
-      # which run a real server rather than mocking the request.
-      - run: pip install pytest pytest-asyncio pyyaml aiohttp
+          python-version: "3.14"
+      # Tests the integration against the pinned Home Assistant release this
+      # add-on is deployed against (see requirements-test.txt). The vendor
+      # SDK stays stubbed in tests/conftest.py -- it is closed source and
+      # glibc-only, so it cannot be installed here or anywhere in CI.
+      - run: pip install -r requirements-test.txt
       - run: python -m pytest
 
   hassfest:

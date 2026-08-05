@@ -1,14 +1,19 @@
-"""Which streams become entities, decided without importing Home Assistant.
+"""Which streams become entities.
 
-This module exists so the decision is testable at all. CI installs no
-`homeassistant`, and the integration modules that would otherwise hold this
-logic all import it -- which is how the add-on's own session handling went
-untested until two faults surfaced in production.
+`streams.py` itself never imports Home Assistant, but importing it by its real
+package path (`custom_components.xiaomi_camera.streams`) runs the package's
+`__init__.py` first, which does. That needs `homeassistant`, available under
+`.venv314` but not under `.venv311` -- so this module is skipped there rather
+than erroring at collection.
 """
 
 from __future__ import annotations
 
-from xiaomi_camera.streams import (
+import pytest
+
+pytest.importorskip("homeassistant")
+
+from custom_components.xiaomi_camera.streams import (
     ROOT_KEY,
     migrate_options,
     selected_streams,
