@@ -29,7 +29,6 @@ pytestmark = pytest.mark.skipif(
 # instead of reporting a misleading skip.
 if sys.version_info >= (3, 14):
     from custom_components.xiaomi_camera.streams import (
-        ROOT_KEY,
         migrate_options,
         selected_streams,
         unique_id,
@@ -151,3 +150,19 @@ class TestEntityCleanup:
     def test_a_camera_with_no_entry_falls_back_to_the_root(self) -> None:
         options = {"primary_stream": "h265"}
         assert wanted_unique_ids(options, {"42": ["h265", "h264"]}) == {"42"}
+
+    def test_a_stream_missing_from_the_current_poll_stays_wanted(self) -> None:
+        """I3: a transient absence must not authorise deletion.
+
+        go2rtc restarting, or the add-on reporting a shortened stream list on
+        one refresh, must leave that stream's entity in place -- merely
+        unavailable -- rather than have it removed outright. Removal is
+        driven by the stored selection, not by what the most recent poll
+        happened to report.
+        """
+        options = {
+            "camera_streams": {"42": ["h264", "h264_360"]},
+            "primary_stream": "h264",
+        }
+        # This poll only reports "h264": the user still has both ticked.
+        assert wanted_unique_ids(options, {"42": ["h264"]}) == {"42", "42_h264_360"}

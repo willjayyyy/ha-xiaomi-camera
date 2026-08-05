@@ -28,7 +28,7 @@ if sys.version_info >= (3, 14):
 _KEYS = ("h265", "h264", "h264_360")
 
 
-def _camera(did: str = "42") -> BridgeCamera:
+def _camera(did: str = "42", keys: tuple[str, ...] = _KEYS) -> BridgeCamera:
     return BridgeCamera(
         did=did,
         name="Living room",
@@ -47,7 +47,7 @@ def _camera(did: str = "42") -> BridgeCamera:
                 height=360 if key.endswith("360") else None,
                 url=f"rtsp://127.0.0.1:8554/camera_{did}_{key}",
             )
-            for key in _KEYS
+            for key in keys
         ),
     )
 
@@ -177,6 +177,40 @@ async def test_unticking_a_stream_removes_its_entity(hass) -> None:
         await hass.async_block_till_done()
 
     assert registry.async_get_entity_id("camera", DOMAIN, "42_h264_360") is None
+    assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
+
+
+async def test_a_poll_reporting_fewer_streams_does_not_remove_an_entity(hass) -> None:
+    """I3: entity removal must follow the stored selection, not a live poll.
+
+    go2rtc restarting, or the add-on reporting a shortened stream list on one
+    refresh, is not the user deselecting anything. The spec's own error
+    handling calls for the entity to become unavailable, not gone -- gone
+    means the HomeKit pairing, automations, dashboard cards and history
+    attached to it are gone too, and nothing brings them back.
+    """
+    entry = await _setup(
+        hass,
+        {
+            "cameras": ["42"],
+            "primary_stream": "h264",
+            "camera_streams": {"42": ["h264", "h264_360"]},
+        },
+    )
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("camera", DOMAIN, "42_h264_360") is not None
+
+    # A reload where the add-on now reports only "h264" for this camera --
+    # nothing the user did, and the stored selection is unchanged.
+    with patch("custom_components.xiaomi_camera.BridgeClient") as client:
+        client.return_value.async_health = AsyncMock(return_value={"status": "ok"})
+        client.return_value.async_cameras = AsyncMock(
+            return_value=[_camera(keys=("h265", "h264"))]
+        )
+        await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert registry.async_get_entity_id("camera", DOMAIN, "42_h264_360") is not None
     assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
 
 

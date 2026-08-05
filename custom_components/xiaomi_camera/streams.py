@@ -81,17 +81,29 @@ _LEGACY_DEFAULT = "h264"
 
 
 def wanted_unique_ids(options: dict, available: dict[str, list[str]]) -> set[str]:
-    """Every entity identity the current selection should produce.
+    """Every entity identity the *stored selection* should produce.
+
+    Deliberately driven by `options` alone, not by what `available` says a
+    stream can currently do -- only its keys (the cameras this poll saw) are
+    read; the per-camera lists that `selected_streams` would filter against
+    are ignored on purpose. This function decides what gets *removed*, and a
+    stream missing from one live poll (go2rtc restarting, a shortened list)
+    must not authorise deleting its entity -- the same absence should leave
+    it in place and merely unavailable. `selected_streams`'s filtering by live
+    availability stays right for *entity creation*, where an entity for a
+    stream that does not exist has no URL to point at; it would be wrong here,
+    where "does not exist yet" and "was never wanted" must not be conflated.
 
     Anything in the registry outside this set was deselected. Home Assistant
     keeps such entities forever otherwise -- present, permanently unavailable,
     and indistinguishable from a broken one.
     """
     primary = primary_stream(options)
+    camera_streams = options.get(CONF_CAMERA_STREAMS) or {}
     return {
         unique_id(did, key, primary)
-        for did, keys in available.items()
-        for key in selected_streams(options, did, keys)
+        for did in available
+        for key in (camera_streams.get(did) or [primary])
     }
 
 
