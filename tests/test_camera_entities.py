@@ -337,3 +337,36 @@ async def test_an_entry_with_no_stream_options_still_has_a_primary(hass) -> None
 
     registry = er.async_get(hass)
     assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
+
+
+async def test_entities_never_strip_the_device_prefix(hass) -> None:
+    """The device page shows the device name on every stream entity.
+
+    With `has_entity_name` Home Assistant composes "device + label" for the
+    name on every surface -- the device page, the entity list, the states --
+    and does not strip a device prefix into `original_name_unprefixed`. A
+    bare "H.264 360p" under the device heading would otherwise read as a
+    fault rather than a choice.
+    """
+    await _setup(
+        hass,
+        {
+            "cameras": ["42"],
+            "primary_stream": "original",
+            "camera_streams": {"42": ["original", "h264_360"]},
+        },
+    )
+
+    registry = er.async_get(hass)
+    for uid in ("42", "42_h264_360"):
+        entry = registry.async_get(registry.async_get_entity_id("camera", DOMAIN, uid))
+        assert entry is not None
+        assert entry.has_entity_name is True
+        assert entry.original_name_unprefixed is None
+
+    original = registry.async_get_entity_id("camera", DOMAIN, "42")
+    variant = registry.async_get_entity_id("camera", DOMAIN, "42_h264_360")
+    assert hass.states.get(original).attributes["friendly_name"] == "Living room"
+    assert (
+        hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
+    )

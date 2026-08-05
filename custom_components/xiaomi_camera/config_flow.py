@@ -527,9 +527,10 @@ def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
     """Stream key -> display label, from the entity-name translation table.
 
     The dropdown options read the same `entity.camera` table the entities'
-    own names come from, with the camera name substituted into the `{camera}`
-    placeholder -- so the form reads "Living room H.264 360p" rather than a
-    bare codec, and the original stream's option is the device's own name.
+    own names come from. The labels are codec-only ("H.264 360p") -- Home
+    Assistant composes the entity name by prefixing the device name -- so the
+    dropdown prefixes it here the same way, reading "Living room H.264 360p".
+    The original stream's label is empty, so its option is the device name.
     """
     path = Path(__file__).with_name("translations") / "en.json"
     try:
@@ -540,7 +541,7 @@ def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
     for key in keys:
         entry = entities.get(key)
         label = entry.get("name", key) if isinstance(entry, dict) else entry or key
-        labels[key] = label.replace("{camera}", camera_name).strip()
+        labels[key] = f"{camera_name} {label}".strip() if label else camera_name
     return labels
 
 

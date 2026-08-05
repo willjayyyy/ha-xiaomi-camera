@@ -71,38 +71,14 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         self._stream_key = stream_key
         self._primary_key = primary_key
         self._attr_unique_id = unique_id(did, stream_key, primary_key)
-        # Every entity names the camera and its stream itself, rather than
-        # relying on Home Assistant's device-name prefixing (`has_entity_name`),
-        # so a consumer that shows only the entity name -- the device page, a
-        # voice assistant -- still knows which camera and which stream it is.
-        # With `has_entity_name` off Home Assistant ignores `translation_key`
-        # for the name, so the label is read by hand in `_stream_label`.
-        self._attr_has_entity_name = False
+        # `has_entity_name` comes from the base class: Home Assistant composes
+        # the entity name as the device name plus the translated stream label,
+        # on every surface -- the device page, the entity list, the states --
+        # from one source of truth. The labels are therefore label-only
+        # ("H.265 720p"), never "{camera} ...", so the device name is not
+        # doubled, and the registry never strips a device prefix it then has to
+        # add back by hand.
         self._attr_translation_key = stream_key
-
-    @property
-    def name(self) -> str:
-        """The camera name plus the stream label, on every entity."""
-        camera = self.camera
-        device = camera.name if camera else self._did
-        label = self._stream_label()
-        return device if not label else f"{device} {label}"
-
-    def _stream_label(self) -> str:
-        """The translated stream name.
-
-        Read from the same platform translations table `has_entity_name`
-        entities use, so there is exactly one source of labels; the `{camera}`
-        placeholder is dropped because the device name is already prepended.
-        """
-        if self.platform_data is None:
-            return self._stream_key
-        key = (
-            f"component.{self.platform_data.platform_name}."
-            f"entity.{self.platform_data.domain}.{self._stream_key}.name"
-        )
-        template = self.platform_data.platform_translations.get(key, self._stream_key)
-        return template.replace("{camera}", "").strip()
 
     @property
     def is_streaming(self) -> bool:
