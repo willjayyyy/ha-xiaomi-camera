@@ -43,6 +43,16 @@ STREAM_CODEC_H264: Final = "h264"
 #: support.
 STREAM_CODEC_ORIGINAL: Final = "original"
 
+#: Per-camera stream selection: {did: [stream key, ...]}. Replaces the
+#: entry-wide CONF_STREAM_CODEC, which could only say one thing for every
+#: camera at once.
+CONF_CAMERA_STREAMS: Final = "camera_streams"
+
+#: Which stream key the bare `<did>` entity is bound to, per entry. Set once
+#: by the migration and never changed: it is what keeps existing entities
+#: identical across the upgrade.
+CONF_PRIMARY_STREAM: Final = "primary_stream"
+
 CONF_HOST: Final = "host"
 CONF_PORT: Final = "port"
 
