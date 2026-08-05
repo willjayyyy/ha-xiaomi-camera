@@ -20,7 +20,6 @@ from homeassistant.config_entries import (
     OptionsFlow,
 )
 from homeassistant.core import callback
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     SelectSelector,
@@ -517,12 +516,27 @@ def _camera_checklist_schema(
     chosen: list[str],
     auto_add: bool,
 ) -> vol.Schema:
-    """A checklist of cameras, labelled the way the Mi Home app labels them."""
+    """A dropdown of cameras, labelled the way the Mi Home app labels them.
+
+    A dropdown that opens into a checklist, like Home Assistant's "pick a
+    domain" selectors: each option carries the camera's name plus its id, so a
+    person can tell which camera is which and the id stays unique even when
+    two cameras share a name. The submitted value is the device id itself.
+    """
+    options = [
+        {"value": did, "label": f"{name} ({did})"} for did, name in cameras.items()
+    ]
     return vol.Schema(
         {
             vol.Required(
                 CONF_CAMERAS, default=[did for did in chosen if did in cameras]
-            ): cv.multi_select(cameras),
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    options=options,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            ),
             vol.Required(CONF_AUTO_ADD, default=auto_add): bool,
         }
     )
@@ -538,15 +552,15 @@ def _streams_schema(
     primary: str,
     stream_options: dict[str, list[str]] | None = None,
 ) -> vol.Schema:
-    """One codec dropdown and a resolution checklist per selected camera.
+    """One codec dropdown and a resolution dropdown per selected camera.
 
     A camera's streams are a codec times a resolution, so the form asks for
-    the two separately -- a multi-select codec dropdown and a resolution
-    checklist -- rather than one long list of stream keys. Each field's key
-    carries the camera's name plus id, because Home Assistant labels a dynamic
-    field by its schema key; the id keeps the key unique even when two cameras
-    share a name. Defaults to the primary stream (see `streams.py`), or to the
-    entry's current choice in the options flow.
+    the two separately -- both as dropdowns that open into a checklist, like
+    Home Assistant's "pick a domain" selectors. Each field's key carries the
+    camera's name plus id, because Home Assistant labels a dynamic field by
+    its schema key; the id keeps the key unique even when two cameras share a
+    name. Defaults to the primary stream (see `streams.py`), or to the entry's
+    current choice in the options flow.
 
     A camera reporting no streams at all -- an add-on predating
     `/api/cameras.streams` -- gets no selector here.
@@ -557,12 +571,12 @@ def _streams_schema(
             continue
         label = f"{cameras[did]} ({did})"
         codecs = sorted({key.split("_", 1)[0] for key in available[did]})
-        resolutions = {
-            (key.split("_", 1)[1] if "_" in key else _ORIGINAL): (
-                f"{key.split('_', 1)[1]}p" if "_" in key else "Original"
-            )
+        resolutions = [
+            {"value": key.split("_", 1)[1], "label": f"{key.split('_', 1)[1]}p"}
+            if "_" in key
+            else {"value": _ORIGINAL, "label": "Original"}
             for key in available[did]
-        }
+        ]
         current = stream_options.get(did, [primary]) if stream_options else [primary]
         default_codecs = {key.split("_", 1)[0] for key in current}
         default_res = {
@@ -579,7 +593,13 @@ def _streams_schema(
             )
         )
         fields[vol.Required(f"{label} · Resolution", default=default_res)] = (
-            cv.multi_select(resolutions)
+            SelectSelector(
+                SelectSelectorConfig(
+                    options=resolutions,
+                    multiple=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
         )
     return vol.Schema(fields)
 
