@@ -60,11 +60,16 @@ class TestUniqueId:
         assert unique_id("42", "h265", primary_key="h265") == "42"
         assert unique_id("42", "h264", primary_key="h265") == "42_h264"
 
+    def test_the_root_key_is_codec_neutral(self) -> None:
+        assert unique_id("42", "original", primary_key="original") == "42"
+
 
 class TestSelection:
     def test_an_unconfigured_camera_gets_the_root_stream(self) -> None:
         """The camera's own encoding, nothing chosen on the user's behalf."""
-        assert selected_streams({}, "42", available=["h265", "h264"]) == ["h265"]
+        assert selected_streams({}, "42", available=["original", "h265", "h264"]) == [
+            "original"
+        ]
 
     def test_an_unconfigured_camera_follows_the_entrys_primary_not_root(
         self,
@@ -109,10 +114,10 @@ class TestMigration:
         assert migrated["primary_stream"] == "h264"
         assert migrated["camera_streams"]["42"] == ["h264"]
 
-    def test_original_entries_keep_playing_h265(self) -> None:
+    def test_original_entries_keep_playing_the_root(self) -> None:
         migrated = migrate_options({"stream_codec": "original"}, ["42"])
-        assert migrated["primary_stream"] == "h265"
-        assert migrated["camera_streams"]["42"] == ["h265"]
+        assert migrated["primary_stream"] == "original"
+        assert migrated["camera_streams"]["42"] == ["original"]
 
     def test_entries_predating_the_option_are_treated_as_h264(self) -> None:
         """`camera.py` has always defaulted to H.264 when the key is absent.
@@ -153,8 +158,8 @@ class TestEntityCleanup:
         assert wanted_unique_ids(options, {"42": ["h264", "h264_360"]}) == {"42"}
 
     def test_a_camera_with_no_entry_falls_back_to_the_root(self) -> None:
-        options = {"primary_stream": "h265"}
-        assert wanted_unique_ids(options, {"42": ["h265", "h264"]}) == {"42"}
+        options = {"primary_stream": "original"}
+        assert wanted_unique_ids(options, {"42": ["original", "h264"]}) == {"42"}
 
     def test_a_stream_missing_from_the_current_poll_stays_wanted(self) -> None:
         """I3: a transient absence must not authorise deletion.

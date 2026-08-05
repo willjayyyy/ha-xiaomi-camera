@@ -16,7 +16,9 @@ from .const import CONF_CAMERA_STREAMS, CONF_PRIMARY_STREAM
 
 #: The camera's own encoding at its own resolution. What a camera gets when
 #: nothing has been chosen for it: the unmodified stream, no transcode.
-ROOT_KEY = "h265"
+#: Codec-neutral: the root's codec is unknown until a session runs, and the
+#: add-on names it `original`, not a codec.
+ROOT_KEY = "original"
 
 
 def unique_id(did: str, key: str, primary_key: str) -> str:

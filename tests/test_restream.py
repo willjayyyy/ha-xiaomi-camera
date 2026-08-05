@@ -23,7 +23,6 @@ from bridge.const import (
     WEBRTC_PORT,
 )
 from bridge.restream import (
-    ROOT_CODEC,
     ROOT_KEY,
     STREAM_SPECS,
     Restreamer,
@@ -116,10 +115,10 @@ class TestStreamSources:
         assert not source.startswith("ffmpeg:")
         assert "#video=" not in source
 
-    def test_eight_streams_per_camera(self) -> None:
-        """Four heights across both codecs."""
+    def test_nine_streams_per_camera(self) -> None:
+        """Four heights across both codecs, plus the root."""
         config = build_config(make_options(AccessMode.LOCAL), ["1", "2", "3"])
-        assert len(config["streams"]) == 24
+        assert len(config["streams"]) == 27
 
     def test_the_compatibility_stream_has_its_own_name(self) -> None:
         """Two names rather than two codecs under one.
@@ -145,14 +144,10 @@ class TestStreamSources:
         assert "libopenh264" not in config["ffmpeg"]["h264"]
 
     def test_h265_is_encoded_with_the_standard_encoder(self) -> None:
-        """Against `h265/360`, not the bare `h265` template.
-
-        `h265` names the root variant's codec, but the root is always
-        `#video=copy` (see `build_config`) -- no `#video=` value ever names
-        the bare template, so asserting against it would pass even if the
-        template were missing the encoder entirely.
-        """
+        """libx265 rather than kvazaar, in the full-size and scaled forms."""
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "libx265" in config["ffmpeg"]["h265"]
+        assert "kvazaar" not in config["ffmpeg"]["h265"]
         assert "libx265" in config["ffmpeg"]["h265/360"]
         assert "kvazaar" not in config["ffmpeg"]["h265/360"]
 
@@ -160,8 +155,7 @@ class TestStreamSources:
         """go2rtc defaults to -g 50; HLS cannot start anywhere but a keyframe."""
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert "-g 25" in config["ffmpeg"]["h264"]
-        # Not the bare `h265` template -- see
-        # `test_h265_is_encoded_with_the_standard_encoder`.
+        assert "-g 25" in config["ffmpeg"]["h265"]
         assert "-g 25" in config["ffmpeg"]["h265/360"]
 
     def test_the_compatibility_stream_reuses_the_original(self) -> None:
@@ -205,13 +199,16 @@ class TestAudioFollowsVideo:
             if spec.key == ROOT_KEY:
                 continue
             source = sources[stream_name("42", spec.key)]
-            assert ("#audio=aac" in source) is (spec.codec != ROOT_CODEC), spec.key
+            assert ("#audio=aac" in source) is (spec.codec == "h264"), spec.key
 
     def test_the_rule_is_derived_not_listed(self) -> None:
         """A spec that never existed when the rule was written still gets the
         right answer -- which is what makes the rule a guard rather than a
         table someone has to remember to update.
         """
+        assert _audio_codecs(StreamSpec("original", "original", None, "2M")) == (
+            "copy",
+        )
         assert _audio_codecs(StreamSpec("h264_90", "h264", 90, "128k")) == (
             "copy",
             "aac",
@@ -220,21 +217,26 @@ class TestAudioFollowsVideo:
 
 
 class TestStreamCatalogue:
-    """Eight streams per camera: four heights across two codecs."""
+    """Nine streams per camera: the root plus four heights across two codecs."""
 
-    def test_every_camera_gets_eight_streams(self) -> None:
+    def test_every_camera_gets_nine_streams(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         mine = [name for name in config["streams"] if name.startswith("camera_42")]
-        assert len(mine) == 8, sorted(mine)
+        assert len(mine) == 9, sorted(mine)
 
-    def test_every_stream_name_states_its_codec(self) -> None:
-        """No variant omits its codec, not even the camera's own encoding.
+    def test_every_derived_stream_name_states_its_codec(self) -> None:
+        """Derived variants never omit their codec; the root has none to state.
 
-        The rule exists because a user comparing two 360p entities otherwise
-        has nothing to tell them apart.
+        A user comparing two 360p entities otherwise has nothing to tell them
+        apart. The root is the camera's own encoding, so its name carries no
+        codec at all -- it cannot lie about which one that is.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        root = stream_name("42")
+        assert root == "camera_42"
         for name in config["streams"]:
+            if name == root:
+                continue
             assert name.startswith(("camera_42_h264", "camera_42_h265")), name
 
     def test_derived_streams_source_the_root_not_the_http_endpoint(self) -> None:
@@ -286,25 +288,28 @@ class TestStreamCatalogue:
     def test_the_source_resolution_streams_do_not_scale(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert "scale" not in config["ffmpeg"]["h264"]
+        assert "scale" not in config["ffmpeg"]["h265"]
         assert "scale" not in config["streams"][stream_name("42")]
 
-    def test_the_source_resolution_h264_stream_is_bitrate_capped(self) -> None:
-        """The full-resolution H.264 variant is a real transcode, not a copy.
+    def test_the_source_resolution_codec_streams_are_bitrate_capped(self) -> None:
+        """The full-resolution transcodes are real transcodes, not copies.
 
-        Unlike the H.265 root, it is not `#video=copy`, so leaving it without
-        `-b:v` would let libx264 fall back to CRF-based rate control instead
-        of the documented 2M ceiling.
+        Unlike the original root, they are not `#video=copy`, so leaving them
+        without `-b:v` would let libx264/libx265 fall back to CRF-based rate
+        control instead of the documented 2M ceiling.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert "-b:v 2M" in config["ffmpeg"]["h264"]
+        assert "-b:v 2M" in config["ffmpeg"]["h265"]
         assert "scale" not in config["ffmpeg"]["h264"]
+        assert "scale" not in config["ffmpeg"]["h265"]
 
 
 class TestStreamDescriptions:
     """What the integration reads instead of hardcoding the list."""
 
     def test_it_describes_every_published_stream(self) -> None:
-        """Against the eight keys literally, not `[s.key for s in STREAM_SPECS]`.
+        """Against the nine keys literally, not `[s.key for s in STREAM_SPECS]`.
 
         That comparison is a restatement of the implementation under test: it
         passes for any `STREAM_SPECS`, including an empty one, so it cannot
@@ -313,6 +318,7 @@ class TestStreamDescriptions:
         restreamer = Restreamer(make_options(AccessMode.LOCAL))
         described = restreamer.stream_descriptions("42")
         assert [d["key"] for d in described] == [
+            "original",
             "h265",
             "h265_720",
             "h265_360",
@@ -332,6 +338,7 @@ class TestStreamDescriptions:
     def test_heights_are_reported_for_scaled_streams_only(self) -> None:
         restreamer = Restreamer(make_options(AccessMode.LOCAL))
         by_key = {d["key"]: d for d in restreamer.stream_descriptions("42")}
+        assert by_key["original"]["height"] is None
         assert by_key["h265"]["height"] is None
         assert by_key["h264_360"]["height"] == 360
 

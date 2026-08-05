@@ -113,10 +113,14 @@ class StreamSpec:
 #: peer-to-peer session runs -- so there is no moment at which a height could
 #: be filtered out. An upscale wastes nothing that is not already idle: no
 #: producer starts until a consumer connects.
+#:
+#: The root's codec field is "original": the camera's own encoding is not
+#: known until a session delivers its first frame, and the root never names
+#: a codec anywhere -- neither in its key nor in its go2rtc name. The
+#: bitrate is documentary only (the root carries no `#video=` argument, so
+#: no template is ever generated for it).
 STREAM_SPECS: tuple[StreamSpec, ...] = (
-    # The root's bitrate is documentary only: the root carries no `#video=`
-    # argument at all (see `build_config`), so no template is ever generated
-    # for it and this value is never read.
+    StreamSpec("original", "original", None, "2M"),
     StreamSpec("h265", "h265", None, "2M"),
     StreamSpec("h265_720", "h265", 720, "2M"),
     StreamSpec("h265_360", "h265", 360, "512k"),
@@ -128,40 +132,45 @@ STREAM_SPECS: tuple[StreamSpec, ...] = (
 )
 
 #: The variant every other one is derived from: the camera's own encoding at
-#: its own resolution, repackaged without re-encoding.
-ROOT_KEY = "h265"
-
-#: The codec the root publishes, read from the root's own spec rather than
-#: written out again. A second copy is a second thing to drift.
-ROOT_CODEC = next(spec.codec for spec in STREAM_SPECS if spec.key == ROOT_KEY)
+#: its own resolution, repackaged without re-encoding. Codec-neutral on
+#: purpose -- its codec is unknown until a session runs, and naming it would
+#: lie for every camera whose native codec is not the one named.
+ROOT_KEY = "original"
 
 
 def _audio_codecs(spec: StreamSpec) -> tuple[str, ...]:
     """The audio a variant offers, negotiated per consumer by go2rtc.
 
-    A variant's audio serves the same consumer its video codec serves. The
-    H.264 family exists for consumers that cannot decode H.265, which is
-    overwhelmingly the same population that cannot decode Opus -- Home
-    Assistant's own HLS path among them, which accepts aac and mp3 only. An
-    H.264 variant carrying Opus alone would be half-compatible, and silently.
+    The root carries the camera's own encoding, so its audio is passed
+    through untouched. Among transcoded variants, the H.264 family exists
+    for consumers that cannot decode H.265 -- overwhelmingly the same
+    population that cannot decode Opus (Home Assistant's own HLS path
+    accepts aac and mp3 only) -- so those variants additionally offer an aac
+    conversion. H.265 variants stay copy-only: a consumer that accepts H.265
+    can decode the camera's own audio.
 
-    Nothing is transcoded that was not already: those variants re-encode the
-    picture regardless, so the second encoding rides along on a process that
-    is running anyway. `copy` is listed first, so a consumer that asks for
-    nothing gets the camera's own encoding untouched.
+    Nothing is transcoded that was not already: these variants re-encode the
+    picture regardless, so the audio rides along on a process that is running
+    anyway. `copy` is listed first, so a consumer that asks for nothing gets
+    the camera's own encoding untouched.
     """
-    return ("copy",) if spec.codec == ROOT_CODEC else ("copy", "aac")
+    if spec.key == ROOT_KEY:
+        return ("copy",)
+    return ("copy", "aac") if spec.codec == "h264" else ("copy",)
 
 
 def stream_name(did: str, key: str = ROOT_KEY) -> str:
     """Stable go2rtc stream name for one variant of a camera.
 
-    `camera_<did>_<codec>` or `camera_<did>_<codec>_<height>`. The codec is
-    never omitted, including for the camera's own encoding: a name that
-    depends on which codec happens to be the default is a rule with an
-    exception, and the exception is exactly what makes two 360p streams
-    indistinguishable.
+    `camera_<did>` for the root -- the camera's own encoding, which has no
+    codec of its own to state -- or `camera_<did>_<codec>` /
+    `camera_<did>_<codec>_<height>` for derived variants. The codec is never
+    omitted from a derived name: a name that depends on which codec happens
+    to be the default is a rule with an exception, and the exception is
+    exactly what makes two 360p streams indistinguishable.
     """
+    if key == ROOT_KEY:
+        return f"camera_{did}"
     return f"camera_{did}_{key}"
 
 
