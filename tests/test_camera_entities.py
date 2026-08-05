@@ -25,7 +25,7 @@ if sys.version_info >= (3, 14):
     from custom_components.xiaomi_camera.api import BridgeCamera, CameraStream
     from custom_components.xiaomi_camera.const import DOMAIN
 
-_KEYS = ("h265", "h264", "h264_360")
+_KEYS = ("original", "h265", "h264", "h264_360")
 
 
 def _camera(did: str = "42", keys: tuple[str, ...] = _KEYS) -> BridgeCamera:
@@ -43,9 +43,17 @@ def _camera(did: str = "42", keys: tuple[str, ...] = _KEYS) -> BridgeCamera:
         streams=tuple(
             CameraStream(
                 key=key,
-                codec="h265" if key.startswith("h265") else "h264",
+                codec=(
+                    key
+                    if key == "original"
+                    else ("h265" if key.startswith("h265") else "h264")
+                ),
                 height=360 if key.endswith("360") else None,
-                url=f"rtsp://127.0.0.1:8554/camera_{did}_{key}",
+                url=(
+                    f"rtsp://127.0.0.1:8554/camera_{did}"
+                    if key == "original"
+                    else f"rtsp://127.0.0.1:8554/camera_{did}_{key}"
+                ),
             )
             for key in keys
         ),
@@ -111,6 +119,23 @@ async def test_variant_entities_name_the_camera(hass) -> None:
     )
 
 
+async def test_the_original_entity_is_named_after_the_device(hass) -> None:
+    """The root carries the camera's own encoding, so it states no codec."""
+    await _setup(
+        hass,
+        {
+            "cameras": ["42"],
+            "primary_stream": "original",
+            "camera_streams": {"42": ["original"]},
+        },
+    )
+
+    registry = er.async_get(hass)
+    entity_id = registry.async_get_entity_id("camera", DOMAIN, "42")
+    assert entity_id is not None
+    assert hass.states.get(entity_id).attributes["friendly_name"] == "Living room"
+
+
 async def test_the_primary_entity_keeps_the_bare_device_id(hass) -> None:
     """The identity every HomeKit pairing and automation is bound to.
 
@@ -134,7 +159,7 @@ async def test_the_primary_entity_keeps_the_bare_device_id(hass) -> None:
 
 
 async def test_which_stream_is_primary_moves_the_bare_id(hass) -> None:
-    """An entry migrated from `original` has h265 as its primary."""
+    """An entry migrated from v2 keeps the root as its primary."""
     await _setup(
         hass,
         {

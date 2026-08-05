@@ -523,25 +523,22 @@ def _camera_checklist_schema(
     )
 
 
-def _stream_label_map(keys: list[str], camera_name: str) -> dict[str, str]:
-    """Stream key -> display label, from the translations table the rest of
-    the integration uses, so there is exactly one source of labels.
+def _stream_label_map(keys: list[str]) -> dict[str, str]:
+    """Stream key -> display label, from the selector translations table.
 
-    The labels carry the camera's name, substituted into the `{camera}`
-    placeholder the same way the entity-name path does, so the form reads
-    "Living room H.264 360p" rather than a bare codec.
+    Read from `selector.stream_key.options` rather than the entity labels:
+    the original entity is named after the device, so its entity label is the
+    bare `{camera}` -- which would read as a section header if it doubled as
+    the dropdown option. Each surface has its own single source of labels.
     """
     path = Path(__file__).with_name("translations") / "en.json"
     try:
-        entities = json.loads(path.read_text(encoding="utf-8"))["entity"]["camera"]
+        options = json.loads(path.read_text(encoding="utf-8"))["selector"][
+            "stream_key"
+        ]["options"]
     except (OSError, KeyError, ValueError):
-        entities = {}
-    labels = {}
-    for key in keys:
-        entry = entities.get(key)
-        label = entry.get("name", key) if isinstance(entry, dict) else entry or key
-        labels[key] = label.replace("{camera}", camera_name).strip()
-    return labels
+        options = {}
+    return {key: options.get(key, key) for key in keys}
 
 
 def _streams_schema(
@@ -572,7 +569,7 @@ def _streams_schema(
             continue
         default = stream_options.get(did, [primary]) if stream_options else [primary]
         streams[vol.Required(f"{cameras[did]} ({did})", default=default)] = (
-            cv.multi_select(_stream_label_map(available[did], cameras[did]))
+            cv.multi_select(_stream_label_map(available[did]))
         )
     return vol.Schema(streams)
 

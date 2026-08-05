@@ -57,6 +57,7 @@
       }
     },
     "camera": {
+      "original": {"name": "{camera}"},
       "h265": {"name": "{camera} H.265"},
       "h265_720": {"name": "{camera} H.265 720p"},
       "h265_360": {"name": "{camera} H.265 360p"},

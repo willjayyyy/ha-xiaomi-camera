@@ -85,7 +85,8 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         """The camera name plus the stream label, on every entity."""
         camera = self.camera
         device = camera.name if camera else self._did
-        return f"{device} {self._stream_label()}"
+        label = self._stream_label()
+        return device if not label else f"{device} {label}"
 
     def _stream_label(self) -> str:
         """The translated stream name.
