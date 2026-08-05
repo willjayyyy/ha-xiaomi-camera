@@ -10,8 +10,32 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 _ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
+
+
+class MediaKind(StrEnum):
+    """Which track a unit belongs to."""
+
+    VIDEO = "video"
+    AUDIO = "audio"
+
+
+@dataclass(frozen=True)
+class MediaUnit:
+    """One encoded chunk, stamped on the camera's own clock.
+
+    The timestamp is what makes audio possible at all. H.26x start codes carry
+    their own frame boundaries, so video survived being passed around as bare
+    bytes; Opus carries no such thing and needs a container, and a container
+    needs the time. Both media arrive through one SDK callback stamped from one
+    device clock, so carrying that number here is all synchronisation costs.
+    """
+
+    kind: MediaKind
+    ts_ms: int
+    payload: bytes
 
 
 # eq=False keeps the default identity-based __eq__ and __hash__. A dataclass
@@ -22,7 +46,7 @@ _ANNEX_B_START_CODE = b"\x00\x00\x00\x01"
 class Consumer:
     """A subscriber to the raw stream."""
 
-    queue: asyncio.Queue[bytes]
+    queue: asyncio.Queue[MediaUnit]
     #: Set when the session ends, so the reader stops waiting on the queue.
     #: A queue sentinel cannot serve this purpose: the queue is bounded and may
     #: be full exactly when the session is torn down, in which case the sentinel
@@ -34,6 +58,11 @@ class Consumer:
     #: produces artefacts instead of video and delays the recovery it is
     #: waiting for.
     resyncing: bool = False
+    #: Set while this consumer still needs the parameter sets prepended to the
+    #: next video unit it is sent. True on arrival and true again after a
+    #: resync, so a consumer joining and a consumer recovering take one path
+    #: rather than two that have to be kept in step.
+    needs_parameters: bool = True
 
 
 @dataclass
