@@ -53,6 +53,27 @@ def _bare_session() -> CameraSession:
     return session
 
 
+@pytest.fixture(autouse=True)
+def _allow_loopback_servers(socket_enabled):
+    """Let this module's endpoint tests open a loopback server.
+
+    Everything here tests the add-on bridge, never the Home Assistant
+    integration -- but under `.venv314` the Home Assistant plugin is active for
+    the whole run and brings `pytest-socket`, which blocks socket use so an
+    integration test cannot quietly reach the network. Several tests below
+    drive the real HTTP handler over `TestClient`/`TestServer`, which is the
+    only way to prove the endpoint answers what go2rtc actually reads; a fake
+    request object would assert against the fake.
+
+    Applied to the module rather than to the four classes that need it: every
+    test in this file is an add-on test with no Home Assistant in it, so there
+    is no protection here worth keeping, and a per-class list is one more thing
+    to forget to update. `conftest` supplies a no-op `socket_enabled` where the
+    plugin is absent.
+    """
+    yield
+
+
 class TestConsumer:
     def test_is_hashable(self) -> None:
         """Consumers are held in a set, so they must be hashable.

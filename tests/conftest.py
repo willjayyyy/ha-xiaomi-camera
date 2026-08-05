@@ -146,3 +146,24 @@ if sys.version_info >= (3, 14):
         not found".
         """
         yield
+
+
+else:
+
+    @pytest.fixture
+    def socket_enabled():
+        """A no-op stand-in for the fixture `pytest-socket` provides.
+
+        Under `.venv314` the Home Assistant plugin brings `pytest-socket`,
+        which blocks socket use so an integration test cannot quietly reach the
+        network. The add-on's own tests do the opposite on purpose: they drive
+        the real HTTP handler over a loopback server, which is the only way to
+        prove the endpoint answers what go2rtc reads. Those tests therefore
+        depend on `socket_enabled` to opt back in.
+
+        Under `.venv311` the plugin is absent, so that fixture does not exist
+        and depending on it would be a collection error. Defining a no-op here
+        lets one test file make sense in both interpreters, rather than
+        splitting it or guarding every test with a skip.
+        """
+        yield

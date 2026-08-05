@@ -13,3 +13,11 @@ PyTurboJPEG==1.8.3
 # Read by bridge.restream when it renders the go2rtc configuration. Not pulled
 # in by the plugin, and the add-on tests need it.
 pyyaml
+
+# The bridge packages the published stream with PyAV, so bridge.mux imports it
+# and every module that touches a session pulls it in transitively. It reaches
+# the image through the vendor SDK, whose decoder is built on it -- but CI
+# deliberately never installs that SDK, so without this line the whole session
+# and muxer suite fails to collect. A developer machine hides this: installing
+# the SDK there brings PyAV with it.
+av>=14
