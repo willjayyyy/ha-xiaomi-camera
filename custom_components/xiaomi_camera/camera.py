@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.typing import UNDEFINED
 
 from . import XiaomiCameraConfigEntry
 from .api import BridgeError, CameraOffError
-from .const import ATTR_LAN_ONLINE, ATTR_MODEL, ATTR_POWERED_ON
+from .const import ATTR_LAN_ONLINE, ATTR_MODEL, ATTR_POWERED_ON, DOMAIN
 from .coordinator import XiaomiCameraCoordinator
 from .entity import XiaomiCameraEntity
 from .selection import selected
@@ -27,6 +30,7 @@ async def async_setup_entry(
     """Create one camera entity per selected stream."""
     coordinator = entry.runtime_data
     known: set[tuple[str, str]] = set()
+    created: list[XiaomiCamera] = []
 
     @callback
     def _add_new() -> None:
@@ -46,12 +50,57 @@ async def async_setup_entry(
                 if (did, key) in known:
                     continue
                 known.add((did, key))
-                new.append(XiaomiCamera(coordinator, did, key, primary))
+                entity = XiaomiCamera(coordinator, did, key, primary)
+                new.append(entity)
+                created.append(entity)
         if new:
             async_add_entities(new)
+        # Registered asynchronously, so a prompt pass runs once they exist; the
+        # coordinator listener below re-runs it on every later poll.
+        _sync_registry_names(hass, created)
+        hass.async_create_task(_sync_registry_names_soon(hass, list(created)))
 
     _add_new()
     entry.async_on_unload(coordinator.async_add_listener(_add_new))
+
+
+async def _sync_registry_names_soon(
+    hass: HomeAssistant, entities: list[XiaomiCamera]
+) -> None:
+    """Set the registry display names once the entities are registered."""
+    await asyncio.sleep(1)
+    _sync_registry_names(hass, entities)
+
+
+def _sync_registry_names(hass: HomeAssistant, entities: list[XiaomiCamera]) -> None:
+    """Pin each entity's registry display name to the device name plus label.
+
+    Home Assistant's device page shows the entity's stored name, and for
+    `has_entity_name` entities that is the label alone -- so a sub-stream would
+    appear as a bare codec under the device heading. The registry `name` is the
+    documented way to customise an entity's display name (what a user rename
+    writes); setting it to "device + label" makes every surface agree. Only set
+    it while unset, so a user's own rename is never undone.
+    """
+    registry = er.async_get(hass)
+    for entity in entities:
+        camera = entity.camera
+        if camera is None or not camera.name:
+            # Name not known yet; a later poll re-runs this once it is.
+            continue
+        entity_id = registry.async_get_entity_id("camera", DOMAIN, entity.unique_id)
+        if entity_id is None:
+            # Not registered yet; the follow-up task catches it.
+            continue
+        entry = registry.async_get(entity_id)
+        if entry is None or entry.name is not None:
+            continue
+        label = entity.name
+        if label is UNDEFINED or label is None:
+            label = ""
+        registry.async_update_entity(
+            entity_id, name=f"{camera.name} {label}".strip() if label else camera.name
+        )
 
 
 class XiaomiCamera(XiaomiCameraEntity, Camera):
