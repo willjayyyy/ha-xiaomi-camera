@@ -10,17 +10,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import XiaomiCameraConfigEntry
 from .api import BridgeError, CameraOffError
-from .const import (
-    ATTR_LAN_ONLINE,
-    ATTR_MODEL,
-    ATTR_POWERED_ON,
-    CONF_PRIMARY_STREAM,
-    STREAM_CODEC_H264,
-)
+from .const import ATTR_LAN_ONLINE, ATTR_MODEL, ATTR_POWERED_ON
 from .coordinator import XiaomiCameraCoordinator
 from .entity import XiaomiCameraEntity
 from .selection import selected
-from .streams import selected_streams, unique_id
+from .streams import primary_stream, selected_streams, unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +35,7 @@ async def async_setup_entry(
         Filtered rather than added and hidden: an entity the user did not ask
         for still shows up in searches, automations and voice assistants.
         """
-        primary = entry.options.get(CONF_PRIMARY_STREAM, STREAM_CODEC_H264)
+        primary = primary_stream(dict(entry.options))
         new: list[XiaomiCamera] = []
         for did in selected(entry, coordinator.data):
             camera = coordinator.data.get(did)

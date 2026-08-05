@@ -33,6 +33,17 @@ def unique_id(did: str, key: str, primary_key: str) -> str:
     return did if key == primary_key else f"{did}_{key}"
 
 
+def primary_stream(options: dict) -> str:
+    """Which stream the bare `<did>` entity is bound to.
+
+    One definition on purpose. This value decides an entity's permanent
+    identity, and two call sites answering it differently moves that identity
+    without anything failing -- the entity is simply created under a different
+    id, and whatever was bound to the old one is orphaned.
+    """
+    return options.get(CONF_PRIMARY_STREAM, ROOT_KEY)
+
+
 def selected_streams(options: dict, did: str, available: list[str]) -> list[str]:
     """The stream keys to create entities for, in the add-on's own order.
 
@@ -68,7 +79,7 @@ def wanted_unique_ids(options: dict, available: dict[str, list[str]]) -> set[str
     keeps such entities forever otherwise -- present, permanently unavailable,
     and indistinguishable from a broken one.
     """
-    primary = options.get(CONF_PRIMARY_STREAM, ROOT_KEY)
+    primary = primary_stream(options)
     return {
         unique_id(did, key, primary)
         for did, keys in available.items()

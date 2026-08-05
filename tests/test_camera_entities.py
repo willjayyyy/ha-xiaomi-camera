@@ -211,3 +211,18 @@ async def test_all_of_a_cameras_entities_share_one_device(hass) -> None:
     device = device_registry.async_get(device_ids.pop())
     assert device is not None
     assert device.identifiers == {(DOMAIN, "42")}
+
+
+async def test_an_entry_with_no_stream_options_still_has_a_primary(hass) -> None:
+    """A fresh entry that predates the per-camera options.
+
+    Nothing has written `primary_stream` or `camera_streams` yet, so both the
+    selection and the identity fall back to their defaults. If those defaults
+    disagree, the only entity created is not the primary one and the bare
+    device id -- the identity everything else is bound to -- belongs to
+    nothing.
+    """
+    await _setup(hass, {"cameras": ["42"]})
+
+    registry = er.async_get(hass)
+    assert registry.async_get_entity_id("camera", DOMAIN, "42") is not None
