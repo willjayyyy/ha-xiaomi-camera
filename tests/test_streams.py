@@ -150,8 +150,8 @@ class TestMigration:
                 "camera_streams": {"42": ["h265", "h264"]},
             }
         )
-        assert migrated["primary_stream"] == "original"
-        assert migrated["camera_streams"] == {"42": ["original", "h264"]}
+        assert migrated["primary_stream"] == INTEGRATION_ROOT_KEY
+        assert migrated["camera_streams"] == {"42": [INTEGRATION_ROOT_KEY, "h264"]}
 
     def test_a_v2_entry_without_h265_is_untouched(self) -> None:
         options = {"primary_stream": "h264", "camera_streams": {"42": ["h264"]}}

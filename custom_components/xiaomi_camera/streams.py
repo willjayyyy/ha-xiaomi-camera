@@ -135,11 +135,11 @@ def migrate_v2_options(options: dict) -> dict:
     """
 
     def _rewrite(keys: list[str]) -> list[str]:
-        return ["original" if key == "h265" else key for key in keys]
+        return [ROOT_KEY if key == "h265" else key for key in keys]
 
     migrated = dict(options)
     if migrated.get(CONF_PRIMARY_STREAM) == "h265":
-        migrated[CONF_PRIMARY_STREAM] = "original"
+        migrated[CONF_PRIMARY_STREAM] = ROOT_KEY
     camera_streams = migrated.get(CONF_CAMERA_STREAMS)
     if isinstance(camera_streams, dict):
         migrated[CONF_CAMERA_STREAMS] = {
