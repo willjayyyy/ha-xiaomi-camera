@@ -56,6 +56,26 @@ After signing in, Xiaomi redirects your browser to an address that **will not
 open**. A blank page or an error there is expected. Copy the full address from
 the address bar and paste it into the add-on page to complete sign-in.
 
+## Choosing streams
+
+Each camera can publish several versions of the same picture. Pick per camera
+in the integration's options, under **Video streams**.
+
+| Stream | Good for |
+|---|---|
+| H.265 · Original quality | Recording, NVR software. The camera's own encoding, no re-encoding. |
+| H.264 · Original quality | Browsers and players that cannot decode H.265. |
+| 360p / 180p | Apple Home, remote viewing, dashboards showing several cameras at once. |
+| 720p | A middle ground when the camera's own resolution is higher. |
+
+A camera starts with its original encoding. If the picture will not play in
+your browser, add an H.264 stream — most browsers cannot decode H.265.
+
+**Apple Home:** add a 360p stream and point the HomeKit bridge at that entity.
+Home Assistant re-encodes at a bitrate HomeKit chooses, which is low, so a
+smaller picture looks considerably better than a larger one. Leave *Cameras
+that support native H.264 streams* unticked.
+
 ## Without Home Assistant
 
 The bridge is a self-contained service: it talks to the cameras and publishes
@@ -175,8 +195,8 @@ does not appear is almost certainly on that list.
 
 ## Known limits
 
-- Cameras send H.265 video. Each one is also published as H.264, converted
-  only while something is watching, because browsers and HomeKit need that.
+- Cameras send H.265 video. Every other stream variant is produced by
+  converting it, and only while something is watching.
 - Only Xiaomi's China account region has been tested.
 - No two-way audio, no pan/tilt control, no SD-card playback.
 
@@ -204,12 +224,19 @@ Conventions and the release process are in
 internally, why it is split into two components, and the non-obvious behaviour
 of Xiaomi's streaming library.
 
-## Third-party components
-
-This project uses Xiaomi's own streaming library, which is closed source and
-**not redistributed here** — it is downloaded from Xiaomi during the build and
-is covered by their licence, not ours.
+## Licence
 
 This project's own code is Apache-2.0. See [LICENSE](LICENSE).
+
+Two third-party components are bundled or downloaded rather than written here,
+each under its own licence:
+
+- **Xiaomi's own streaming library** is closed source and **not redistributed
+  here** — it is downloaded from Xiaomi during the build and is covered by
+  their licence, not ours.
+- The add-on image bundles a static [ffmpeg](https://ffmpeg.org/) from
+  [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), GPL variant,
+  which is licensed under the GPL. Its sources are available from that
+  project.
 
 Built by studying [Xiaomi Miloco](https://github.com/XiaoMi/xiaomi-miloco).

@@ -4,8 +4,8 @@
 #
 # Regenerate when bumping the build:
 #   for a in linux64 linuxarm64; do
-#     curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/<TAG>/<BUILD>-$a-lgpl-7.1.tar.xz" \
-#       | sha256sum | sed "s|-$|<BUILD>-$a-lgpl-7.1.tar.xz|"
+#     curl -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/<TAG>/<BUILD>-$a-gpl-7.1.tar.xz" \
+#       | sha256sum | sed "s|-$|<BUILD>-$a-gpl-7.1.tar.xz|"
 #   done
-77714bdf7883f0f5fbbbdd0b60315f72212e8d13646d476ea312f8532e598fc6 ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-lgpl-7.1.tar.xz
-691e1859d16cc91c8588c77cad2368a3ad59884d6de77afbffa1426599180224 ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-lgpl-7.1.tar.xz
+2164fd331d6578dc3c5b0becf9f86bf21d4fbb0424e2bb54240945203560b242 ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+cb48a4379ce8ff008160980db27b13fd98b552877a7b58259e1892f7bfa5e830 ffmpeg-n7.1.5-12-g1fdbca85aa-linuxarm64-gpl-7.1.tar.xz

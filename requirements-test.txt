@@ -1,0 +1,15 @@
+# Pins a Home Assistant release through the plugin's patch version: 0.13.348
+# tracks homeassistant 2026.7.4. Bump both together -- testing against a
+# different core than the add-on is deployed against proves less than it
+# appears to.
+pytest-homeassistant-custom-component==0.13.348
+
+# homeassistant.components.camera declares this in its own manifest, but the
+# plugin does not install component requirements -- only camera.py pulls it
+# in, at platform-import time, so nothing surfaced this until entities were
+# actually set up under test.
+PyTurboJPEG==1.8.3
+
+# Read by bridge.restream when it renders the go2rtc configuration. Not pulled
+# in by the plugin, and the add-on tests need it.
+pyyaml

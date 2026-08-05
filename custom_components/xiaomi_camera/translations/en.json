@@ -26,19 +26,24 @@
         "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
         "data": {
           "cameras": "Cameras",
-          "auto_add": "Add new cameras automatically",
-          "stream_codec": "Video for Home Assistant"
+          "auto_add": "Add new cameras automatically"
         },
         "data_description": {
           "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
-          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
-          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself."
+        },
+        "sections": {
+          "camera_streams": {
+            "name": "Video streams",
+            "description": "Each camera starts with one stream in its original encoding. Add lower-bandwidth versions for Apple Home or remote viewing. If your browser cannot play the picture, add an H.264 stream."
+          }
         }
       }
     },
     "error": {
       "cannot_connect": "Could not reach the bridge at that address.",
-      "not_linked": "The add-on still has no Xiaomi account linked. Sign in on its page first."
+      "not_linked": "The add-on still has no Xiaomi account linked. Sign in on its page first.",
+      "no_streams": "Choose at least one stream for every selected camera."
     },
     "abort": {
       "already_configured": "The bridge is already set up.",
@@ -52,6 +57,16 @@
       "camera_power": {
         "name": "Camera power"
       }
+    },
+    "camera": {
+      "h265": {"name": "H.265"},
+      "h265_720": {"name": "H.265 720p"},
+      "h265_360": {"name": "H.265 360p"},
+      "h265_180": {"name": "H.265 180p"},
+      "h264": {"name": "H.264"},
+      "h264_720": {"name": "H.264 720p"},
+      "h264_360": {"name": "H.264 360p"},
+      "h264_180": {"name": "H.264 180p"}
     }
   },
   "options": {
@@ -61,15 +76,22 @@
         "description": "Which of your Xiaomi cameras should appear in Home Assistant? You can change this later.",
         "data": {
           "cameras": "Cameras",
-          "auto_add": "Add new cameras automatically",
-          "stream_codec": "Video for Home Assistant"
+          "auto_add": "Add new cameras automatically"
         },
         "data_description": {
           "cameras": "Only the cameras you tick get entities. The rest stay in the Mi Home app and are not published.",
-          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself.",
-          "stream_codec": "H.264 is transcoded by the add-on and plays in every browser and in Apple Home. H.265 is the camera's native encoding: better quality and no transcoding cost, but it requires a device capable of decoding it, such as Safari or a browser with hardware support."
+          "auto_add": "A camera added to your account later joins on its own. Turn this off to decide each one yourself."
+        },
+        "sections": {
+          "camera_streams": {
+            "name": "Video streams",
+            "description": "Each camera starts with one stream in its original encoding. Add lower-bandwidth versions for Apple Home or remote viewing. If your browser cannot play the picture, add an H.264 stream."
+          }
         }
       }
+    },
+    "error": {
+      "no_streams": "Choose at least one stream for every selected camera."
     },
     "abort": {
       "cannot_connect": "Could not reach the bridge add-on.",
@@ -77,10 +99,16 @@
     }
   },
   "selector": {
-    "stream_codec": {
+    "stream_key": {
       "options": {
-        "h264": "H.264 · Best compatibility",
-        "original": "H.265 · Best quality"
+        "h265": "H.265 · Original quality",
+        "h265_720": "H.265 · 720p",
+        "h265_360": "H.265 · 360p",
+        "h265_180": "H.265 · 180p",
+        "h264": "H.264 · Original quality",
+        "h264_720": "H.264 · 720p",
+        "h264_360": "H.264 · 360p",
+        "h264_180": "H.264 · 180p"
       }
     }
   },
@@ -88,6 +116,10 @@
     "not_linked": {
       "title": "Xiaomi account is not signed in",
       "description": "The {addon} add-on has no Xiaomi account signed in, so no cameras can be read. Open the add-on's page and sign in there — the account belongs to the add-on and is never held by Home Assistant. This message clears itself once it does."
+    },
+    "addon_outdated": {
+      "title": "Update the {addon} add-on",
+      "description": "The {addon} add-on is older than this integration and does not report which video streams it publishes. Update it to choose stream quality per camera."
     }
   }
 }

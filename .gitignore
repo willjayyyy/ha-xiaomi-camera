@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 .venv/
 .venv311/
+.venv314/
 
 # The vendor's streaming library is fetched at build time and is not ours to
 # redistribute -- see the licence note in the README.

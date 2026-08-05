@@ -64,6 +64,17 @@ CONNECT_TIMEOUT_SECONDS: Final = 30
 # produce a picture before one arrives.
 SNAPSHOT_TIMEOUT_SECONDS: Final = 15
 
+# How long a joining consumer waits for the parameter sets that let it decode
+# anything at all. Cameras send them ahead of each keyframe, so a cold session
+# produces them within a keyframe interval of connecting.
+#
+# Deliberately shorter than the snapshot timeout: go2rtc's transcode gives its
+# ffmpeg five seconds, so a consumer still waiting past that has already lost
+# its reader. The remaining margin exists so the wait ends in a logged
+# explanation rather than in silence -- the failure this bounds used to be
+# invisible from inside the add-on.
+PARAMETER_SET_TIMEOUT_SECONDS: Final = 10
+
 # Discovery service name announced to Supervisor; must match the integration's
 # domain so Home Assistant routes it to the right config flow.
 DISCOVERY_SERVICE: Final = "xiaomi_camera"

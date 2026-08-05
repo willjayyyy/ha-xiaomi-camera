@@ -7,9 +7,18 @@ than shipping quietly.
 Requests go through a real ``aiohttp`` application rather than a mocked request
 object: the guards are middleware, and middleware that is never mounted is not
 what runs in production.
+
+``pytest-homeassistant-custom-component`` (installed under ``.venv314``, not
+``.venv311``) blocks real sockets by default via ``pytest-socket``, which the
+``TestServer`` below needs; ``socket_enabled`` is that plugin's documented
+escape hatch for tests that open one on purpose. The marker is applied only
+when that plugin is present, so the module still runs unblocked under
+``.venv311``, which never installs it.
 """
 
 from __future__ import annotations
+
+import importlib.util
 
 import pytest
 from aiohttp import web
@@ -20,6 +29,9 @@ from bridge.webauth import (
     build_guards,
     session_token,
 )
+
+if importlib.util.find_spec("pytest_socket") is not None:
+    pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 PASSWORD = "correct-horse-battery"
 

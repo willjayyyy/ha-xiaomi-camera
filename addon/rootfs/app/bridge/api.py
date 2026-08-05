@@ -248,6 +248,12 @@ class BridgeApi:
                         "rtsp_url_h264": self._restreamer.rtsp_url_h264(
                             description.did
                         ),
+                        # Read by the integration in place of the two fixed
+                        # fields above, which stay for an integration older
+                        # than this add-on.
+                        "streams": self._restreamer.stream_descriptions(
+                            description.did
+                        ),
                         "rtsp_requires_credentials": (
                             self._restreamer.requires_credentials
                         ),

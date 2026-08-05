@@ -23,6 +23,9 @@ _UNLINKED_POLLS_BEFORE_ASKING = 5
 #: Identifies the repair raised when the add-on has no Xiaomi session.
 _UNLINKED_ISSUE = "not_linked"
 
+#: Identifies the repair raised when the add-on is too old to declare streams.
+_OUTDATED_ISSUE = "addon_outdated"
+
 
 class XiaomiCameraCoordinator(DataUpdateCoordinator[dict[str, BridgeCamera]]):
     """Keeps the camera list and their reachability in sync with the bridge."""
@@ -63,6 +66,22 @@ class XiaomiCameraCoordinator(DataUpdateCoordinator[dict[str, BridgeCamera]]):
         if self._unlinked_polls:
             self._unlinked_polls = 0
             ir.async_delete_issue(self.hass, DOMAIN, _UNLINKED_ISSUE)
+        # Reported rather than worked around. Synthesising a stream list from
+        # the two legacy URL fields would mean carrying a second way of finding
+        # streams for good, and would leave the user wondering why the new
+        # options never appeared.
+        if cameras and not any(camera.streams for camera in cameras):
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                _OUTDATED_ISSUE,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=_OUTDATED_ISSUE,
+                translation_placeholders={"addon": ADDON_NAME},
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, _OUTDATED_ISSUE)
         return {camera.did: camera for camera in cameras}
 
     def _async_report_unlinked(self) -> None:

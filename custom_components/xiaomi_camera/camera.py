@@ -10,17 +10,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import XiaomiCameraConfigEntry
 from .api import BridgeError, CameraOffError
-from .const import (
-    ATTR_LAN_ONLINE,
-    ATTR_MODEL,
-    ATTR_POWERED_ON,
-    CONF_STREAM_CODEC,
-    STREAM_CODEC_H264,
-    STREAM_CODEC_ORIGINAL,
-)
+from .const import ATTR_LAN_ONLINE, ATTR_MODEL, ATTR_POWERED_ON
 from .coordinator import XiaomiCameraCoordinator
 from .entity import XiaomiCameraEntity
 from .selection import selected
+from .streams import primary_stream, selected_streams, unique_id
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,23 +24,31 @@ async def async_setup_entry(
     entry: XiaomiCameraConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Create one camera entity per discovered device."""
+    """Create one camera entity per selected stream."""
     coordinator = entry.runtime_data
-    known: set[str] = set()
+    known: set[tuple[str, str]] = set()
 
     @callback
     def _add_new() -> None:
-        """Create entities for chosen cameras as the bridge reports them.
+        """Create entities for each camera's chosen streams.
 
         Filtered rather than added and hidden: an entity the user did not ask
         for still shows up in searches, automations and voice assistants.
         """
-        wanted = selected(entry, coordinator.data)
-        new = [did for did in wanted if did not in known]
-        if not new:
-            return
-        known.update(new)
-        async_add_entities(XiaomiCamera(coordinator, did) for did in new)
+        primary = primary_stream(dict(entry.options))
+        new: list[XiaomiCamera] = []
+        for did in selected(entry, coordinator.data):
+            camera = coordinator.data.get(did)
+            if camera is None:
+                continue
+            available = [stream.key for stream in camera.streams]
+            for key in selected_streams(dict(entry.options), did, available):
+                if (did, key) in known:
+                    continue
+                known.add((did, key))
+                new.append(XiaomiCamera(coordinator, did, key, primary))
+        if new:
+            async_add_entities(new)
 
     _add_new()
     entry.async_on_unload(coordinator.async_add_listener(_add_new))
@@ -55,13 +57,25 @@ async def async_setup_entry(
 class XiaomiCamera(XiaomiCameraEntity, Camera):
     """A Xiaomi camera exposed as a Home Assistant camera entity."""
 
-    _attr_name = None
     _attr_supported_features = CameraEntityFeature.STREAM
 
-    def __init__(self, coordinator: XiaomiCameraCoordinator, did: str) -> None:
+    def __init__(
+        self,
+        coordinator: XiaomiCameraCoordinator,
+        did: str,
+        stream_key: str,
+        primary_key: str,
+    ) -> None:
         XiaomiCameraEntity.__init__(self, coordinator, did)
         Camera.__init__(self)
-        self._attr_unique_id = did
+        self._stream_key = stream_key
+        self._attr_unique_id = unique_id(did, stream_key, primary_key)
+        # The primary entity keeps the device's own name, unchanged for anyone
+        # upgrading. The others are named after what distinguishes them.
+        if stream_key != primary_key:
+            self._attr_translation_key = stream_key
+        else:
+            self._attr_name = None
 
     @property
     def is_streaming(self) -> bool:
@@ -80,14 +94,7 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         }
 
     async def stream_source(self) -> str | None:
-        """Return the RTSP URL for Home Assistant to pull.
-
-        The H.264 one when the add-on offers it. These cameras send H.265,
-        which browsers decode only where the hardware happens to support it and
-        HomeKit does not accept at all -- so the picture would simply sit
-        still, with nothing to explain why. The add-on re-encodes on demand,
-        and the original H.265 stream stays published for anything that
-        prefers it, such as an NVR.
+        """The RTSP URL for this entity's stream.
 
         Home Assistant pulls from this URL itself; the integration never
         handles video data.
@@ -95,12 +102,7 @@ class XiaomiCamera(XiaomiCameraEntity, Camera):
         camera = self.camera
         if camera is None:
             return None
-        options = self.coordinator.config_entry.options
-        if options.get(CONF_STREAM_CODEC, STREAM_CODEC_H264) == STREAM_CODEC_ORIGINAL:
-            return camera.rtsp_url
-        # Falls back when the add-on is older than this option: an entry that
-        # asks for a stream the bridge does not publish would play nothing.
-        return camera.rtsp_url_h264 or camera.rtsp_url
+        return camera.stream_url(self._stream_key) or None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None

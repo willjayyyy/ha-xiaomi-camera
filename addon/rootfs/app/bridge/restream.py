@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote
 
@@ -55,41 +56,111 @@ _GO2RTC_LOG_LEVELS = {
 }
 
 
-#: How go2rtc should encode H.264. Its own default is `-c:v libx264`, which is
-#: GPL and therefore absent from the LGPL ffmpeg this image ships. openh264 is
-#: Cisco's BSD-licensed encoder and is present in that build; the Dockerfile
-#: checks for it so a build that lost it fails there rather than here.
+#: How go2rtc should encode. Its own defaults are close to this, but pin
+#: `-g 25` rather than the default 50: a keyframe roughly every second at these
+#: frame rates. Home Assistant's live view is HLS, which cannot begin at
+#: anything else and buffers a segment or two first, so the keyframe interval
+#: is most of the wait before a picture appears. Halving it halves that wait,
+#: and more keyframes at a fixed bitrate costs a little detail -- worth it for
+#: a view someone is waiting on.
 #:
-#: The x264-only knobs go with it: `-preset` and `-tune` are not openh264
-#: options. A bitrate takes their place, because openh264 targets one rather
-#: than a quality level.
-#: `-g 25` rather than go2rtc's default of 50: a keyframe roughly every second
-#: at these frame rates. Home Assistant's live view is HLS, which cannot begin
-#: at anything else and buffers a segment or two first, so the keyframe
-#: interval is most of the wait before a picture appears. Halving it halves
-#: that wait, and more keyframes at a fixed bitrate costs a little detail --
-#: worth it for a view someone is waiting on.
-_H264_ENCODER = "-c:v libopenh264 -g 25 -profile:v high -b:v 2M -pix_fmt:v yuv420p"
+#: x264 and x265 are the standard encoders for their formats and are present
+#: in the GPL build this image ships. The image previously carried the LGPL
+#: build, where neither exists.
+_H264_ENCODER = (
+    "-c:v libx264 -g 25 -preset:v superfast -tune:v zerolatency "
+    "-profile:v high -pix_fmt:v yuv420p"
+)
+_H265_ENCODER = (
+    "-c:v libx265 -g 25 -preset:v superfast -tune:v zerolatency "
+    "-profile:v main -pix_fmt:v yuv420p"
+)
 
 
-def stream_name(did: str) -> str:
-    """Stable go2rtc stream name for a camera.
+@dataclass(frozen=True)
+class StreamSpec:
+    """One published variant of a camera's video.
 
-    Device identifiers are numeric, and go2rtc stream names appear in URLs, so
-    they are prefixed to keep them readable and collision-free.
+    Height is the only dimension given: width follows the source's aspect
+    ratio, so a 16:9 camera yields 640x360 and a 4:3 one 480x360 -- both of
+    which are resolutions consumers ask for. Fixing the width instead would
+    letterbox one of them.
     """
-    return f"camera_{did}"
+
+    key: str
+    codec: str
+    height: int | None
+    bitrate: str
+
+    @property
+    def template(self) -> str:
+        """The go2rtc encoder template this variant asks for.
+
+        go2rtc looks the name up in its `ffmpeg` map, so a variant needs its
+        own entry there -- `h264/360` and friends, generated below. Passing
+        scale and bitrate through `#raw=` instead does not work: go2rtc
+        appends the `#video=` template's arguments afterwards, and ffmpeg
+        takes the last `-b:v` it is given.
+        """
+        if self.height is None:
+            return self.codec
+        return f"{self.codec}/{self.height}"
 
 
-def h264_stream_name(did: str) -> str:
-    """Name of the camera's compatibility stream.
+#: Heights above the source are not suppressed. This configuration is written
+#: when the camera list changes, and the source resolution is unknown until a
+#: peer-to-peer session runs -- so there is no moment at which a height could
+#: be filtered out. An upscale wastes nothing that is not already idle: no
+#: producer starts until a consumer connects.
+STREAM_SPECS: tuple[StreamSpec, ...] = (
+    # The root's bitrate is documentary only: it is always `#video=copy` (see
+    # `build_config`), so no template is ever generated for it and this value
+    # is never read.
+    StreamSpec("h265", "h265", None, "2M"),
+    StreamSpec("h265_720", "h265", 720, "2M"),
+    StreamSpec("h265_360", "h265", 360, "512k"),
+    StreamSpec("h265_180", "h265", 180, "256k"),
+    StreamSpec("h264", "h264", None, "2M"),
+    StreamSpec("h264_720", "h264", 720, "2M"),
+    StreamSpec("h264_360", "h264", 360, "512k"),
+    StreamSpec("h264_180", "h264", 180, "256k"),
+)
 
-    A separate stream rather than a second source on the same one. Offering
-    both codecs under one name leaves the choice to whatever connects, so an
-    NVR that accepts either could end up recording a re-encode of a stream it
-    could have copied. Two names mean each URL says exactly what it carries.
+#: The variant every other one is derived from: the camera's own encoding at
+#: its own resolution, repackaged without re-encoding.
+ROOT_KEY = "h265"
+
+
+def stream_name(did: str, key: str = ROOT_KEY) -> str:
+    """Stable go2rtc stream name for one variant of a camera.
+
+    `camera_<did>_<codec>` or `camera_<did>_<codec>_<height>`. The codec is
+    never omitted, including for the camera's own encoding: a name that
+    depends on which codec happens to be the default is a rule with an
+    exception, and the exception is exactly what makes two 360p streams
+    indistinguishable.
     """
-    return f"{stream_name(did)}_h264"
+    return f"camera_{did}_{key}"
+
+
+def _encoder_templates() -> dict[str, str]:
+    """One go2rtc encoder template per published variant.
+
+    Merged into go2rtc's own table, so these names -- `h264`, `h264/360` and
+    so on -- become valid `#video=` values.
+    """
+    base = {"h264": _H264_ENCODER, "h265": _H265_ENCODER}
+    templates = dict(base)
+    for spec in STREAM_SPECS:
+        if spec.key == ROOT_KEY:
+            # The root is `#video=copy` -- repackaged, never encoded -- so it
+            # keeps no template here.
+            continue
+        template = f"{base[spec.codec]} -b:v {spec.bitrate}"
+        if spec.height is not None:
+            template += f" -vf scale=-2:{spec.height}"
+        templates[spec.template] = template
+    return templates
 
 
 def build_config(options: Options, dids: list[str]) -> dict:
@@ -110,12 +181,16 @@ def build_config(options: Options, dids: list[str]) -> dict:
     bind = options.bind_address
     streams: dict[str, str] = {}
     for did in dids:
-        streams[stream_name(did)] = (
+        root = stream_name(did)
+        streams[root] = (
             f"ffmpeg:http://{LOOPBACK}:{API_PORT}/api/stream/{did}#video=copy"
         )
-        # Names the stream above rather than repeating the URL, so the two
-        # share one session on the camera instead of opening a second.
-        streams[h264_stream_name(did)] = f"ffmpeg:{stream_name(did)}#video=h264"
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                continue
+            # Named after the root rather than repeating its URL, so all of
+            # them share one session on the camera instead of opening several.
+            streams[stream_name(did, spec.key)] = f"ffmpeg:{root}#video={spec.template}"
 
     config: dict = {
         # Quiet by default, but follows the add-on's own level when raised.
@@ -132,7 +207,7 @@ def build_config(options: Options, dids: list[str]) -> dict:
         # contradict the loopback-only guarantee of `local` mode.
         "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
         "streams": streams,
-        "ffmpeg": {"h264": _H264_ENCODER},
+        "ffmpeg": _encoder_templates(),
     }
 
     if options.requires_credentials:
@@ -171,7 +246,26 @@ class Restreamer:
 
     def rtsp_url_h264(self, did: str) -> str:
         """RTSP URL for the H.264 version of a camera's stream."""
-        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{h264_stream_name(did)}"
+        return f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did, 'h264')}"
+
+    def stream_descriptions(self, did: str) -> list[dict[str, object]]:
+        """Every variant published for a camera, for the integration to read.
+
+        Sent rather than hardcoded on the other side so the two components can
+        be upgraded independently: an integration older than this add-on shows
+        the variants it knows, and a newer one shows whatever arrives.
+
+        Credentials are absent by construction, as in :meth:`rtsp_url`.
+        """
+        return [
+            {
+                "key": spec.key,
+                "codec": spec.codec,
+                "height": spec.height,
+                "url": f"rtsp://{LOOPBACK}:{RTSP_PORT}/{stream_name(did, spec.key)}",
+            }
+            for spec in STREAM_SPECS
+        ]
 
     def internal_rtsp_url(self, did: str) -> str:
         """RTSP URL for this process's own use, credentials included.

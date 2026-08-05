@@ -18,9 +18,14 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import BridgeClient, BridgeError
-from .const import CONF_HOST, CONF_PORT
+from .const import CONF_CAMERAS, CONF_HOST, CONF_PORT
 from .coordinator import XiaomiCameraCoordinator
-from .selection import async_remove_unselected, selected
+from .selection import (
+    async_remove_unselected,
+    async_remove_unselected_entities,
+    selected,
+)
+from .streams import migrate_options, wanted_unique_ids
 
 #: Typed alias so platforms can read `entry.runtime_data` without a cast.
 XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
@@ -28,6 +33,25 @@ XiaomiCameraConfigEntry = ConfigEntry[XiaomiCameraCoordinator]
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.CAMERA, Platform.SWITCH]
+
+
+async def async_migrate_entry(
+    hass: HomeAssistant, entry: XiaomiCameraConfigEntry
+) -> bool:
+    """Bring an entry up to the current options shape.
+
+    Version 1 chose one codec for every camera at once. Version 2 chooses per
+    camera, and records which stream the pre-existing entity is bound to so
+    its identity survives.
+    """
+    if entry.version > 2:
+        return False
+    if entry.version == 1:
+        dids = list(entry.options.get(CONF_CAMERAS) or [])
+        hass.config_entries.async_update_entry(
+            entry, options=migrate_options(dict(entry.options), dids), version=2
+        )
+    return True
 
 
 async def async_setup_entry(
@@ -55,6 +79,13 @@ async def async_setup_entry(
     # so a deselected camera disappears instead of lingering as permanently
     # unavailable -- which reads as a fault rather than as a choice.
     async_remove_unselected(hass, entry, selected(entry, coordinator.data))
+    available = {
+        did: [stream.key for stream in cam.streams]
+        for did, cam in coordinator.data.items()
+    }
+    async_remove_unselected_entities(
+        hass, entry, wanted_unique_ids(dict(entry.options), available)
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
