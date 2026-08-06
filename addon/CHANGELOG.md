@@ -21,6 +21,15 @@ fix a fault that stopped them working until the add-on was restarted.
   says so too. The picture used to simply stop, leaving the page offering
   only "could not load" while the card went on reading "Ready" -- the state
   it held when the camera list was last fetched.
+- A stream that stops is reported in a few seconds rather than twenty. That
+  wait exists for the first picture, which has to cover RTSP connecting and a
+  keyframe coming round; once a picture has arrived, silence means something
+  stopped, and a frozen frame is not worth watching for twenty seconds to
+  find that out.
+- A camera that is already off when the page loads now behaves like one
+  switched off while watched: the same message, and the same retry button.
+  It used to take a separate path with no way to retry, so turning the camera
+  back on meant reloading the page.
 - The middle picture-quality step is called "Medium" rather than "Balanced",
   so the three of them read as one scale.
 - The startup log now names the commit the image was built from. Version
@@ -78,6 +87,12 @@ fix a fault that stopped them working until the add-on was restarted.
 - 正看着的摄像头被关掉时，现在会直接说明，卡片上的状态也跟着改。此前画面只是
   停住，页面只给一句「无法加载画面」，而卡片仍然显示「就绪」——那是上一次取
   摄像头列表时的状态。
+- 画面中断后几秒内就会说明，不再干等二十秒。那个等待是为第一张画面准备的——
+  它要覆盖 RTSP 建连和等一个关键帧；而画面已经出来过之后，再没有新的就说明有
+  东西停了，不值得盯着一张定住的画面等满二十秒才知道。
+- 页面打开时就已关闭的摄像头，现在和「看着看着被关掉」表现一致：同样的提示，
+  同样有重试按钮。此前它走的是另一条路径，没有重试入口，把摄像头开回来之后只
+  能刷新整个页面才能看。
 - 画质的中间一档从「均衡」改叫「中」，三档放在一起才读得出是同一个尺度。
 - 启动日志现在会写明这个镜像是从哪次提交构建的。版本号是按发布递增的，而镜像
   在该版本号下每次推送都会重建，所以一个版本号可能对应好几个构建——而构建检查

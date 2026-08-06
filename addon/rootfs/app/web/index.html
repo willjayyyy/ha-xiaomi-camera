@@ -634,12 +634,18 @@ function renderCameras() {
   }
   container.innerHTML = `<div class="grid">${cameras.map((c) => {
     const st = cameraState(c);
-    const off = c.powered_on === false || !c.online;
-    return `<article class="cam" data-did="${escapeHtml(c.did)}"${off ? "" : " data-live"}>
+    // Every camera is connected to, including ones this list says are off.
+    // Deciding here not to would be deciding from a snapshot taken when the
+    // list was fetched, and the add-on re-reads the switch when the socket
+    // opens -- so it knows better, and it answers immediately without
+    // starting a decoder. Doing it here also produced a second path with no
+    // retry button on it, so a camera turned back on could only be watched
+    // by reloading the page.
+    return `<article class="cam" data-did="${escapeHtml(c.did)}" data-live>
       <div class="preview" data-preview>
-        <div class="placeholder">${escapeHtml(off ? t("cameraOffHint") : t("connecting"))}</div>
+        <div class="placeholder">${escapeHtml(t("connecting"))}</div>
       </div>
-      ${off ? "" : prefControl(c, prefsFor(c.did))}
+      ${prefControl(c, prefsFor(c.did))}
       <div class="cam-body">
         <div class="cam-head">
           <span class="cam-name">${escapeHtml(c.name)}</span>

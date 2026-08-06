@@ -234,8 +234,18 @@ class _Source:
         # or what is held is old enough that showing it would misrepresent the
         # camera.
         ready = self._ready
+        # Waiting for the first picture and waiting for the next one are not
+        # the same wait. The first has to cover RTSP connecting and a keyframe
+        # coming round, which these cameras send about every three seconds.
+        # Once a picture has arrived both are settled, so silence after that
+        # means something stopped -- and the bound for that is already
+        # defined: the age past which a held picture may no longer stand in
+        # for the present is the same instant it is fair to say there is
+        # none. Using the longer one left a viewer watching a frozen frame
+        # for twenty seconds after a camera was switched off.
+        patience = _FIRST_FRAME_TIMEOUT if self._frame is None else _MAX_AGE_SECONDS
         try:
-            await asyncio.wait_for(ready.wait(), timeout=_FIRST_FRAME_TIMEOUT)
+            await asyncio.wait_for(ready.wait(), timeout=patience)
         except TimeoutError:
             raise PreviewError(self._explain()) from None
         if self._frame is None:

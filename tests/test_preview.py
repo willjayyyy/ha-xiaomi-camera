@@ -510,3 +510,40 @@ class TestTeardownIsBounded:
         await source.async_start()
 
         await asyncio.wait_for(source.async_stop(), timeout=2)
+
+
+class TestAStoppedStreamIsReportedSooner:
+    """Waiting for the first picture and waiting for the next are different.
+
+    Twenty seconds is right for the first: RTSP has to connect and a keyframe
+    has to come round, and these cameras send one about every three seconds.
+    It is wrong for the next one. A source that has already produced a picture
+    has proved the connection and the keyframe; if nothing follows, something
+    has stopped, and making the viewer watch a frozen frame for twenty seconds
+    before saying so is the behaviour this replaces.
+
+    The bound used is the one that already says how long a held picture may
+    stand in for the present. Past it the picture is too old to show -- which
+    is the same instant it is fair to say there is no picture.
+    """
+
+    async def test_a_source_that_has_shown_a_picture_gives_up_sooner(
+        self, wedged_ffmpeg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(preview, "_FIRST_FRAME_TIMEOUT", 10)
+        monkeypatch.setattr(preview, "_MAX_AGE_SECONDS", 0.2)
+
+        source = _Source("A", url_for("A"), 0, "balanced")
+        await source.async_start()
+        try:
+            seq, frame = await asyncio.wait_for(source.async_frame(0), timeout=2)
+            assert frame.startswith(b"\xff\xd8")
+
+            # The stream has stopped: no frame will ever follow this one.
+            with pytest.raises(PreviewError):
+                await asyncio.wait_for(source.async_frame(seq), timeout=3)
+        finally:
+            for task in source._tasks:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
