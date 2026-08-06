@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.1
+
+Stops the add-on from staying busy after you close a preview.
+
+**Upgrade if the add-on has been using a lot of processor time.**
+
+- Fixed: after watching a preview, the add-on kept the camera running in the
+  background, using processor time and memory for nothing. It only let go when
+  the add-on was restarted.
+
+### 中文
+
+修复关掉预览之后，加载项仍然占着资源不放的问题。
+
+**如果你发现加载项一直占用很高的 CPU，请升级。**
+
+- 修复：看过预览之后，加载项会在后台继续跑着摄像头，白白占用 CPU 和内存，
+  不重启加载项就一直不放。
+
 ## 1.3.0
 
 Fixes previews that stopped working, and makes them smoother.
