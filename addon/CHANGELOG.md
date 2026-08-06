@@ -22,7 +22,6 @@ fix a fault that stopped them working until the add-on was restarted.
   under that version, so one number can cover several builds -- and the build
   check compares numbers without hashing any source. Reading one line now
   settles which code is running.
-
 - Watching a preview and then leaving the page could stop every preview from
   working, for good: no picture arrived, refreshing changed nothing, and only
   restarting the add-on brought it back. Shutting down the decoder behind a
@@ -73,7 +72,6 @@ fix a fault that stopped them working until the add-on was restarted.
 - 启动日志现在会写明这个镜像是从哪次提交构建的。版本号是按发布递增的，而镜像
   在该版本号下每次推送都会重建，所以一个版本号可能对应好几个构建——而构建检查
   只比对版本号，不哈希源码。现在读一行日志就能确定跑的是哪份代码。
-
 - 看过一次预览再离开页面，可能导致此后所有预览都不再工作，且无法自行恢复：
   画面出不来，刷新也没用，只有重启加载项才行。关闭预览背后的解码进程有可能
   卡住——结束一个进程，和还能不能取回它的退出状态，是两回事，而本加载项与
