@@ -199,3 +199,57 @@ class TestAViewerLeavingStopsTheDecoder:
             assert len(previews.asked) == settled
         finally:
             await client.close()
+
+
+class TestTheDecoderIsReallyReclaimed:
+    """End to end, against the real manager rather than a stand-in.
+
+    The stand-in above proves the handler stops asking. What it cannot prove
+    is that the manager then lets the decoder go -- and those are different
+    claims joined by an idle timer that the handler's asking keeps resetting.
+    The fault in the field lived exactly in that join: the handler asked
+    forever, so the timer never expired, so a camera nobody was watching kept
+    an ffmpeg to itself.
+
+    Wired to a process that never exits, because what happens to the decoder
+    afterwards is beside the point here -- what matters is that the manager
+    stops holding it.
+    """
+
+    async def test_leaving_lets_the_manager_reap_the_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bridge import preview
+        from bridge.preview import PreviewManager
+        from conftest import NeverReportsExit
+
+        async def spawn(*args: object, **kwargs: object) -> NeverReportsExit:
+            return NeverReportsExit()
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+        # The real interval is fifteen seconds, which is a long time to hold a
+        # test open for a timer whose duration is not what is being checked.
+        monkeypatch.setattr(preview, "_IDLE_SECONDS", 0.3)
+
+        manager = PreviewManager(lambda did: f"rtsp://127.0.0.1:8554/camera_{did}")
+        client = await _client(_api(manager))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.type is WSMsgType.BINARY
+            assert manager._sources, "a source should have been opened"
+
+            # Nothing is watching now. The reaper polls at a third of the idle
+            # interval, so a second of it is several passes.
+            await asyncio.sleep(1.0)
+            assert manager._sources == {}, "the decoder outlived its viewer"
+        finally:
+            if manager._reaper is not None:
+                manager._reaper.cancel()
+            for source in list(manager._sources.values()):
+                for task in source._tasks:
+                    task.cancel()
+            for task in [*manager._closing]:
+                task.cancel()
+            await asyncio.sleep(0)
+            await client.close()
