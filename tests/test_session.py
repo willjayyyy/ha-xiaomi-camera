@@ -71,6 +71,12 @@ class _FakeInstance:
             await asyncio.sleep(0.01)
 
     async def stop_async(self) -> None:
+        # Suspends before doing anything, as the real one does: it hands the
+        # vendor's blocking call to an executor and awaits it. That suspension
+        # is not an implementation detail here -- it is the only moment a
+        # cancellation aimed at the surrounding task can be delivered, so a
+        # fake that never suspends cannot show whether a teardown survives one.
+        await asyncio.sleep(0)
         self.stopped = True
         if self._feeder is not None:
             self._feeder.cancel()
@@ -80,9 +86,13 @@ class _FakeClient:
     def __init__(self, first_frame_delay: float = 0.0) -> None:
         self.instances: list[_FakeInstance] = []
         self._first_frame_delay = first_frame_delay
+        #: What to hand out. Swapped by tests that need an instance which
+        #: misbehaves in a particular way, so the session is built through
+        #: the ordinary path rather than reached into afterwards.
+        self.factory: type[_FakeInstance] = _FakeInstance
 
     async def create_camera_instance_async(self, info, enable_hw_accel: bool = True):
-        instance = _FakeInstance(self._first_frame_delay)
+        instance = self.factory(self._first_frame_delay)
         self.instances.append(instance)
         return instance
 
@@ -224,3 +234,84 @@ class TestColdStartGivesUp:
                     pass
 
         await session.async_stop()
+
+
+class TestIdleTeardown:
+    """The idle stop must actually reach the vendor's session.
+
+    Found on a live add-on: previews were closed, the reaper stopped its
+    decoders, `Stopping session` was logged for both cameras -- and forty
+    minutes later the container was still burning a core and holding 350MB
+    more than it started with. Inside it, both peer-to-peer stacks were still
+    running: receive and send threads, audio, video, and the two H.265
+    software decoders the SDK creates for its JPEG callback. Only restarting
+    the add-on cleared it.
+
+    Nothing was logged, because nothing failed. The teardown was cancelled
+    part-way through by the very task running it, and a cancellation is not
+    an error: it went past `suppress(Exception)` and past `except Exception`
+    alike, leaving the vendor session running and `_instance` still set --
+    so the add-on went on believing the session it never stopped was fine.
+    """
+
+    async def test_an_idle_session_stops_the_vendor_instance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Shortened rather than waited out: what is under test is that the
+        # idle stop completes, not how long it waits first.
+        monkeypatch.setattr(streaming, "_LINGER_SECONDS", 0.01)
+        client = _FakeClient()
+        session = _session(client)
+
+        async with session.subscribe():
+            pass
+
+        for _ in range(200):
+            if not session.running:
+                break
+            await asyncio.sleep(0.01)
+
+        assert client.instances[0].stopped, (
+            "the vendor session was never stopped: its peer-to-peer link, "
+            "its threads and its decoders all outlive the add-on's own "
+            "idea of the session"
+        )
+        assert not session.running
+
+
+class TestAFailedStopIsReported:
+    """A vendor stop that fails must not pass for one that worked.
+
+    The instance is dropped either way -- keeping one whose state is unknown
+    is what `TestReconnecting` exists to prevent -- but dropping it is also
+    the moment the add-on loses its last handle on a peer-to-peer session
+    that may still be running. Said out loud, that is one line in the log
+    next to a rising CPU figure. Swallowed, it is indistinguishable from a
+    clean stop, and the only remaining symptom is a machine that gets slower
+    the longer the add-on runs.
+    """
+
+    async def test_a_stop_that_raises_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        class _RefusesToStop(_FakeInstance):
+            async def stop_async(self) -> None:
+                # Fails after shutting down what it could, which is the
+                # shape that makes this worth catching: a partial stop looks
+                # like a whole one from the outside.
+                await super().stop_async()
+                raise RuntimeError("PPCS_Close -3")
+
+        client = _FakeClient()
+        client.factory = _RefusesToStop
+        session = _session(client)
+
+        async with session.subscribe():
+            pass
+
+        await session.async_stop()
+
+        assert not session.running
+        assert any("PPCS_Close" in record.getMessage() for record in caplog.records), (
+            "a vendor stop that failed was reported as if it had worked"
+        )

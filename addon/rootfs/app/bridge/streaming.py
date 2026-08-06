@@ -283,8 +283,23 @@ class CameraSession:
         if self._instance is None:
             return
         _LOGGER.info("Stopping session for %s", self._info.name)
-        with contextlib.suppress(Exception):
+        try:
             await self._instance.stop_async()
+        except Exception as err:
+            # Reported, not swallowed. The instance is dropped either way --
+            # keeping one whose state is unknown is what the reconnect check
+            # exists to prevent -- but dropping it is also the moment the last
+            # handle on a peer-to-peer session that may still be running goes
+            # away. Said out loud, that is one line next to a CPU figure that
+            # stops coming down. Silent, it is indistinguishable from a clean
+            # stop, and all that is left is a machine that gets slower the
+            # longer the add-on runs.
+            _LOGGER.warning(
+                "%s's session did not stop cleanly, so its peer-to-peer link "
+                "may still be running: %s",
+                self._info.name,
+                safe_error(err),
+            )
         self._instance = None
         self._codec = None
         self._parameter_sets = _ParameterSets()
@@ -314,6 +329,34 @@ class CameraSession:
             await self._teardown()
 
     def _schedule_linger_stop(self) -> None:
+        """Arrange for the session to end if nobody comes back for it.
+
+        ``_linger_task`` names a countdown that has not run out, and nothing
+        else. Everything that cancels it -- here, :meth:`async_stop`,
+        :meth:`_async_ensure_started` -- means "the session is wanted again,
+        so drop the countdown", which is always safe.
+
+        It must never name a teardown in progress. Cancelling one of those is
+        never safe: a teardown's first act is to await the vendor's stop, and
+        the ``CancelledError`` that arrives there is a ``BaseException``, so
+        it passes straight through both the ``suppress(Exception)`` guarding
+        that call and the ``except Exception`` below. The peer-to-peer link,
+        its threads and the SDK's H.265 decoders are all left running, while
+        ``_instance`` stays set and the add-on goes on believing the session
+        it never stopped is healthy. Nothing fails, so nothing is logged.
+
+        That is not hypothetical: this task used to cancel itself. It reached
+        the timeout, called :meth:`async_stop`, and that method cancelled
+        ``_linger_task`` -- which was this very task -- so every idle teardown
+        died at its first await. A live add-on ran for forty minutes after
+        the last viewer left, holding both cameras' sessions open at a core
+        of CPU and 350MB, and only a restart cleared it.
+
+        So the handle is dropped at the moment this stops being a countdown.
+        Past that line nobody holds a reference to cancel, which is what makes
+        a teardown uncancellable -- structurally, rather than by everyone who
+        cancels remembering to check first.
+        """
         if self._linger_task is not None:
             self._linger_task.cancel()
 
@@ -322,6 +365,11 @@ class CameraSession:
                 await asyncio.sleep(_LINGER_SECONDS)
             except asyncio.CancelledError:
                 return
+            # No await between the sleep returning and this line, so no other
+            # coroutine can read the handle in between and cancel what is
+            # about to become a teardown.
+            if self._linger_task is asyncio.current_task():
+                self._linger_task = None
             if self._users == 0:
                 try:
                     await self.async_stop()
