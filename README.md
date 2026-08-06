@@ -22,10 +22,18 @@ use as well.
 
 ## Install
 
-There are two pieces, and this repository gets added in two different places in
-Home Assistant. Doing only one leaves you with half of it.
+This project comes in two parts, and you need both:
 
-**1. Add the repository to your add-on store**
+- **The integration** — the camera entities you see in Home Assistant.
+- **The add-on** — the service that actually fetches the video from your
+  cameras. You will not install this one by hand; the integration does it for
+  you in step 3.
+
+You install the integration yourself, so the add-on has to be something Home
+Assistant can already find by then. That is what the first step is for, and
+it is why the same address goes in twice.
+
+**1. Point the add-on store at this repository**
 
 Settings → Add-ons → Add-on Store → ⋮ → Repositories, and paste:
 
@@ -33,22 +41,23 @@ Settings → Add-ons → Add-on Store → ⋮ → Repositories, and paste:
 https://github.com/willjayyyy/ha-xiaomi-camera
 ```
 
-You do not need to install anything here — this just makes it available.
+Adding it is the whole step — **do not install anything here.** You are only
+putting the add-on within reach for step 3.
 
 **2. Install the integration through HACS**
 
-In HACS, add the same address as a custom repository (type: *Integration*),
-then install **Xiaomi Camera**. Restart Home Assistant.
+In HACS, add **the same address** as a custom repository (type:
+*Integration*), then install **Xiaomi Camera** and restart Home Assistant.
 
 **3. Add the integration**
 
 Settings → Devices & Services → Add Integration → **Xiaomi Camera**.
 
-It offers to install the streaming service for you. That downloads about 180 MB,
-so allow a few minutes for it.
+It offers to install the add-on for you. That downloads about 180 MB, so allow
+a few minutes for it.
 
-Once it finishes, open its page and sign in to your Xiaomi account. Your cameras
-show up a few seconds later.
+Once it finishes, open the add-on's own page and sign in to your Xiaomi
+account. Your cameras show up a few seconds later.
 
 ## Signing in
 
@@ -152,8 +161,11 @@ Xiaomi cameras have a lens switch, separate from being connected to Wi-Fi. With
 the lens off, the camera answers normally and then sends no picture at all —
 which looks exactly like something is broken.
 
-Both the add-on page and Home Assistant show this clearly, and you get a switch
-entity so an automation can turn a camera on before taking a snapshot.
+So the add-on says so instead of letting you wait. Open a preview for a camera
+whose lens is off and it tells you at once, rather than leaving you watching a
+picture that was never going to arrive. Home Assistant shows the same state,
+and you get a switch entity so an automation can turn a camera on before taking
+a snapshot.
 
 ## Settings
 
