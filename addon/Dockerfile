@@ -130,10 +130,19 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG GO2RTC_VERSION="1.9.9"
 ARG TARGETARCH
 
+# The commit this image was built from, passed in by CI. A version number
+# cannot stand in for it: versions are bumped per release while the image is
+# rebuilt on every push under that version, and the build check compares
+# versions without hashing any source -- so a change can fail to reach the
+# image while CI stays green. The bridge prints this on startup, which turns
+# "is this the code I just pushed?" into reading one line.
+ARG BUILD_REF="unknown"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    BUILD_REF="${BUILD_REF}"
 
 # Only what the bridge needs at run time. libstdc++6 is required by the vendor's
 # native library; curl is used below and removed again.

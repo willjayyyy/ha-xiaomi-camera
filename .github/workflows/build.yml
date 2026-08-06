@@ -79,6 +79,7 @@ jobs:
           # cannot load on the Alpine images most add-ons use.
           build-args: |
             BUILD_FROM=ghcr.io/home-assistant/${{ matrix.arch }}-base-debian:bookworm
+            BUILD_REF=${{ github.sha }}
           push: "true"
           version: ${{ needs.init.outputs.version }}
           container-registry-password: ${{ secrets.GITHUB_TOKEN }}

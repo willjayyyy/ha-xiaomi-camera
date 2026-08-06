@@ -23,6 +23,7 @@ from .config import (
     LOG_LEVELS,
     Options,
     VideoQuality,
+    build_ref,
     data_is_ephemeral,
     load_options,
 )
@@ -224,10 +225,11 @@ async def async_main() -> int:
         )
 
     _LOGGER.info(
-        "Starting bridge (access_mode=%s, quality=%s, supervised=%s)",
+        "Starting bridge (access_mode=%s, quality=%s, supervised=%s, build=%s)",
         options.access_mode.value,
         options.video_quality.value,
         options.supervised,
+        build_ref(),
     )
     import pathlib
 

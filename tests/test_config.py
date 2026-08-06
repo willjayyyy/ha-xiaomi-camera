@@ -212,3 +212,47 @@ class TestEnvironmentOverrides:
 
         monkeypatch.setenv("XIAOMI_CAMERA_ENABLE_AUDIO", "true")
         assert load_options(path, supervised=False).enable_audio is True
+
+
+class TestTheImageSaysWhatItWasBuiltFrom:
+    """A version number cannot identify a build, and was relied on to.
+
+    Add-on versions are bumped per release, but an image is rebuilt every
+    time the branch moves -- so one version number can, and did, cover two
+    different builds. The add-on's own build check compares version numbers
+    and never hashes the source, which is what makes "the change silently
+    did not reach the image, and CI was green" possible.
+
+    A reference the running process prints is the thing that settles it, and
+    it has to be printed: one that nothing logs is one nobody can check,
+    which is precisely the situation it exists to end.
+    """
+
+    def test_it_reports_the_commit_it_was_built_from(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("BUILD_REF", "0838020")
+        assert config.build_ref() == "0838020"
+
+    def test_it_says_so_when_the_image_carries_no_reference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A local build has none, and must not look like it has one."""
+        monkeypatch.delenv("BUILD_REF", raising=False)
+        assert config.build_ref() == "unknown"
+
+    def test_the_startup_line_prints_it(self) -> None:
+        import re
+
+        source = (
+            Path(__file__).resolve().parent.parent
+            / "addon"
+            / "rootfs"
+            / "app"
+            / "bridge"
+            / "__main__.py"
+        ).read_text(encoding="utf-8")
+        banner = re.search(r'"Starting bridge[^"]*"', source)
+        assert banner is not None, "the startup line moved or was renamed"
+        assert "build=%s" in banner.group()
+        assert "build_ref()" in source
