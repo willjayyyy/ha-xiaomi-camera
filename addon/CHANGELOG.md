@@ -13,13 +13,25 @@ Fix previews that stop working until the add-on is restarted.
   collect its exit status, and this add-on shares itself with the vendor's
   closed-source library -- and that shutdown was waited on while holding a
   lock every other preview needed.
-- Shutting a decoder down now happens outside that lock, in the background,
-  and gives up rather than waiting forever. Each preview also has a lock of
-  its own, so one camera's trouble stays with that camera.
+- That lock is now gone rather than made faster. The table of running
+  previews is a dictionary touched from a single thread, so its own
+  operations were never divisible and it never needed guarding; all that
+  did was that one camera must not be opened twice, and that now follows
+  from putting a preview into the table before starting it instead of
+  after. Clearing away departed cameras cannot stall because it no longer
+  waits for anything, and shutting a decoder down runs in the background
+  and gives up rather than waiting forever.
 - The same hang quietly stopped the add-on from noticing cameras being added,
   removed or switched off, because the periodic refresh ended by queueing on
   the same lock. Home Assistant kept seeing the right cameras throughout, so
   nothing looked wrong.
+- A camera removed while its preview was still opening used to leave that
+  preview running, reading a stream nobody would ever look at, with nothing
+  later going looking for it -- the camera it belonged to was gone from every
+  list. It now ends itself as soon as it starts.
+- A decoder that cannot be shut down is now reported. It is stopped away from
+  the request that triggered it, and a background failure that nobody reads
+  surfaces only when the garbage collector happens to reach it, if ever.
 - go2rtc was shut down the same unbounded way. It could have left the add-on
   unable to stop on its own, waiting to be killed instead.
 
@@ -34,11 +46,19 @@ Fix previews that stop working until the add-on is restarted.
   卡住——结束一个进程，和还能不能取回它的退出状态，是两回事，而本加载项与
   厂商的闭源库共处同一进程——而这个关闭操作是在持有其它预览都要用的那把锁
   时等待的。
-- 现在关闭解码进程改在锁外、后台进行，并且会放弃等待而不是一直等下去。每一路
-  预览也各有自己的锁，某一台摄像头出问题不会波及其它。
+- 那把锁不是被改快，而是被整个删掉了。存放运行中预览的表就是一个 dict，只在
+  单线程里增删，它自身的操作本来就不可分割，从来不需要保护；真正需要保证的只
+  是同一台摄像头不会被打开两次，而这一点现在由「先把预览放进表、再启动它」自
+  然成立。清理已移除的摄像头不再等待任何东西，因此不可能卡住；关闭解码进程改
+  在后台进行，并且会放弃等待而不是一直等下去。
 - 同一次卡死还会让加载项不再察觉摄像头的新增、移除和开关，而且毫无提示——
   定时刷新的最后一步正是排队等这把锁。这期间 Home Assistant 看到的摄像头列表
   始终是对的，所以表面上一切正常。
+- 摄像头在其预览正启动时被移除，此前会留下一路仍在运行的预览，读着一条再也不
+  会有人看的流，而且之后没有任何环节会去找它——它所属的摄像头已经不在任何列表
+  里了。现在它一启动完就会自行结束。
+- 关不掉的解码进程现在会被记录下来。它是在触发它的那个请求之外被关闭的，而后
+  台失败若无人读取，只有等垃圾回收碰巧处理到它时才会浮现，甚至永远不会。
 - go2rtc 此前也用同样的无限等待方式关闭，可能导致加载项无法自行退出，只能等
   着被强制结束。
 

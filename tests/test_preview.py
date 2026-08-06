@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from types import SimpleNamespace
 
 import pytest
 from bridge import preview
@@ -139,7 +140,7 @@ class TestAWedgedTeardownStaysContained:
         manager started is cancelled directly instead -- the reaper, the drop
         in flight, and the reader tasks of whichever sources are still open.
         """
-        pending = [*tasks, manager._reaper, *manager._stopping]
+        pending = [*tasks, manager._reaper, *manager._closing]
         for source in list(manager._sources.values()):
             pending.extend(source._tasks)
         for task in pending:
@@ -153,8 +154,9 @@ class TestAWedgedTeardownStaysContained:
         await manager.async_frame("A", 0, "balanced")
         await manager.async_frame("B", 0, "balanced")
 
-        # A has left the device list. Dropping it wedges partway through.
-        dropping = asyncio.create_task(manager.async_drop({"B"}))
+        # A has left the device list. Its teardown will wedge, in the
+        # background, where dropping does not wait for it.
+        manager.drop({"B"})
         await asyncio.sleep(0.05)
 
         try:
@@ -163,19 +165,19 @@ class TestAWedgedTeardownStaysContained:
             )
             assert frame.startswith(b"\xff\xd8")
         finally:
-            await self._quiesce(manager, dropping)
+            await self._quiesce(manager)
 
     async def test_a_different_camera_can_still_be_started(self, wedged_ffmpeg) -> None:
         """Not only served from an existing source -- a new one must open.
 
         The failure in the field was that no preview could be started at all,
         including for cameras that had never been watched, because starting
-        one needs the same lock that teardown was holding.
+        one needed the same lock that teardown was holding.
         """
         manager = PreviewManager(url_for)
         await manager.async_frame("A", 0, "balanced")
 
-        dropping = asyncio.create_task(manager.async_drop({"C"}))
+        manager.drop({"C"})
         await asyncio.sleep(0.05)
 
         try:
@@ -184,7 +186,180 @@ class TestAWedgedTeardownStaysContained:
             )
             assert frame.startswith(b"\xff\xd8")
         finally:
-            await self._quiesce(manager, dropping)
+            await self._quiesce(manager)
+
+
+class TestDroppingCannotBeBlocked:
+    """Dropping departed cameras must not be able to wait on anything.
+
+    The refresh loop ends by calling it, and that loop is how the add-on
+    notices cameras appearing, disappearing and being switched off. When it
+    stopped running, the add-on went on answering `/api/cameras` from a
+    different path and so went on looking healthy while it had in fact gone
+    blind -- for the lifetime of the process, with nothing logged.
+
+    Guarding the source table with a lock put every one of those things
+    behind whatever the table's slowest operation happened to be. The table
+    is a dict, mutated from a single thread, and needs no lock at all; what
+    actually needed guarding was only that one key cannot be opened twice,
+    which is settled by putting the source in the table before starting it.
+
+    That `drop` is now synchronous is what makes this class's premise
+    structural rather than something to keep testing for -- a signature with
+    nothing to await cannot stall. What is left worth asserting is that it
+    still empties the table when the sources in it are wedged, in either of
+    the two slow things a source does: starting, and stopping.
+    """
+
+    async def _quiesce(self, manager: PreviewManager, *tasks: asyncio.Task) -> None:
+        pending = [*tasks, manager._reaper, *manager._closing]
+        for source in list(manager._sources.values()):
+            pending.extend(source._tasks)
+        for task in pending:
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+    async def test_it_empties_the_table_when_every_teardown_wedges(
+        self, wedged_ffmpeg
+    ) -> None:
+        """The shape of the failure that shipped: all of them leaving at once."""
+        manager = PreviewManager(url_for)
+        await manager.async_frame("A", 0, "balanced")
+        await manager.async_frame("B", 0, "balanced")
+
+        try:
+            manager.drop(set())
+            assert manager._sources == {}
+        finally:
+            await self._quiesce(manager)
+
+    async def test_it_empties_the_table_when_a_start_never_finishes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A source still being opened is in the table, and so can be dropped.
+
+        Seating it before the spawn rather than after is what puts it within
+        reach: opened-after-the-fact, a camera departing mid-spawn left a
+        source that no later pass would look for, because the camera it
+        belonged to was no longer in any list.
+        """
+        spawning = asyncio.Event()
+
+        async def never_finishes(*args: object, **kwargs: object) -> object:
+            spawning.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")  # pragma: no cover
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", never_finishes)
+
+        manager = PreviewManager(url_for)
+        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        await asyncio.wait_for(spawning.wait(), timeout=1)
+
+        try:
+            manager.drop({"B"})
+            assert manager._sources == {}
+        finally:
+            await self._quiesce(manager, watching)
+
+
+class TestASourceStartingWhenItsCameraLeaves:
+    """A camera can depart while its preview is still being opened.
+
+    Starting is not instant -- a process is spawned -- and a refresh can land
+    in that window. Whichever order the two arrive in, what must not survive
+    is a source for a camera that is gone: it holds an ffmpeg reading a stream
+    nobody will ever look at, and nothing later goes looking for it because
+    the camera it belonged to is no longer in any list.
+    """
+
+    @pytest.fixture
+    def held_spawn(self, monkeypatch: pytest.MonkeyPatch):
+        """A spawn that hangs until released, then yields a live process."""
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        process = NeverReportsExit()
+
+        async def spawn(*args: object, **kwargs: object) -> NeverReportsExit:
+            entered.set()
+            await release.wait()
+            return process
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+        return SimpleNamespace(entered=entered, release=release, process=process)
+
+    async def _run(self, held_spawn) -> tuple[PreviewManager, asyncio.Task]:
+        manager = PreviewManager(url_for)
+        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        await asyncio.wait_for(held_spawn.entered.wait(), timeout=1)
+        manager.drop({"B"})  # A departs, mid-spawn
+        held_spawn.release.set()  # the spawn now completes
+        await asyncio.sleep(0.05)
+        return manager, watching
+
+    async def _quiesce(self, manager: PreviewManager, watching: asyncio.Task) -> None:
+        pending = [watching, manager._reaper, *manager._closing]
+        for source in list(manager._sources.values()):
+            pending.extend(source._tasks)
+        for task in pending:
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
+
+    async def test_the_departed_camera_leaves_no_source_behind(
+        self, held_spawn
+    ) -> None:
+        manager, watching = await self._run(held_spawn)
+        try:
+            assert manager._sources == {}
+        finally:
+            await self._quiesce(manager, watching)
+
+    async def test_the_abandoned_process_is_not_left_running(self, held_spawn) -> None:
+        manager, watching = await self._run(held_spawn)
+        try:
+            assert held_spawn.process.killed
+        finally:
+            await self._quiesce(manager, watching)
+
+
+class TestATeardownFailureIsNotSwallowed:
+    """Teardown runs unwatched, so its failures have to be gone looking for.
+
+    Nothing awaits the background task, and an asyncio task whose exception
+    is never retrieved reports itself only when the garbage collector reaches
+    it -- late, detached from what caused it, and easy to never see at all.
+    Moving teardown off the request path is what made previews survive it; it
+    must not also be what makes its failures invisible.
+    """
+
+    async def test_it_says_so_when_a_decoder_cannot_be_stopped(
+        self, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        class _RefusesToDie(NeverReportsExit):
+            def terminate(self) -> None:
+                raise ProcessLookupError("vanished between the check and the signal")
+
+        async def spawn(*args: object, **kwargs: object) -> _RefusesToDie:
+            return _RefusesToDie()
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+
+        manager = PreviewManager(url_for)
+        await manager.async_frame("A", 0, "balanced")
+
+        try:
+            manager.drop(set())
+            await asyncio.sleep(0.05)
+            assert "vanished between the check and the signal" in caplog.text
+        finally:
+            if manager._reaper is not None:
+                manager._reaper.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await manager._reaper
 
 
 class TestTeardownIsBounded:

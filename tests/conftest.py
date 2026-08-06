@@ -57,12 +57,16 @@ class NeverReportsExit:
         self.stdout = asyncio.StreamReader()
         self.stderr = asyncio.StreamReader()
         self.stdout.feed_data(b"\xff\xd8preview\xff\xd9")
+        #: Whether anything ever put this process out of its misery. Read by
+        #: the tests that check an abandoned spawn is not left running.
+        self.killed = False
 
     def terminate(self) -> None:
         """Ignored, as a process wedged in the kernel would ignore it."""
 
     def kill(self) -> None:
         """Ends the process -- which is not the same as reporting its exit."""
+        self.killed = True
 
     async def wait(self) -> int:
         await asyncio.Event().wait()

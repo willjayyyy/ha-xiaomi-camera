@@ -133,7 +133,7 @@ class Bridge:
             # of the process.
             await self._sessions.async_prune({c.did for c in cameras})
         await self._restreamer.async_apply([c.did for c in cameras])
-        await self._previews.async_drop({c.did for c in cameras})
+        self._previews.drop({c.did for c in cameras})
 
     async def async_stop(self) -> None:
         if self._refresh_task is not None:

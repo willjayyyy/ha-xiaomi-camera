@@ -32,7 +32,7 @@ import contextlib
 import logging
 import time
 
-from .redact import redact
+from .redact import redact, safe_error
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +108,11 @@ class _Source:
         self._error: str = ""
         self._stderr: list[str] = []
         self._last_request = time.monotonic()
+        #: Set once this source has been taken out of service. Spawning is not
+        #: instant, and a camera can depart during it -- at which point this
+        #: object is the only thing that knows a process is on its way. Nobody
+        #: else can clean up after it, so it checks this itself.
+        self._retired = False
 
     @property
     def idle_for(self) -> float:
@@ -118,7 +123,7 @@ class _Source:
         # costs nothing and removes UDP reordering as a source of artefacts.
         # -an: the preview has no use for audio, and decoding it would be
         # spent effort.
-        self._process = await asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-hide_banner",
             "-loglevel",
@@ -143,12 +148,23 @@ class _Source:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        if self._retired:
+            # Retired while this was spawning. Nothing will ever read from it,
+            # and no one else has a reference -- so it either ends here or it
+            # runs for as long as the add-on does.
+            with contextlib.suppress(Exception):
+                process.kill()
+            return
+        self._process = process
         self._tasks = [
             asyncio.create_task(self._read_frames()),
             asyncio.create_task(self._read_errors()),
         ]
 
     async def async_stop(self) -> None:
+        # First, and unconditionally: a spawn already in flight has no other
+        # way to learn that it is no longer wanted.
+        self._retired = True
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -287,66 +303,83 @@ class PreviewManager:
         #: at the same camera may want different frame rates, and neither
         #: should silently get the other's.
         self._sources: dict[tuple[str, int, str], _Source] = {}
-        #: One lock per source, never one for the manager. With a single lock
-        #: whatever went wrong for one camera went wrong for all of them: a
-        #: teardown that could not finish held it, and every other preview --
-        #: plus the refresh loop, which ends by dropping departed cameras --
-        #: queued behind it for the lifetime of the process. Locks are kept
-        #: rather than reclaimed; there is one per distinct request shape,
-        #: which is a small and slow-growing set.
-        self._locks: dict[tuple[str, int, str], asyncio.Lock] = {}
         #: Teardowns still running. Referenced only so they are not garbage
         #: collected before they finish -- nothing waits on them.
-        self._stopping: set[asyncio.Task] = set()
+        self._closing: set[asyncio.Task] = set()
         self._reaper: asyncio.Task | None = None
 
-    def _lock_for(self, key: tuple[str, int, str]) -> asyncio.Lock:
-        """The lock guarding one source's place in the table.
+    def _retire(self, key: tuple[str, int, str]) -> None:
+        """Take a source out of service. Cannot block, by construction.
 
-        ``setdefault`` is atomic under asyncio's single thread, so the lookup
-        needs no lock of its own.
+        There is deliberately no lock here. The table is a dict mutated from
+        a single thread, so its own operations are already indivisible; the
+        only thing that ever needed guarding was that one key must not be
+        opened twice, and that is settled in :meth:`async_frame` by seating
+        the source in the table before starting it rather than after.
+
+        Removing and shutting down are separated for the same reason. Removal
+        is what every caller actually wants and is a dictionary operation, so
+        it is synchronous and cannot fail to finish. Shutdown ends a process,
+        and whether a process's exit can still be collected is decided
+        outside this module -- so it runs in the background, where taking
+        forever costs nothing. The add-on once queued the refresh loop and
+        every preview behind exactly that wait.
         """
-        return self._locks.setdefault(key, asyncio.Lock())
-
-    async def _retire(self, key: tuple[str, int, str]) -> None:
-        """Take a source out of service without waiting for it to stop.
-
-        Removal and shutdown are deliberately separated. Removal is what
-        callers care about and is a dictionary operation, so it cannot block.
-        Shutdown ends a process, and whether that process's exit can still be
-        collected is decided outside this module -- so it is started in the
-        background, where taking forever harms nothing. Once removed the
-        source is unreachable, and a request arriving afterwards opens a
-        fresh one rather than waiting behind the old one's funeral.
-        """
-        async with self._lock_for(key):
-            source = self._sources.pop(key, None)
+        source = self._sources.pop(key, None)
         if source is None:
             return
         task = asyncio.create_task(source.async_stop())
-        self._stopping.add(task)
-        task.add_done_callback(self._stopping.discard)
+        self._closing.add(task)
+        task.add_done_callback(self._forget_closing)
+
+    def _forget_closing(self, task: asyncio.Task) -> None:
+        """Release a finished teardown, and never let its failure go unseen.
+
+        Nothing awaits these, and an asyncio task whose exception is never
+        retrieved reports itself only when the garbage collector reaches it --
+        late, and detached from whatever caused it. Moving teardown off the
+        request path is what keeps previews working through it; it must not
+        also be what makes it fail silently.
+        """
+        self._closing.discard(task)
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None:
+            _LOGGER.warning("Could not stop a preview decoder: %s", safe_error(error))
 
     async def async_frame(
         self, did: str, fps: int, quality: str, after: int = 0
     ) -> tuple[int, bytes]:
         """A picture decoded from what this add-on publishes for ``did``."""
         key = (did, fps, quality)
-        async with self._lock_for(key):
-            source = self._sources.get(key)
-            if source is None:
-                source = _Source(did, self._url_for(did), fps, quality)
+        source = self._sources.get(key)
+        if source is None:
+            source = _Source(did, self._url_for(did), fps, quality)
+            # Seated before the spawn, not after. This is what makes a second
+            # caller share this source instead of opening a rival one -- the
+            # job a lock used to do -- and it is what lets a departing camera
+            # find the source at all while it is still being opened.
+            self._sources[key] = source
+            try:
                 await source.async_start()
-                self._sources[key] = source
-                _LOGGER.info(
-                    "Reading %s's published stream for a preview (%s fps, %s)",
-                    did,
-                    fps or "camera",
-                    quality,
-                )
-        # Outside the lock, and needing none: the check and the assignment
-        # have no await between them, so under asyncio's single thread no
-        # second caller can interleave and start a rival reaper.
+            except BaseException:
+                # A source that failed to open must not stay in the table:
+                # every later caller would wait out the timeout for frames
+                # that can never arrive. Left alone if something has already
+                # replaced or retired it, which is not ours to undo.
+                if self._sources.get(key) is source:
+                    del self._sources[key]
+                raise
+            _LOGGER.info(
+                "Reading %s's published stream for a preview (%s fps, %s)",
+                did,
+                fps or "camera",
+                quality,
+            )
+        # No lock needed: the check and the assignment have no await between
+        # them, so under asyncio's single thread no second caller can
+        # interleave and start a rival reaper.
         if self._reaper is None:
             self._reaper = asyncio.create_task(self._reap())
         return await source.async_frame(after)
@@ -358,17 +391,28 @@ class PreviewManager:
                 await self._reaper
             self._reaper = None
         for key in list(self._sources):
-            await self._retire(key)
+            self._retire(key)
+        if self._closing:
+            # The one place that does wait for teardown, because on the way
+            # out there is nothing left to protect the processes from being
+            # orphaned. Bounded at what a teardown can take at worst -- two
+            # waits of `_STOP_TIMEOUT` -- so a decoder that will not go still
+            # cannot be the reason the add-on fails to exit on its own.
+            await asyncio.wait(self._closing, timeout=_STOP_TIMEOUT * 2 + 1)
 
-    async def async_drop(self, keep: set[str]) -> None:
+    def drop(self, keep: set[str]) -> None:
         """Stop sources for cameras that no longer exist.
 
-        Called by the refresh loop on every pass, which is why it must not be
-        able to block: when it did, the add-on stopped noticing cameras being
-        added, removed or switched off, and said nothing about it.
+        Synchronous, and that is the point rather than an implementation
+        detail: the refresh loop ends by calling this, and a signature with
+        nothing to await cannot become the thing that stops it running. When
+        it could, the add-on quietly stopped noticing cameras being added,
+        removed or switched off -- for the lifetime of the process, with
+        `/api/cameras` answering normally from another path the whole time,
+        so nothing looked wrong.
         """
         for key in [k for k in self._sources if k[0] not in keep]:
-            await self._retire(key)
+            self._retire(key)
 
     async def _reap(self) -> None:
         """Stop sources nobody is watching.
@@ -385,7 +429,7 @@ class PreviewManager:
                     for k, source in self._sources.items()
                     if source.idle_for > _IDLE_SECONDS
                 ]:
-                    await self._retire(key)
+                    self._retire(key)
                     _LOGGER.info("Stopped reading %s's stream for preview", key[0])
             except asyncio.CancelledError:
                 raise
