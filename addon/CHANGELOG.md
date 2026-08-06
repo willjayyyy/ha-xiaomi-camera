@@ -2,123 +2,31 @@
 
 ## 1.3.0
 
-Previews now stream over one connection instead of a request per frame, and
-fix a fault that stopped them working until the add-on was restarted.
+Fixes previews that stopped working, and makes them smoother.
 
 **Upgrade if the add-on page has ever stopped showing pictures.**
 
-- The page holds one connection per camera it is showing, and pictures arrive
-  on it as they are decoded. It used to ask for each picture separately and
-  hold that request open until a newer one existed, which cost a round trip
-  per frame and left the add-on no way to say anything except through a
-  response body.
-- A camera that is switched off is now named as such, at once. It connects
-  normally and sends nothing, so the only way to report it before was to wait
-  out the twenty-second timeout and pass on ffmpeg's own complaint about
-  RTSP. The add-on already reads the lens switch to answer other requests; it
-  now says so, in your language, without starting a decoder to rediscover it.
-- A camera switched off while you are watching it now says so, and its card
-  says so too. The picture used to simply stop, leaving the page offering
-  only "could not load" while the card went on reading "Ready" -- the state
-  it held when the camera list was last fetched.
-- A stream that stops is reported in a few seconds rather than twenty. That
-  wait exists for the first picture, which has to cover RTSP connecting and a
-  keyframe coming round; once a picture has arrived, silence means something
-  stopped, and a frozen frame is not worth watching for twenty seconds to
-  find that out.
-- A camera that is already off when the page loads now behaves like one
-  switched off while watched: the same message, and the same retry button.
-  It used to take a separate path with no way to retry, so turning the camera
-  back on meant reloading the page.
-- The middle picture-quality step is called "Medium" rather than "Balanced",
-  so the three of them read as one scale.
-- The startup log now names the commit the image was built from. Version
-  numbers are bumped per release while the image is rebuilt on every push
-  under that version, so one number can cover several builds -- and the build
-  check compares numbers without hashing any source. Reading one line now
-  settles which code is running.
-- Watching a preview and then leaving the page could stop every preview from
-  working, for good: no picture arrived, refreshing changed nothing, and only
-  restarting the add-on brought it back. Shutting down the decoder behind a
-  preview can hang -- ending a process is not the same as being able to
-  collect its exit status, and this add-on shares itself with the vendor's
-  closed-source library -- and that shutdown was waited on while holding a
-  lock every other preview needed.
-- That lock is now gone rather than made faster. The table of running
-  previews is a dictionary touched from a single thread, so its own
-  operations were never divisible and it never needed guarding; all that
-  did was that one camera must not be opened twice, and that now follows
-  from putting a preview into the table before starting it instead of
-  after. Clearing away departed cameras cannot stall because it no longer
-  waits for anything, and shutting a decoder down runs in the background
-  and gives up rather than waiting forever.
-- The same hang quietly stopped the add-on from noticing cameras being added,
-  removed or switched off, because the periodic refresh ended by queueing on
-  the same lock. Home Assistant kept seeing the right cameras throughout, so
-  nothing looked wrong.
-- A camera removed while its preview was still opening used to leave that
-  preview running, reading a stream nobody would ever look at, with nothing
-  later going looking for it -- the camera it belonged to was gone from every
-  list. It now ends itself as soon as it starts.
-- A preview that cannot be opened now says so at once. Opening is shared, so
-  a second viewer arriving while the first was still opening it would wait
-  out the whole twenty-second timeout for a picture already known not to be
-  coming.
-- A decoder that cannot be shut down is now reported. It is stopped away from
-  the request that triggered it, and a background failure that nobody reads
-  surfaces only when the garbage collector happens to reach it, if ever.
-- go2rtc was shut down the same unbounded way. It could have left the add-on
-  unable to stop on its own, waiting to be killed instead.
+- Fixed: previews would stop working after a while. Refreshing did not help
+  and only restarting the add-on brought them back.
+- Previews are smoother and use less network.
+- A camera that is switched off now says so, instead of leaving you watching
+  a spinner and then showing an error you cannot act on.
+- The picture-quality steps read Low / Medium / High.
+- Clearer install instructions: what the integration and the add-on each are,
+  and why the same address goes in twice.
 
 ### 中文
 
-预览改为单条连接推送，不再每帧一次请求；同时修复了预览失效、必须重启加载项
-才能恢复的问题。
+修复预览失效的问题，并让预览更流畅。
 
 **如果你的加载项页面曾经不再出图，请升级。**
 
-- 页面对每台正在显示的摄像头保持一条连接，画面解出来就推过来。此前是每张画面
-  单独请求一次，并把请求挂住直到有更新的画面为止——每帧一个来回，而且加载项
-  除了响应体之外没有别的办法告诉页面任何事情。
-- 摄像头关着时现在会立刻明说。它连得上、什么都答得出，就是不发画面，所以此前
-  只能等满二十秒超时，再把 ffmpeg 那句关于 RTSP 的报错转给你看。加载项本来就
-  为别的请求读过镜头开关，现在它会直接告诉你，用你的语言，也不必再启动一个解码
-  进程去重新发现这件事。
-- 正看着的摄像头被关掉时，现在会直接说明，卡片上的状态也跟着改。此前画面只是
-  停住，页面只给一句「无法加载画面」，而卡片仍然显示「就绪」——那是上一次取
-  摄像头列表时的状态。
-- 画面中断后几秒内就会说明，不再干等二十秒。那个等待是为第一张画面准备的——
-  它要覆盖 RTSP 建连和等一个关键帧；而画面已经出来过之后，再没有新的就说明有
-  东西停了，不值得盯着一张定住的画面等满二十秒才知道。
-- 页面打开时就已关闭的摄像头，现在和「看着看着被关掉」表现一致：同样的提示，
-  同样有重试按钮。此前它走的是另一条路径，没有重试入口，把摄像头开回来之后只
-  能刷新整个页面才能看。
-- 画质的中间一档从「均衡」改叫「中」，三档放在一起才读得出是同一个尺度。
-- 启动日志现在会写明这个镜像是从哪次提交构建的。版本号是按发布递增的，而镜像
-  在该版本号下每次推送都会重建，所以一个版本号可能对应好几个构建——而构建检查
-  只比对版本号，不哈希源码。现在读一行日志就能确定跑的是哪份代码。
-- 看过一次预览再离开页面，可能导致此后所有预览都不再工作，且无法自行恢复：
-  画面出不来，刷新也没用，只有重启加载项才行。关闭预览背后的解码进程有可能
-  卡住——结束一个进程，和还能不能取回它的退出状态，是两回事，而本加载项与
-  厂商的闭源库共处同一进程——而这个关闭操作是在持有其它预览都要用的那把锁
-  时等待的。
-- 那把锁不是被改快，而是被整个删掉了。存放运行中预览的表就是一个 dict，只在
-  单线程里增删，它自身的操作本来就不可分割，从来不需要保护；真正需要保证的只
-  是同一台摄像头不会被打开两次，而这一点现在由「先把预览放进表、再启动它」自
-  然成立。清理已移除的摄像头不再等待任何东西，因此不可能卡住；关闭解码进程改
-  在后台进行，并且会放弃等待而不是一直等下去。
-- 同一次卡死还会让加载项不再察觉摄像头的新增、移除和开关，而且毫无提示——
-  定时刷新的最后一步正是排队等这把锁。这期间 Home Assistant 看到的摄像头列表
-  始终是对的，所以表面上一切正常。
-- 摄像头在其预览正启动时被移除，此前会留下一路仍在运行的预览，读着一条再也不
-  会有人看的流，而且之后没有任何环节会去找它——它所属的摄像头已经不在任何列表
-  里了。现在它一启动完就会自行结束。
-- 打不开的预览现在会立刻说明原因。打开这个动作是共享的，此前若第一个人正在打
-  开预览时第二个人也来看，后者要干等满二十秒的超时，而那张画面早已确定不会来。
-- 关不掉的解码进程现在会被记录下来。它是在触发它的那个请求之外被关闭的，而后
-  台失败若无人读取，只有等垃圾回收碰巧处理到它时才会浮现，甚至永远不会。
-- go2rtc 此前也用同样的无限等待方式关闭，可能导致加载项无法自行退出，只能等
-  着被强制结束。
+- 修复：预览用过一阵之后会不再出图，刷新也没用，只能重启加载项才恢复。
+- 预览更流畅，也更省网络。
+- 摄像头关着的时候会直接告诉你，不再让你对着转圈的画面等，也不再显示一串
+  看不懂的报错。
+- 画质档位改为「低 / 中 / 高」。
+- 安装说明写清楚了：集成和加载项分别是什么、为什么同一个地址要填两次。
 
 ## 1.2.0
 
