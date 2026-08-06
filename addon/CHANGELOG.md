@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.2.1
+
+Fix previews that stop working until the add-on is restarted.
+
+**Upgrade if the add-on page has ever stopped showing pictures.**
+
+- Watching a preview and then leaving the page could stop every preview from
+  working, for good: no picture arrived, refreshing changed nothing, and only
+  restarting the add-on brought it back. Shutting down the decoder behind a
+  preview can hang -- ending a process is not the same as being able to
+  collect its exit status, and this add-on shares itself with the vendor's
+  closed-source library -- and that shutdown was waited on while holding a
+  lock every other preview needed.
+- Shutting a decoder down now happens outside that lock, in the background,
+  and gives up rather than waiting forever. Each preview also has a lock of
+  its own, so one camera's trouble stays with that camera.
+- The same hang quietly stopped the add-on from noticing cameras being added,
+  removed or switched off, because the periodic refresh ended by queueing on
+  the same lock. Home Assistant kept seeing the right cameras throughout, so
+  nothing looked wrong.
+- go2rtc was shut down the same unbounded way. It could have left the add-on
+  unable to stop on its own, waiting to be killed instead.
+
+### 中文
+
+修复预览画面失效、必须重启加载项才能恢复的问题。
+
+**如果你的加载项页面曾经不再出图，请升级。**
+
+- 看过一次预览再离开页面，可能导致此后所有预览都不再工作，且无法自行恢复：
+  画面出不来，刷新也没用，只有重启加载项才行。关闭预览背后的解码进程有可能
+  卡住——结束一个进程，和还能不能取回它的退出状态，是两回事，而本加载项与
+  厂商的闭源库共处同一进程——而这个关闭操作是在持有其它预览都要用的那把锁
+  时等待的。
+- 现在关闭解码进程改在锁外、后台进行，并且会放弃等待而不是一直等下去。每一路
+  预览也各有自己的锁，某一台摄像头出问题不会波及其它。
+- 同一次卡死还会让加载项不再察觉摄像头的新增、移除和开关，而且毫无提示——
+  定时刷新的最后一步正是排队等这把锁。这期间 Home Assistant 看到的摄像头列表
+  始终是对的，所以表面上一切正常。
+- go2rtc 此前也用同样的无限等待方式关闭，可能导致加载项无法自行退出，只能等
+  着被强制结束。
+
 ## 1.2.0
 
 Fix the video freeze from 1.1.0, and make the un-transcoded stream
