@@ -1,10 +1,22 @@
 # Changelog
 
-## 1.2.1
+## 1.3.0
 
-Fix previews that stop working until the add-on is restarted.
+Previews now stream over one connection instead of a request per frame, and
+fix a fault that stopped them working until the add-on was restarted.
 
 **Upgrade if the add-on page has ever stopped showing pictures.**
+
+- The page holds one connection per camera it is showing, and pictures arrive
+  on it as they are decoded. It used to ask for each picture separately and
+  hold that request open until a newer one existed, which cost a round trip
+  per frame and left the add-on no way to say anything except through a
+  response body.
+- A camera that is switched off is now named as such, at once. It connects
+  normally and sends nothing, so the only way to report it before was to wait
+  out the twenty-second timeout and pass on ffmpeg's own complaint about
+  RTSP. The add-on already reads the lens switch to answer other requests; it
+  now says so, in your language, without starting a decoder to rediscover it.
 
 - Watching a preview and then leaving the page could stop every preview from
   working, for good: no picture arrived, refreshing changed nothing, and only
@@ -41,9 +53,18 @@ Fix previews that stop working until the add-on is restarted.
 
 ### 中文
 
-修复预览画面失效、必须重启加载项才能恢复的问题。
+预览改为单条连接推送，不再每帧一次请求；同时修复了预览失效、必须重启加载项
+才能恢复的问题。
 
 **如果你的加载项页面曾经不再出图，请升级。**
+
+- 页面对每台正在显示的摄像头保持一条连接，画面解出来就推过来。此前是每张画面
+  单独请求一次，并把请求挂住直到有更新的画面为止——每帧一个来回，而且加载项
+  除了响应体之外没有别的办法告诉页面任何事情。
+- 摄像头关着时现在会立刻明说。它连得上、什么都答得出，就是不发画面，所以此前
+  只能等满二十秒超时，再把 ffmpeg 那句关于 RTSP 的报错转给你看。加载项本来就
+  为别的请求读过镜头开关，现在它会直接告诉你，用你的语言，也不必再启动一个解码
+  进程去重新发现这件事。
 
 - 看过一次预览再离开页面，可能导致此后所有预览都不再工作，且无法自行恢复：
   画面出不来，刷新也没用，只有重启加载项才行。关闭预览背后的解码进程有可能

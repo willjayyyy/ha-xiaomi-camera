@@ -761,14 +761,28 @@ function observe(container) {
   container.querySelectorAll(".cam[data-live]").forEach((cam) => observer.observe(cam));
 }
 
-//: Consecutive failures tolerated before a preview gives up and offers a
-//: retry. A single miss is routine: the camera can be mid-keyframe, or the
-//: session may still be connecting.
+//: Consecutive reconnects tolerated before a preview gives up and offers a
+//: retry. A single drop is routine: the add-on restarts, or a camera's
+//: session is still coming up.
 const PREVIEW_MAX_FAILURES = 4;
 
-//: Only after a failure. There is deliberately no delay on the success path --
-//: see startPreview.
+//: Before reconnecting. Only after a failure -- a healthy connection is never
+//: reopened, so nothing paces the pictures but the stream itself.
 const PREVIEW_RETRY_MS = 1000;
+
+/**
+ * The socket address for a path, from the address this page was served on.
+ *
+ * Relative, like every other request here: ingress serves the page under a
+ * prefix that this file must not know or reconstruct. `new URL` resolves it
+ * against the current address, which is the only place that prefix reliably
+ * exists -- deriving it from a header has been a way in before.
+ */
+function socketUrl(path) {
+  const url = new URL(`.${path}`, location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
 
 /**
  * Show a live preview.
@@ -779,19 +793,22 @@ const PREVIEW_RETRY_MS = 1000;
  * frames would keep showing a picture while the published stream was broken,
  * which is the one thing a status display must never do.
  *
- * The next picture is requested the instant the last one arrives, naming the
- * one already held, and the add-on holds that request open until a newer one
- * exists. Pacing therefore follows the stream, with no timer of its own to
- * beat against it.
+ * One socket carries the whole preview. Binary messages are whole JPEGs --
+ * a message boundary is a frame boundary, so nothing has to hunt for the
+ * markers that separate them -- and text messages say why a picture is not
+ * coming. That second channel is why a switched-off camera can be named as
+ * such immediately, in the viewer's own language, rather than being reported
+ * as whatever ffmpeg said about RTSP twenty seconds later.
  *
- * A single multipart connection would be the textbook way to carry frames, and
- * it does not survive the trip: two independent implementations were reset
- * after about ten frames. On a local network a request per frame costs a few
- * milliseconds against a frame period of fifty, and it works.
+ * This replaces a request per frame, each held open by the add-on until a
+ * newer picture existed. That worked and cost a round trip per frame, and it
+ * could only ever answer with a picture or an error -- there was no way to
+ * say anything while a picture was still possible.
  *
- * `fetch` rather than pointing an <img> at the URL: the sequence number comes
- * back in a header, and a failure comes back as a status and a message instead
- * of an error event that says nothing.
+ * A single multipart response was tried first, twice, and was reset after
+ * about ten frames both times. A WebSocket is not multipart: it upgrades the
+ * connection rather than streaming a response body, which is the same thing
+ * every other add-on with a live page relies on through ingress.
  */
 function startPreview(cam) {
   const did = cam.dataset.did;
@@ -804,13 +821,11 @@ function startPreview(cam) {
   img.alt = "";
   box.appendChild(img);
 
-  const controller = new AbortController();
-  const session = { img, controller, objectUrl: null, timer: null };
+  const session = { img, socket: null, objectUrl: null, timer: null };
   box._preview = session;
 
   const prefs = prefsFor(did);
   let failures = 0;
-  let seq = 0;
 
   const stopped = () => box._preview !== session;
 
@@ -825,62 +840,80 @@ function startPreview(cam) {
     img.classList.add("visible");
   };
 
-  const fail = (reason) => {
-    failures += 1;
-    if (failures < PREVIEW_MAX_FAILURES) {
-      session.timer = setTimeout(loop, PREVIEW_RETRY_MS);
-      return;
-    }
-    // Marked so scrolling past and back does not retry in a loop against a
-    // camera that is not going to answer.
+  // Told, not guessed at. The add-on names a reason rather than sending a
+  // sentence, because this page has both languages and the add-on has
+  // neither; an unknown reason falls back to the generic wording so a newer
+  // add-on can add reasons without this page having to know them first.
+  const REASONS = { switched_off: "cameraOffHint" };
+
+  // Given up on rather than retried: nothing about a switched-off camera
+  // gets better by reconnecting, and hammering it would keep a card busy
+  // that the viewer can fix with one tap of the switch.
+  const settle = (text) => {
     box._failed = true;
     box._preview = null;
-    box.innerHTML = `<div class="placeholder">${escapeHtml(reason)}</div>`;
+    if (session.socket) session.socket.close();
+    box.innerHTML = `<div class="placeholder">${escapeHtml(text)}</div>`;
     box.appendChild(retryButton(cam));
   };
 
-  async function loop() {
+  const fail = () => {
+    failures += 1;
+    if (failures < PREVIEW_MAX_FAILURES) {
+      session.timer = setTimeout(connect, PREVIEW_RETRY_MS);
+      return;
+    }
+    settle(t("previewFailed"));
+  };
+
+  function connect() {
     if (stopped()) return;
-    try {
-      const response = await api(
-        `/api/preview/${encodeURIComponent(did)}`
-        + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.quality)}&after=${seq}`,
-        { signal: controller.signal },
-      );
+    const socket = new WebSocket(socketUrl(
+      `/api/preview/${encodeURIComponent(did)}/ws`
+      + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.quality)}`,
+    ));
+    // Blobs, not ArrayBuffers: the only thing done with a frame is to hand
+    // it to an <img>, and `createObjectURL` wants a Blob either way.
+    socket.binaryType = "blob";
+    session.socket = socket;
+
+    socket.addEventListener("message", (event) => {
       if (stopped()) return;
-      if (!response.ok) {
-        // The add-on explains itself here -- the camera being switched off, or
-        // the published stream producing nothing -- so the page shows what it
-        // said rather than a generic failure.
-        fail((await response.text()).trim() || t("previewFailed"));
+      if (typeof event.data !== "string") {
+        failures = 0;
+        show(event.data);
         return;
       }
-      seq = Number(response.headers.get("X-Frame-Seq")) || seq + 1;
-      show(await response.blob());
-      failures = 0;
-      loop();
-    } catch (err) {
-      if (err.name === "AbortError" || stopped()) return;
-      fail(t("previewFailed"));
-    }
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      settle(t(REASONS[message.reason] || "previewFailed"));
+    });
+
+    // Both endings land here -- a clean close and a failed connection alike.
+    // Neither is worth telling apart: the answer to both is to reconnect,
+    // until it has failed often enough to stop being worth it.
+    socket.addEventListener("close", () => {
+      if (stopped() || session.socket !== socket) return;
+      fail();
+    });
   }
 
-  loop();
+  connect();
 }
 
 /**
  * End a preview and release what is behind it.
  *
- * Aborting the pending request matters as much as dropping the element: the
- * add-on holds that request open until the next picture, and leaving it open
- * keeps a camera decoding for a card nobody is looking at.
+ * Closing the socket matters as much as dropping the element: while it is
+ * open the add-on keeps a decoder running for it, and a card nobody is
+ * looking at would go on paying for one.
  */
 function stopPreview(box) {
   const session = box._preview;
   box._preview = null;
   if (!session) return;
   if (session.timer) clearTimeout(session.timer);
-  session.controller.abort();
+  if (session.socket) session.socket.close();
   if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
 }
 

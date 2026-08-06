@@ -57,6 +57,10 @@ class CameraRegistry:
     def __init__(self, client: MIoTClient) -> None:
         self._client = client
         self._cameras: dict[str, MIoTCameraInfo] = {}
+        #: Lens switches as last read, alongside the cameras they belong to.
+        #: Empty until the first refresh, which reads "not known" rather than
+        #: "off" -- see :meth:`power_state`.
+        self._power_states: dict[str, bool | None] = {}
 
     @property
     def raw(self) -> dict[str, MIoTCameraInfo]:
@@ -70,10 +74,26 @@ class CameraRegistry:
     def get(self, did: str) -> MIoTCameraInfo | None:
         return self._cameras.get(did)
 
+    def power_state(self, did: str) -> bool | None:
+        """This camera's lens switch as of the last refresh.
+
+        Kept so that asking is free. A camera that is off connects normally
+        and simply sends nothing, so anything opening a stream wants to know
+        first -- and every one of those doing its own cloud read would put a
+        request behind each preview, for a value that was already fetched to
+        answer `/api/cameras`.
+
+        ``None`` where it has not been read or could not be: the distinction
+        from ``False`` is the one :class:`CameraDescription` makes, and it
+        matters for the same reason there.
+        """
+        return self._power_states.get(did)
+
     async def async_refresh(self) -> list[CameraDescription]:
         """Re-read the camera list and their power state."""
         self._cameras = await self._client.get_cameras_async()
         power_states = await self._async_read_power_states(list(self._cameras))
+        self._power_states = power_states
 
         descriptions: list[CameraDescription] = []
         for did, info in self._cameras.items():
