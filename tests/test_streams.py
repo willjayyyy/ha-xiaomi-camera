@@ -2,9 +2,9 @@
 
 `streams.py` itself never imports Home Assistant, but importing it by its real
 package path (`custom_components.xiaomi_camera.streams`) runs the package's
-`__init__.py` first, which does. That needs `homeassistant`, available under
-`.venv314` but not under `.venv311` -- so this module is skipped there rather
-than erroring at collection.
+`__init__.py` first, which does. That needs `homeassistant`, which only
+installs on Python >= 3.14 -- so on an older interpreter this module is
+skipped rather than erroring at collection.
 
 Gated on the interpreter version, not on whether the import happens to
 succeed: a `.venv314` install that is present but broken should fail this

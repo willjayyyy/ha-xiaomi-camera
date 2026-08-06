@@ -8,12 +8,12 @@ Requests go through a real ``aiohttp`` application rather than a mocked request
 object: the guards are middleware, and middleware that is never mounted is not
 what runs in production.
 
-``pytest-homeassistant-custom-component`` (installed under ``.venv314``, not
-``.venv311``) blocks real sockets by default via ``pytest-socket``, which the
+``pytest-homeassistant-custom-component`` (which only installs on Python
+>= 3.14) blocks real sockets by default via ``pytest-socket``, which the
 ``TestServer`` below needs; ``socket_enabled`` is that plugin's documented
 escape hatch for tests that open one on purpose. The marker is applied only
-when that plugin is present, so the module still runs unblocked under
-``.venv311``, which never installs it.
+when that plugin is present, so the module still runs unblocked on an
+interpreter that never installs it.
 """
 
 from __future__ import annotations

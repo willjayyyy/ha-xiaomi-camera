@@ -4,8 +4,8 @@
 part that unit test cannot: that Home Assistant recognises the migration hook,
 calls it for a version 1 entry, and stores the result.
 
-Needs `homeassistant`, available under `.venv314` but not under `.venv311` --
-so this module is skipped there rather than erroring at collection.
+Needs `homeassistant`, which only installs on Python >= 3.14 -- so on an
+older interpreter this module is skipped rather than erroring at collection.
 
 Gated on the interpreter version, not on whether the import happens to
 succeed: a `.venv314` install that is present but broken should fail this
