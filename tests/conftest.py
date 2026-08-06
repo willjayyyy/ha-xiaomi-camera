@@ -23,12 +23,55 @@ cleanly, and ``pythonpath = .`` in ``pytest.ini`` makes the package importable
 by its real path.
 """
 
+import asyncio
 import enum
 import sys
 import types
 from pathlib import Path
 
 import pytest
+
+
+class NeverReportsExit:
+    """A process that can be killed but whose exit is never collected.
+
+    The add-on spawns two kinds of child process -- go2rtc and the preview's
+    ffmpeg -- and both stopped them by killing and then waiting without a
+    limit. Killing guarantees the process dies; it guarantees nothing about
+    whether the exit status is still there to collect, because that goes to
+    whoever calls ``wait`` first and this process shares itself with a
+    closed-source vendor library running threads of its own.
+
+    Defined once, here, rather than per test module: it stands for one
+    failure mode that both call sites have to survive, and two copies could
+    drift into testing two different things.
+
+    ``stdout`` is primed with a whole JPEG and never closed, so a preview
+    source built on this reaches its first picture at once and then looks,
+    to everything around it, like a healthy running ffmpeg.
+    """
+
+    returncode = None
+
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.stdout.feed_data(b"\xff\xd8preview\xff\xd9")
+        #: Whether anything ever put this process out of its misery. Read by
+        #: the tests that check an abandoned spawn is not left running.
+        self.killed = False
+
+    def terminate(self) -> None:
+        """Ignored, as a process wedged in the kernel would ignore it."""
+
+    def kill(self) -> None:
+        """Ends the process -- which is not the same as reporting its exit."""
+        self.killed = True
+
+    async def wait(self) -> int:
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")  # pragma: no cover
+
 
 _APP = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app"
 sys.path.insert(0, str(_APP))

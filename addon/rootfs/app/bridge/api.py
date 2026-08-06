@@ -167,7 +167,7 @@ class BridgeApi:
                 web.post("/api/unlink", self._unlink),
                 web.post("/api/login", self._login),
                 web.post("/api/logout", self._logout),
-                web.get("/api/preview/{did}", self._preview),
+                web.get("/api/preview/{did}/ws", self._preview_ws),
                 web.get("/", self._index),
                 web.static("/static", _STATIC_DIR, show_index=False),
             ]
@@ -458,61 +458,101 @@ class BridgeApi:
         await self._refresh_callback()
         return web.json_response({"status": "ok"})
 
-    async def _preview(self, request: web.Request) -> web.StreamResponse:
-        """One picture, decoded from the stream this add-on publishes.
+    async def _preview_ws(self, request: web.Request) -> web.WebSocketResponse:
+        """Pictures from one camera, over one connection.
 
-        Deliberately not the snapshot endpoint, which reads the vendor
-        library's own decoded frames. Those keep arriving while the published
-        stream is broken, so a preview drawn from them would show a healthy
-        picture for a camera nothing else can watch. This one fails when the
-        thing it is reporting on fails -- see :mod:`bridge.preview`.
+        Replaces a request per frame. The saving in round trips is the lesser
+        half: a socket can also carry a message that is not a picture, which
+        is what lets the add-on say why there is no picture instead of
+        letting a request run out its timeout and handing the viewer
+        ffmpeg's complaint about RTSP.
 
-        One picture per request, and the request is held until there is a
-        picture newer than the one the caller names. A single multipart
-        connection carrying every frame is the textbook answer and was tried
-        twice -- once relayed from go2rtc, once served from here. Both were
-        reset by something between this process and the browser after about
-        ten frames. A request per frame survives that, and on a local network
-        the cost is one round trip of a few milliseconds against a frame period
-        of fifty.
-
-        Holding the request is what makes it smooth: answering immediately and
-        letting the page wait a fixed interval puts two unsynchronised timers
-        in series, and the gap between pictures then swings between one frame
-        period and two.
+        The handshake is an ordinary HTTP request, so it passes through the
+        same guards as everything else here -- the ingress headers, the peer
+        address and the password cookie are all checked before it upgrades.
+        What does change is that they are checked once: an established
+        connection is not re-authorised, so a password set after one opens
+        applies to it only when it next reconnects.
         """
         did = request.match_info["did"]
         if self._session_for(did) is None:
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
-        # Carried on the request rather than stored: how smooth and how sharp a
-        # preview should be is a property of the person watching and the screen
-        # they are watching on, not of the installation. Two viewers can ask
-        # for different things at once, and nothing has to be saved, migrated
-        # or kept in step.
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
-        after = _bounded(request.query.get("after"), "after", 0, 2**31, default=0)
         quality = request.query.get("quality", "balanced")
         if quality not in QUALITIES:
             raise web.HTTPBadRequest(
                 text=f"quality must be one of {', '.join(sorted(QUALITIES))}"
             )
 
-        try:
-            seq, image = await self._previews.async_frame(did, fps, quality, after)
-        except PreviewError as err:
-            raise web.HTTPServiceUnavailable(text=str(err)) from err
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
 
-        return web.Response(
-            body=image,
-            content_type="image/jpeg",
-            headers={
-                # Names this picture, so the page can ask to be held until
-                # there is a newer one instead of guessing when to ask again.
-                "X-Frame-Seq": str(seq),
-                "Cache-Control": "no-store",
-            },
-        )
+        # Asked before anything is started, and only for a definite "off":
+        # such a camera connects, answers every call and sends nothing, so a
+        # decoder opened for it would spend twenty seconds rediscovering --
+        # in ffmpeg's words, about RTSP -- what the power switch already
+        # said. `None` means the switch could not be read, which is not the
+        # same as off; there the picture is the better evidence.
+        if self._power_state(did) is False:
+            await ws.send_json({"type": "unavailable", "reason": "switched_off"})
+            await ws.close()
+            return ws
+
+        async def send_pictures() -> None:
+            """Each picture, named by the last one sent.
+
+            The manager holds each call until a genuinely newer frame exists,
+            so the pace follows the stream rather than a timer of this end's
+            own -- the same arrangement the page used to drive over HTTP.
+            """
+            seq = 0
+            try:
+                while True:
+                    seq, image = await self._previews.async_frame(
+                        did, fps, quality, seq
+                    )
+                    await ws.send_bytes(image)
+            except PreviewError as err:
+                # Asked again rather than recalled: the case worth naming is a
+                # camera switched off since the list was last read, and the
+                # remembered value is by definition the one from before that.
+                # Only the switch explains itself; everything else stays
+                # "no video", which the page words generically.
+                off = await self._read_power_state(did)
+                await ws.send_json(
+                    {
+                        "type": "unavailable",
+                        "reason": "switched_off" if off is False else "no_video",
+                        "detail": str(err),
+                    }
+                )
+            finally:
+                # Ends the reading side too, which is what closes this handler
+                # when the stream is the thing that stopped.
+                await ws.close()
+
+        sending = asyncio.create_task(send_pictures())
+        try:
+            # Read, purely to learn when the viewer goes away. The page sends
+            # nothing, so there is nothing here to act on -- but the close
+            # frame the browser sends is delivered to this process either way,
+            # and `ws.closed` only becomes true once something has read it.
+            #
+            # Sending alone does not notice. It finds out when a write happens
+            # to fail, which needs a picture to still be arriving and the
+            # socket's buffer to have filled -- and a camera that has gone
+            # quiet produces neither. Until then the decoder keeps running for
+            # a viewer who left, and its idle timer keeps being reset by this
+            # very loop, so nothing reaps it. That cost a second ffmpeg per
+            # camera and took the add-on to 86% CPU.
+            async for _ in ws:
+                pass
+        finally:
+            sending.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await sending
+        return ws
 
     async def _login(self, request: web.Request) -> web.Response:
         """Exchange the configured password for a session cookie.
@@ -573,6 +613,32 @@ class BridgeApi:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _read_power_state(self, did: str) -> bool | None:
+        """This camera's lens switch, read now rather than recalled.
+
+        Costs a request, so it is used where the answer is worth it: a stream
+        that has stopped, where "switched off" is the one cause the viewer can
+        act on and the remembered value is too old to tell them.
+        """
+        registry: CameraRegistry | None = self._registry_provider()
+        if registry is None:
+            return None
+        return await registry.async_read_power_state(did)
+
+    def _power_state(self, did: str) -> bool | None:
+        """Whether this camera's lens is switched on, as last read.
+
+        Read from the registry's own record rather than asked of the cloud
+        again: the same value answers `/api/cameras`, which the page calls
+        before it opens any preview, so what is held here is as fresh as what
+        the viewer is looking at -- and opening a preview adds no request of
+        its own.
+        """
+        registry: CameraRegistry | None = self._registry_provider()
+        if registry is None:
+            return None
+        return registry.power_state(did)
 
     def _session_for(self, did: str):
         registry: CameraRegistry | None = self._registry_provider()

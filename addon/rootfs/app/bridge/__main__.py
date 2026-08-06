@@ -23,6 +23,7 @@ from .config import (
     LOG_LEVELS,
     Options,
     VideoQuality,
+    build_ref,
     data_is_ephemeral,
     load_options,
 )
@@ -133,7 +134,7 @@ class Bridge:
             # of the process.
             await self._sessions.async_prune({c.did for c in cameras})
         await self._restreamer.async_apply([c.did for c in cameras])
-        await self._previews.async_drop({c.did for c in cameras})
+        self._previews.drop({c.did for c in cameras})
 
     async def async_stop(self) -> None:
         if self._refresh_task is not None:
@@ -224,10 +225,11 @@ async def async_main() -> int:
         )
 
     _LOGGER.info(
-        "Starting bridge (access_mode=%s, quality=%s, supervised=%s)",
+        "Starting bridge (access_mode=%s, quality=%s, supervised=%s, build=%s)",
         options.access_mode.value,
         options.video_quality.value,
         options.supervised,
+        build_ref(),
     )
     import pathlib
 

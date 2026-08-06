@@ -8,6 +8,7 @@ listeners may ever follow `access_mode`.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -438,3 +439,26 @@ class TestStreamKeysMatchTranslationLabels:
         assert {key: options[key] for key in entities} == {
             key: entry["name"] for key, entry in entities.items()
         }
+
+
+class TestTerminationIsBounded:
+    """Stopping go2rtc has to finish, whatever the process does.
+
+    The same shape as the preview's teardown, and reached on two paths that
+    matter: restarting go2rtc when the camera list changes, and shutting the
+    add-on down. A wait that never ends here stops the add-on from exiting on
+    its own, leaving Supervisor to kill it after its grace period -- and on
+    the restart path it would strand the refresh loop as well.
+    """
+
+    async def test_it_gives_up_on_a_process_that_never_reports_its_exit(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from bridge import restream
+        from conftest import NeverReportsExit
+
+        monkeypatch.setattr(restream, "_STOP_TIMEOUT", 0.05)
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        restreamer._process = NeverReportsExit()
+
+        await asyncio.wait_for(restreamer._async_terminate(), timeout=2)

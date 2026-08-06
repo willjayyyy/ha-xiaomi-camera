@@ -14,6 +14,7 @@ the connection lifetime.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,14 @@ _BINARY = "/usr/local/bin/go2rtc"
 #: Restart delay if go2rtc exits unexpectedly. Long enough to avoid a hot loop,
 #: short enough that a transient failure self-heals before anyone notices.
 _RESTART_DELAY_SECONDS = 5.0
+
+#: How long to wait for a stopped go2rtc to report its exit, applied after the
+#: polite signal and again after the fatal one. See the same constant in
+#: `bridge.preview`: killing a process guarantees it dies, not that its exit
+#: status is still there to be collected, and waiting without a limit for
+#: something another thread may already have taken never ends. Longer than the
+#: preview's because go2rtc has live consumers to disconnect on the way out.
+_STOP_TIMEOUT = 10
 
 
 #: Our log levels mapped onto go2rtc's, which names them differently and has
@@ -429,8 +438,13 @@ class Restreamer:
             return
         process.terminate()
         try:
-            await asyncio.wait_for(process.wait(), timeout=10)
+            await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT)
         except TimeoutError:
             process.kill()
-            await process.wait()
+            # Bounded, and its failure swallowed: SIGKILL has been delivered,
+            # so there is nothing further to do here whether or not the exit
+            # status ever arrives. Waiting indefinitely for it would leave
+            # the add-on unable to shut down on its own.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT)
         self._process = None

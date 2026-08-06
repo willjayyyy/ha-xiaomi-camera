@@ -41,6 +41,22 @@ class VideoQuality(StrEnum):
     HIGH = "high"
 
 
+def build_ref() -> str:
+    """The commit this image was built from, or ``unknown`` if it says none.
+
+    A version number cannot answer this. Versions are bumped per release
+    while the image is rebuilt every time the branch moves, so one version
+    covers as many builds as were pushed under it -- and the build check
+    compares versions without hashing any source, which is what lets a change
+    quietly not reach the image while CI stays green.
+
+    Baked in at build time rather than read from a file in the image: a file
+    can be edited in a running container, and then it describes that
+    container rather than the build it came from.
+    """
+    return os.environ.get("BUILD_REF") or "unknown"
+
+
 def is_supervised(options_path: str | Path = OPTIONS_FILE) -> bool:
     """Whether Home Assistant's Supervisor is managing this container.
 
