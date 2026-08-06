@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 from bridge import preview
-from bridge.preview import _QUALITY, PreviewManager, _Source
+from bridge.preview import _QUALITY, PreviewError, PreviewManager, _Source
 from conftest import NeverReportsExit
 
 
@@ -326,6 +326,81 @@ class TestASourceStartingWhenItsCameraLeaves:
             await self._quiesce(manager, watching)
 
 
+class TestOpeningIsSharedHonestly:
+    """Seating a source before starting it is what removed the lock.
+
+    It also means a second viewer can reach a source that is not open yet,
+    and that whoever opens it may find, on finishing, that the camera has
+    since departed. Both are new states the lock used to make unreachable,
+    and neither may be answered with a wait that runs to the full
+    first-frame timeout: nothing is coming, and the caller can be told so.
+    """
+
+    async def test_a_failed_open_does_not_leave_a_second_viewer_waiting(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def failing_spawn(*args: object, **kwargs: object) -> object:
+            entered.set()
+            await release.wait()
+            raise OSError("ffmpeg is not installed")
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", failing_spawn)
+
+        manager = PreviewManager(url_for)
+        first = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        second = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        await asyncio.sleep(0.05)  # let the second one reach the wait
+        release.set()
+
+        try:
+            with pytest.raises(OSError):
+                await first
+            # Not the 20s first-frame timeout: the picture is already known
+            # not to be coming.
+            with pytest.raises(PreviewError):
+                await asyncio.wait_for(second, timeout=1)
+        finally:
+            for task in (first, second, manager._reaper):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+    async def test_a_camera_leaving_mid_open_is_not_announced_as_readable(
+        self, monkeypatch: pytest.MonkeyPatch, caplog
+    ) -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+
+        async def held_spawn(*args: object, **kwargs: object) -> NeverReportsExit:
+            entered.set()
+            await release.wait()
+            return NeverReportsExit()
+
+        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", held_spawn)
+
+        manager = PreviewManager(url_for)
+        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        manager.drop({"B"})  # A departs while it is being opened
+        release.set()
+
+        try:
+            with pytest.raises(PreviewError):
+                await asyncio.wait_for(watching, timeout=1)
+            assert "Reading A's published stream" not in caplog.text
+        finally:
+            for task in (watching, manager._reaper, *manager._closing):
+                if task is not None:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await task
+
+
 class TestATeardownFailureIsNotSwallowed:
     """Teardown runs unwatched, so its failures have to be gone looking for.
 
@@ -360,6 +435,55 @@ class TestATeardownFailureIsNotSwallowed:
                 manager._reaper.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await manager._reaper
+
+
+class TestShutdownCannotHangTheAddOn:
+    """Shutting down has to finish even when a decoder will not stop.
+
+    This is the one place that does wait for teardown, because on the way out
+    there is nothing left to keep the processes from being orphaned. It is
+    also the worst place to wait forever: the add-on would never exit on its
+    own, and Supervisor would eventually kill it after its grace period --
+    slower and noisier than stopping properly, and with no explanation.
+    """
+
+    async def test_it_gives_up_on_teardowns_that_will_not_finish(
+        self, wedged_ffmpeg, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Teardown is replaced wholesale, and that is the point.
+
+        A wedged ffmpeg is not enough to exercise this: stopping one is
+        already bounded from the inside, so shutdown would return on time
+        whether or not it imposed a limit of its own -- a guard that cannot
+        fail is not a guard. Standing in a teardown that never returns at
+        all is what leaves only this method's own limit to end the wait.
+        """
+
+        async def never_stops(self: _Source) -> None:
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(preview._Source, "async_stop", never_stops)
+        monkeypatch.setattr(preview, "_STOP_TIMEOUT", 0.05)
+
+        manager = PreviewManager(url_for)
+        await manager.async_frame("A", 0, "balanced")
+        await manager.async_frame("B", 0, "balanced")
+        # Held now, because shutting down empties the table -- and with the
+        # real teardown replaced, nothing else will ever cancel the readers
+        # these sources started.
+        opened = list(manager._sources.values())
+
+        try:
+            await asyncio.wait_for(manager.async_shutdown(), timeout=2)
+            assert manager._sources == {}
+        finally:
+            pending = list(manager._closing)
+            for source in opened:
+                pending.extend(source._tasks)
+            for task in pending:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
 
 
 class TestTeardownIsBounded:

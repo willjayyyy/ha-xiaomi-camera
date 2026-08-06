@@ -161,10 +161,32 @@ class _Source:
             asyncio.create_task(self._read_errors()),
         ]
 
+    def fail(self, reason: str) -> None:
+        """Wake anyone waiting on a picture that is not coming.
+
+        Opening happens once and is shared by everyone who asks while it is
+        in flight, so a failure is learnt by exactly one caller -- the one
+        doing the opening. The rest are already waiting on the frame event,
+        and nothing will ever set it, because the reader that would have set
+        it was never started. Told here instead, they fail at once rather
+        than sitting out the full first-frame timeout.
+
+        Deliberately the same shape as the reader's own exit path: put the
+        held picture aside, wake the waiters, hand out a fresh event.
+        """
+        self._error = reason
+        self._frame = None
+        self._ready.set()
+        self._ready = asyncio.Event()
+
     async def async_stop(self) -> None:
         # First, and unconditionally: a spawn already in flight has no other
         # way to learn that it is no longer wanted.
         self._retired = True
+        # Before the process is dealt with, not after: whoever is waiting on
+        # a picture from this should hear at once that it has been taken out
+        # of service, rather than after however long stopping takes.
+        self.fail("This preview was stopped.")
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -363,14 +385,26 @@ class PreviewManager:
             self._sources[key] = source
             try:
                 await source.async_start()
-            except BaseException:
+            except BaseException as err:
                 # A source that failed to open must not stay in the table:
                 # every later caller would wait out the timeout for frames
                 # that can never arrive. Left alone if something has already
                 # replaced or retired it, which is not ours to undo.
                 if self._sources.get(key) is source:
                     del self._sources[key]
+                # The raise tells only this caller. Anyone who joined while
+                # the open was in flight is waiting on the source itself.
+                source.fail(safe_error(err))
                 raise
+            if self._sources.get(key) is not source:
+                # Retired while it was opening -- the camera left the account
+                # in between. The source has already ended the process it
+                # spawned, so there is nothing to read and nothing to
+                # announce; saying otherwise would put a line in the log
+                # claiming a stream is being read when none is.
+                raise PreviewError(
+                    "The camera was removed while its preview was opening."
+                )
             _LOGGER.info(
                 "Reading %s's published stream for a preview (%s fps, %s)",
                 did,

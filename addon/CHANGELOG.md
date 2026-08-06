@@ -29,6 +29,10 @@ Fix previews that stop working until the add-on is restarted.
   preview running, reading a stream nobody would ever look at, with nothing
   later going looking for it -- the camera it belonged to was gone from every
   list. It now ends itself as soon as it starts.
+- A preview that cannot be opened now says so at once. Opening is shared, so
+  a second viewer arriving while the first was still opening it would wait
+  out the whole twenty-second timeout for a picture already known not to be
+  coming.
 - A decoder that cannot be shut down is now reported. It is stopped away from
   the request that triggered it, and a background failure that nobody reads
   surfaces only when the garbage collector happens to reach it, if ever.
@@ -57,6 +61,8 @@ Fix previews that stop working until the add-on is restarted.
 - 摄像头在其预览正启动时被移除，此前会留下一路仍在运行的预览，读着一条再也不
   会有人看的流，而且之后没有任何环节会去找它——它所属的摄像头已经不在任何列表
   里了。现在它一启动完就会自行结束。
+- 打不开的预览现在会立刻说明原因。打开这个动作是共享的，此前若第一个人正在打
+  开预览时第二个人也来看，后者要干等满二十秒的超时，而那张画面早已确定不会来。
 - 关不掉的解码进程现在会被记录下来。它是在触发它的那个请求之外被关闭的，而后
   台失败若无人读取，只有等垃圾回收碰巧处理到它时才会浮现，甚至永远不会。
 - go2rtc 此前也用同样的无限等待方式关闭，可能导致加载项无法自行退出，只能等
