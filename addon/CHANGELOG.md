@@ -2,37 +2,32 @@
 
 ## 1.2.0
 
-Make the original (un-transcoded) stream codec-neutral, and publish a separate
-H.265 transcode at full resolution.
+Fix the video freeze from 1.1.0, and make the un-transcoded stream
+codec-neutral.
 
-- The root stream is no longer assumed to be H.265. It is named for the camera
-  (`camera_<did>`) and its entity carries the device name only, so a camera
-  whose native codec is H.264 is no longer mislabelled.
-- `h265` is now a real transcode to H.265 at full resolution, alongside the
-  existing `h264` family. Choosing a codec-named stream always means a
-  transcode; the original stream is the only one that is not.
-- Existing entries keep their entities: the stored "h265" root selection is
-  migrated to "original" on upgrade.
-- Every stream is now called the same thing in the options form and on the
-  device page, in your own language -- the form previously showed English
-  labels, and worded them differently from the entities.
-- The full-resolution transcodes are now called "H.264 full size" rather than
-  just "H.264", so they read as comparable to the scaled ones next to them.
-
-## 1.1.1
-
-Fix the regression that froze video after 1.1.0, and clean up stream setup.
+**Upgrade if you are on 1.1.0 — live video did not play there.**
 
 - Live video froze on the first frame because the muxer dropped every frame
   from cameras whose firmware reports timestamps as an int64-negative offset
   (near 2**64 unsigned). Those are real times -- the frame deltas match the
   camera's rate -- so they are now rebased instead of discarded; only the
   explicit "time unknown" marker is dropped.
+- The root stream is no longer assumed to be H.265. It is named for the camera
+  (`camera_<did>`), so a camera whose native codec is H.264 is no longer
+  mislabelled.
+- `h265` is now a real transcode to H.265 at full resolution, alongside the
+  existing `h264` family. Choosing a codec-named stream always means a
+  transcode; the original stream is the only one that is not.
+- Existing entries keep their entities: the stored "h265" root selection is
+  migrated to "original" on upgrade.
 - Choosing streams is now two steps: pick the cameras, then pick streams per
   camera, one selector each, instead of one collapsed section.
-- Variant entities carry the camera name in their own name, so a consumer
-  that shows only the entity name -- HomeKit, a voice assistant -- still says
-  which camera it is.
+- Every stream is called the same thing in the options form and on the device
+  page, in your own language. The form used to show English labels, and to
+  word them differently from the entities. The original stream's entity is
+  named after the camera itself; every other one carries its codec and size.
+- The full-resolution transcodes are now called "H.264 full size" rather than
+  just "H.264", so they read as comparable to the scaled ones next to them.
 - The add-on page no longer spells out technical details like the Opus codec
   or the loopback-only address.
 
