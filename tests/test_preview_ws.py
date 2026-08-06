@@ -39,14 +39,21 @@ class _Previews:
     end that a real preview never has.
     """
 
-    def __init__(self, frames: list[bytes]) -> None:
+    def __init__(self, frames: list[bytes], *, endless: bool = False) -> None:
         self._frames = list(frames)
+        self._endless = endless
         self.asked: list[tuple] = []
 
     async def async_frame(
         self, did: str, fps: int, quality: str, after: int = 0
     ) -> tuple[int, bytes]:
         self.asked.append((did, fps, quality, after))
+        if self._endless:
+            # A live camera never stops producing, so a handler that never
+            # notices its viewer has gone will go on asking forever. Yielding
+            # keeps that from starving the event loop in a test.
+            await asyncio.sleep(0.001)
+            return len(self.asked), self._frames[0]
         if not self._frames:
             await asyncio.Event().wait()
         return len(self.asked), self._frames.pop(0)
@@ -159,5 +166,36 @@ class TestASwitchedOffCameraIsNamedAsSuch:
             async with client.ws_connect("/api/preview/42/ws") as ws:
                 message = await asyncio.wait_for(ws.receive(), timeout=2)
                 assert message.type is WSMsgType.BINARY
+        finally:
+            await client.close()
+
+
+class TestAViewerLeavingStopsTheDecoder:
+    """A closed connection has to be noticed, and only reading notices it.
+
+    Over HTTP this was free: the viewer stopped asking, so the add-on stopped
+    answering, and the decoder went idle and was reaped. "Is anyone still
+    watching?" was answered by each request simply existing.
+
+    A socket does not come with that. `ws.closed` reports what this end has
+    processed, and a handler that only ever sends processes nothing -- so the
+    close frame sits unread, the loop keeps pulling frames, and the decoder's
+    idle timer is reset forever by a viewer who left. Observed in the field as
+    a second ffmpeg per camera that never went away, CPU at 86%, and the
+    picture stuttering because encoding could not keep up with itself.
+    """
+
+    async def test_it_stops_pulling_frames_once_the_socket_closes(self) -> None:
+        previews = _Previews([_JPEG], endless=True)
+        client = await _client(_api(previews))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                await asyncio.wait_for(ws.receive(), timeout=2)
+            # The socket is closed here. Whatever the handler was in the
+            # middle of, it must not still be asking for pictures.
+            await asyncio.sleep(0.1)
+            settled = len(previews.asked)
+            await asyncio.sleep(0.2)
+            assert len(previews.asked) == settled
         finally:
             await client.close()

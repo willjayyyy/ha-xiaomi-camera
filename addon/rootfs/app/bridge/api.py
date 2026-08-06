@@ -499,19 +499,49 @@ class BridgeApi:
             await ws.close()
             return ws
 
-        # Each picture is asked for by naming the last one received, exactly
-        # as the page used to over HTTP -- the manager holds the request until
-        # a genuinely newer frame exists, so the pace still follows the stream
-        # rather than a timer of the page's own.
-        seq = 0
+        async def send_pictures() -> None:
+            """Each picture, named by the last one sent.
+
+            The manager holds each call until a genuinely newer frame exists,
+            so the pace follows the stream rather than a timer of this end's
+            own -- the same arrangement the page used to drive over HTTP.
+            """
+            seq = 0
+            try:
+                while True:
+                    seq, image = await self._previews.async_frame(
+                        did, fps, quality, seq
+                    )
+                    await ws.send_bytes(image)
+            except PreviewError as err:
+                await ws.send_json(
+                    {"type": "unavailable", "reason": "no_video", "detail": str(err)}
+                )
+            finally:
+                # Ends the reading side too, which is what closes this handler
+                # when the stream is the thing that stopped.
+                await ws.close()
+
+        sending = asyncio.create_task(send_pictures())
         try:
-            while not ws.closed:
-                seq, image = await self._previews.async_frame(did, fps, quality, seq)
-                await ws.send_bytes(image)
-        except PreviewError as err:
-            await ws.send_json({"type": "error", "message": str(err)})
+            # Read, purely to learn when the viewer goes away. The page sends
+            # nothing, so there is nothing here to act on -- but the close
+            # frame the browser sends is delivered to this process either way,
+            # and `ws.closed` only becomes true once something has read it.
+            #
+            # Sending alone does not notice. It finds out when a write happens
+            # to fail, which needs a picture to still be arriving and the
+            # socket's buffer to have filled -- and a camera that has gone
+            # quiet produces neither. Until then the decoder keeps running for
+            # a viewer who left, and its idle timer keeps being reset by this
+            # very loop, so nothing reaps it. That cost a second ffmpeg per
+            # camera and took the add-on to 86% CPU.
+            async for _ in ws:
+                pass
         finally:
-            await ws.close()
+            sending.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await sending
         return ws
 
     async def _login(self, request: web.Request) -> web.Response:
