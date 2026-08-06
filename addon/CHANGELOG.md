@@ -17,6 +17,12 @@ fix a fault that stopped them working until the add-on was restarted.
   out the twenty-second timeout and pass on ffmpeg's own complaint about
   RTSP. The add-on already reads the lens switch to answer other requests; it
   now says so, in your language, without starting a decoder to rediscover it.
+- A camera switched off while you are watching it now says so, and its card
+  says so too. The picture used to simply stop, leaving the page offering
+  only "could not load" while the card went on reading "Ready" -- the state
+  it held when the camera list was last fetched.
+- The middle picture-quality step is called "Medium" rather than "Balanced",
+  so the three of them read as one scale.
 - The startup log now names the commit the image was built from. Version
   numbers are bumped per release while the image is rebuilt on every push
   under that version, so one number can cover several builds -- and the build
@@ -69,6 +75,10 @@ fix a fault that stopped them working until the add-on was restarted.
   只能等满二十秒超时，再把 ffmpeg 那句关于 RTSP 的报错转给你看。加载项本来就
   为别的请求读过镜头开关，现在它会直接告诉你，用你的语言，也不必再启动一个解码
   进程去重新发现这件事。
+- 正看着的摄像头被关掉时，现在会直接说明，卡片上的状态也跟着改。此前画面只是
+  停住，页面只给一句「无法加载画面」，而卡片仍然显示「就绪」——那是上一次取
+  摄像头列表时的状态。
+- 画质的中间一档从「均衡」改叫「中」，三档放在一起才读得出是同一个尺度。
 - 启动日志现在会写明这个镜像是从哪次提交构建的。版本号是按发布递增的，而镜像
   在该版本号下每次推送都会重建，所以一个版本号可能对应好几个构建——而构建检查
   只比对版本号，不哈希源码。现在读一行日志就能确定跑的是哪份代码。

@@ -89,6 +89,21 @@ class CameraRegistry:
         """
         return self._power_states.get(did)
 
+    async def async_read_power_state(self, did: str) -> bool | None:
+        """Read one camera's lens switch now, rather than recalling it.
+
+        For the moment a stream stops: the case worth naming is a camera
+        switched off *since* the list was last read, and that is precisely
+        what :meth:`power_state` cannot report -- it would still be answering
+        with the value that was true when the camera was still sending.
+
+        One camera, not all of them, because this runs on a failure rather
+        than on a schedule and should cost accordingly.
+        """
+        states = await self._async_read_power_states([did])
+        self._power_states.update(states)
+        return states.get(did)
+
     async def async_refresh(self) -> list[CameraDescription]:
         """Re-read the camera list and their power state."""
         self._cameras = await self._client.get_cameras_async()

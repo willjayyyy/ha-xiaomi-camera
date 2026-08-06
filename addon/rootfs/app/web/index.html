@@ -339,7 +339,7 @@ const I18N = {
     prefFps: "Frame rate", prefQuality: "Quality",
     fpsCamera: "Camera's rate",
     audioOn: "Audio",
-    qualityHigh: "High", qualityBalanced: "Balanced", qualityLow: "Low",
+    qualityHigh: "High", qualityBalanced: "Medium", qualityLow: "Low",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
     finish: "Finish sign-in", cancel: "Cancel",
     step1Link: "Open the Xiaomi sign-in page",
@@ -379,7 +379,7 @@ const I18N = {
     prefFps: "帧率", prefQuality: "画质",
     fpsCamera: "原生帧率",
     audioOn: "声音",
-    qualityHigh: "高", qualityBalanced: "均衡", qualityLow: "低",
+    qualityHigh: "高", qualityBalanced: "中", qualityLow: "低",
     connect: "连接小米账号", disconnect: "断开连接",
     finish: "完成登录", cancel: "取消",
     step1Link: "打开小米登录页面",
@@ -644,7 +644,7 @@ function renderCameras() {
         <div class="cam-head">
           <span class="cam-name">${escapeHtml(c.name)}</span>
           <span style="flex:1"></span>
-          <span class="status ${st.cls}"><span class="dot"></span>${escapeHtml(st.label)}</span>
+          <span class="status ${st.cls}" data-status><span class="dot"></span>${escapeHtml(st.label)}</span>
         </div>
         <div class="cam-model">${escapeHtml(c.model)}${
           c.stream_audio
@@ -846,6 +846,21 @@ function startPreview(cam) {
   // add-on can add reasons without this page having to know them first.
   const REASONS = { switched_off: "cameraOffHint" };
 
+  // The card's state was read once, when the list was fetched. A camera
+  // switched off since then leaves it reading "Ready" over a picture that
+  // stopped -- so the reason that explains the picture corrects the label
+  // too. Both are saying the same thing, and it arrives on the same message,
+  // so neither costs a request of its own.
+  const STATES = { switched_off: { cls: "warn", label: "switchedOff" } };
+
+  const restate = (reason) => {
+    const next = STATES[reason];
+    const badge = cam.querySelector("[data-status]");
+    if (!next || !badge) return;
+    badge.className = `status ${next.cls}`;
+    badge.innerHTML = `<span class="dot"></span>${escapeHtml(t(next.label))}`;
+  };
+
   // Given up on rather than retried: nothing about a switched-off camera
   // gets better by reconnecting, and hammering it would keep a card busy
   // that the viewer can fix with one tap of the switch.
@@ -886,6 +901,7 @@ function startPreview(cam) {
       }
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
+      restate(message.reason);
       settle(t(REASONS[message.reason] || "previewFailed"));
     });
 

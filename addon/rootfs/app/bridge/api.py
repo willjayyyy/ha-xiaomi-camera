@@ -514,8 +514,18 @@ class BridgeApi:
                     )
                     await ws.send_bytes(image)
             except PreviewError as err:
+                # Asked again rather than recalled: the case worth naming is a
+                # camera switched off since the list was last read, and the
+                # remembered value is by definition the one from before that.
+                # Only the switch explains itself; everything else stays
+                # "no video", which the page words generically.
+                off = await self._read_power_state(did)
                 await ws.send_json(
-                    {"type": "unavailable", "reason": "no_video", "detail": str(err)}
+                    {
+                        "type": "unavailable",
+                        "reason": "switched_off" if off is False else "no_video",
+                        "detail": str(err),
+                    }
                 )
             finally:
                 # Ends the reading side too, which is what closes this handler
@@ -603,6 +613,18 @@ class BridgeApi:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    async def _read_power_state(self, did: str) -> bool | None:
+        """This camera's lens switch, read now rather than recalled.
+
+        Costs a request, so it is used where the answer is worth it: a stream
+        that has stopped, where "switched off" is the one cause the viewer can
+        act on and the remembered value is too old to tell them.
+        """
+        registry: CameraRegistry | None = self._registry_provider()
+        if registry is None:
+            return None
+        return await registry.async_read_power_state(did)
 
     def _power_state(self, did: str) -> bool | None:
         """Whether this camera's lens is switched on, as last read.

@@ -25,6 +25,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from bridge.api import BridgeApi
+from bridge.preview import PreviewError
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
 
@@ -59,7 +60,14 @@ class _Previews:
         return len(self.asked), self._frames.pop(0)
 
 
-def _api(previews: _Previews, *, powered_on: bool | None = True) -> BridgeApi:
+def _api(previews, *, powered_on: bool | None = True, switch=None) -> BridgeApi:
+    """A bridge wired to one camera.
+
+    ``switch`` is a mutable holder when a test needs the lens to change while
+    the connection is open -- the case that matters is a camera switched off
+    after the list was last read, which a cached value cannot report.
+    """
+
     class _Camera:
         did = "42"
 
@@ -68,7 +76,10 @@ def _api(previews: _Previews, *, powered_on: bool | None = True) -> BridgeApi:
             return _Camera() if did == "42" else None
 
         def power_state(self, did: str) -> bool | None:
-            return powered_on
+            return switch["powered_on"] if switch else powered_on
+
+        async def async_read_power_state(self, did: str) -> bool | None:
+            return switch["powered_on"] if switch else powered_on
 
     class _Session:
         pass
@@ -252,4 +263,52 @@ class TestTheDecoderIsReallyReclaimed:
             for task in [*manager._closing]:
                 task.cancel()
             await asyncio.sleep(0)
+            await client.close()
+
+
+class TestACameraSwitchedOffWhileWatchedIsNamed:
+    """Switched off after the connection opened, which is the common way.
+
+    Checking the switch at connect time covers opening a preview for a camera
+    already off. It does not cover the ordinary case of someone turning a
+    camera off while it is being watched -- there the stream simply stops, the
+    decoder times out, and what reached the viewer was the generic "could not
+    load" rather than the one sentence that would tell them what to do.
+
+    Re-read rather than taken from the last list refresh: the whole point is a
+    camera switched off *since* then, which the cached value by definition
+    cannot report.
+    """
+
+    async def test_it_says_switched_off_rather_than_a_generic_failure(self) -> None:
+        switch = {"powered_on": True}
+
+        class _StopsWhenSwitchedOff:
+            async def async_frame(self, did, fps, quality, after=0):
+                switch["powered_on"] = False
+                raise PreviewError("No video arrived from the published stream.")
+
+        client = await _client(_api(_StopsWhenSwitchedOff(), switch=switch))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.type is WSMsgType.TEXT
+                assert message.json()["reason"] == "switched_off"
+        finally:
+            await client.close()
+
+    async def test_a_failure_with_the_camera_still_on_stays_generic(self) -> None:
+        """Only the switch explains itself. Everything else is still unknown."""
+        switch = {"powered_on": True}
+
+        class _JustFails:
+            async def async_frame(self, did, fps, quality, after=0):
+                raise PreviewError("No video arrived from the published stream.")
+
+        client = await _client(_api(_JustFails(), switch=switch))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.json()["reason"] == "no_video"
+        finally:
             await client.close()
