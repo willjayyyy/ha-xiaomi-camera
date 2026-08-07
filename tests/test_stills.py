@@ -1,11 +1,11 @@
-"""The preview's ffmpeg invocation, and the settings that reach it.
+"""The stills ffmpeg invocation, and the settings that reach it.
 
 This is here because a setting stopped reaching it: `preview_quality` was added
 to the options, threaded through the manager's signature, and never assigned to
 the attribute the source reads. Every test passed, the add-on started, and the
 first request for a picture failed with a 500 — the one path nothing covered.
 
-`bridge.preview` needs no vendor SDK, so its wiring can simply be built and
+`bridge.stills` needs no vendor SDK, so its wiring can simply be built and
 inspected. The command line is checked rather than mocked: it is the entire
 contract between this add-on and ffmpeg, and getting an argument wrong there is
 invisible until a picture does not appear.
@@ -15,16 +15,18 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from types import SimpleNamespace
 
 import pytest
-from bridge import preview
-from bridge.preview import (
+from bridge import stills
+from bridge.stills import (
     _HEIGHT,
     _JPEG_QUALITY,
-    PreviewError,
-    PreviewManager,
+    Stills,
+    StillsError,
     _Source,
+    keyframes_suffice,
 )
 from conftest import NeverReportsExit
 
@@ -36,14 +38,18 @@ def wedged_ffmpeg(monkeypatch: pytest.MonkeyPatch):
     async def spawn(*args: object, **kwargs: object) -> NeverReportsExit:
         return NeverReportsExit()
 
-    monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", spawn)
 
 
 def url_for(did: str) -> str:
     return f"rtsp://127.0.0.1:8554/camera_{did}"
 
 
-def argv(fps: int = 0, quality: str = "medium") -> list[str]:
+def argv(
+    fps: int = 0,
+    quality: str = "medium",
+    keyframes_only: bool = False,
+) -> list[str]:
     """The command a source would run, without running it."""
     captured: list[str] = []
 
@@ -51,23 +57,24 @@ def argv(fps: int = 0, quality: str = "medium") -> list[str]:
         captured.extend(args)
         raise AssertionError("not reached")
 
-    source = _Source("42", url_for("42"), fps, quality)
+    height = None if quality is None else _HEIGHT[quality]
+    source = _Source("42", url_for("42"), fps, height, keyframes_only)
     # The arguments are assembled inline, so they are read back from a stand-in
     # for the spawn rather than from a separate builder that could drift from
     # what actually runs.
     import asyncio
 
-    from bridge import preview
+    from bridge import stills
 
     original = asyncio.create_subprocess_exec
     asyncio.create_subprocess_exec = fake_exec
-    preview.asyncio.create_subprocess_exec = fake_exec
+    stills.asyncio.create_subprocess_exec = fake_exec
     try:
         with pytest.raises(AssertionError):
             asyncio.run(source.async_start())
     finally:
         asyncio.create_subprocess_exec = original
-        preview.asyncio.create_subprocess_exec = original
+        stills.asyncio.create_subprocess_exec = original
     return captured
 
 
@@ -90,7 +97,7 @@ class TestSettingsReachFfmpeg:
         A single source shared by everyone would hand whoever arrived second
         the settings the first one chose, silently.
         """
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         assert manager._sources == {}
 
     @pytest.mark.parametrize("quality", sorted(_HEIGHT))
@@ -206,7 +213,7 @@ class TestAWedgedTeardownStaysContained:
     preventable, and what these tests hold, is the blast radius.
     """
 
-    async def _quiesce(self, manager: PreviewManager, *tasks: asyncio.Task) -> None:
+    async def _quiesce(self, manager: Stills, *tasks: asyncio.Task) -> None:
         """Drop the tasks a wedged manager cannot be asked to shut down.
 
         `async_shutdown` waits on teardown, and teardown is the thing wedged,
@@ -224,7 +231,7 @@ class TestAWedgedTeardownStaysContained:
                     await task
 
     async def test_another_camera_is_still_watchable(self, wedged_ffmpeg) -> None:
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         await manager.async_frame("A", 0, "medium")
         await manager.async_frame("B", 0, "medium")
 
@@ -248,7 +255,7 @@ class TestAWedgedTeardownStaysContained:
         including for cameras that had never been watched, because starting
         one needed the same lock that teardown was holding.
         """
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         await manager.async_frame("A", 0, "medium")
 
         manager.drop({"C"})
@@ -285,7 +292,7 @@ class TestDroppingCannotBeBlocked:
     the two slow things a source does: starting, and stopping.
     """
 
-    async def _quiesce(self, manager: PreviewManager, *tasks: asyncio.Task) -> None:
+    async def _quiesce(self, manager: Stills, *tasks: asyncio.Task) -> None:
         pending = [*tasks, manager._reaper, *manager._closing]
         for source in list(manager._sources.values()):
             pending.extend(source._tasks)
@@ -299,7 +306,7 @@ class TestDroppingCannotBeBlocked:
         self, wedged_ffmpeg
     ) -> None:
         """The shape of the failure that shipped: all of them leaving at once."""
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         await manager.async_frame("A", 0, "medium")
         await manager.async_frame("B", 0, "medium")
 
@@ -326,9 +333,9 @@ class TestDroppingCannotBeBlocked:
             await asyncio.Event().wait()
             raise AssertionError("unreachable")  # pragma: no cover
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", never_finishes)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", never_finishes)
 
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(spawning.wait(), timeout=1)
 
@@ -361,11 +368,11 @@ class TestASourceStartingWhenItsCameraLeaves:
             await release.wait()
             return process
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", spawn)
         return SimpleNamespace(entered=entered, release=release, process=process)
 
-    async def _run(self, held_spawn) -> tuple[PreviewManager, asyncio.Task]:
-        manager = PreviewManager(url_for)
+    async def _run(self, held_spawn) -> tuple[Stills, asyncio.Task]:
+        manager = Stills(url_for)
         watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(held_spawn.entered.wait(), timeout=1)
         manager.drop({"B"})  # A departs, mid-spawn
@@ -373,7 +380,7 @@ class TestASourceStartingWhenItsCameraLeaves:
         await asyncio.sleep(0.05)
         return manager, watching
 
-    async def _quiesce(self, manager: PreviewManager, watching: asyncio.Task) -> None:
+    async def _quiesce(self, manager: Stills, watching: asyncio.Task) -> None:
         pending = [watching, manager._reaper, *manager._closing]
         for source in list(manager._sources.values()):
             pending.extend(source._tasks)
@@ -421,9 +428,9 @@ class TestOpeningIsSharedHonestly:
             await release.wait()
             raise OSError("ffmpeg is not installed")
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", failing_spawn)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", failing_spawn)
 
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         first = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(entered.wait(), timeout=1)
         second = asyncio.create_task(manager.async_frame("A", 0, "medium"))
@@ -435,7 +442,7 @@ class TestOpeningIsSharedHonestly:
                 await first
             # Not the 20s first-frame timeout: the picture is already known
             # not to be coming.
-            with pytest.raises(PreviewError):
+            with pytest.raises(StillsError):
                 await asyncio.wait_for(second, timeout=1)
         finally:
             for task in (first, second, manager._reaper):
@@ -455,16 +462,16 @@ class TestOpeningIsSharedHonestly:
             await release.wait()
             return NeverReportsExit()
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", held_spawn)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", held_spawn)
 
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(entered.wait(), timeout=1)
         manager.drop({"B"})  # A departs while it is being opened
         release.set()
 
         try:
-            with pytest.raises(PreviewError):
+            with pytest.raises(StillsError):
                 await asyncio.wait_for(watching, timeout=1)
             assert "Reading A's published stream" not in caplog.text
         finally:
@@ -495,9 +502,9 @@ class TestATeardownFailureIsNotSwallowed:
         async def spawn(*args: object, **kwargs: object) -> _RefusesToDie:
             return _RefusesToDie()
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", spawn)
 
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         await manager.async_frame("A", 0, "medium")
 
         try:
@@ -536,10 +543,10 @@ class TestShutdownCannotHangTheAddOn:
         async def never_stops(self: _Source) -> None:
             await asyncio.Event().wait()
 
-        monkeypatch.setattr(preview._Source, "async_stop", never_stops)
-        monkeypatch.setattr(preview, "_STOP_TIMEOUT", 0.05)
+        monkeypatch.setattr(stills._Source, "async_stop", never_stops)
+        monkeypatch.setattr(stills, "_STOP_TIMEOUT", 0.05)
 
-        manager = PreviewManager(url_for)
+        manager = Stills(url_for)
         await manager.async_frame("A", 0, "medium")
         await manager.async_frame("B", 0, "medium")
         # Held now, because shutting down empties the table -- and with the
@@ -579,8 +586,8 @@ class TestTeardownIsBounded:
     async def test_it_gives_up_on_a_process_that_never_reports_its_exit(
         self, wedged_ffmpeg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(preview, "_STOP_TIMEOUT", 0.05)
-        source = _Source("A", url_for("A"), 0, "medium")
+        monkeypatch.setattr(stills, "_STOP_TIMEOUT", 0.05)
+        source = _Source("A", url_for("A"), 0, 480)
         await source.async_start()
 
         await asyncio.wait_for(source.async_stop(), timeout=2)
@@ -604,20 +611,162 @@ class TestAStoppedStreamIsReportedSooner:
     async def test_a_source_that_has_shown_a_picture_gives_up_sooner(
         self, wedged_ffmpeg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(preview, "_FIRST_FRAME_TIMEOUT", 10)
-        monkeypatch.setattr(preview, "_MAX_AGE_SECONDS", 0.2)
+        monkeypatch.setattr(stills, "_FIRST_FRAME_TIMEOUT", 10)
+        monkeypatch.setattr(stills, "_MAX_AGE_SECONDS", 0.2)
 
-        source = _Source("A", url_for("A"), 0, "medium")
+        source = _Source("A", url_for("A"), 0, 480)
         await source.async_start()
         try:
             seq, frame = await asyncio.wait_for(source.async_frame(0), timeout=2)
             assert frame.startswith(b"\xff\xd8")
 
             # The stream has stopped: no frame will ever follow this one.
-            with pytest.raises(PreviewError):
+            with pytest.raises(StillsError):
                 await asyncio.wait_for(source.async_frame(seq), timeout=3)
         finally:
             for task in source._tasks:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
+
+
+class TestAStillDecodesOnlyWhatItNeeds:
+    """A dashboard thumbnail does not need every frame decoded for it.
+
+    The camera sends around twenty frames a second; a still is asked for
+    every ten. Decoding the ones in between produces pictures nobody reads,
+    and measured against a 4K camera that was 66.6% of a core against 4.6%.
+
+    An inter-frame codec offers no middle ground: a frame can only be decoded
+    from the keyframe before it, so the choice is keyframes alone or all of
+    them. Which is correct depends on how often this camera sends one, so it
+    is measured rather than assumed -- a stream with a long keyframe interval
+    still gets a full decode, because the freshness was promised.
+    """
+
+    def test_keyframes_only_skips_the_frames_between(self) -> None:
+        command = argv(keyframes_only=True)
+        assert command.count("-skip_frame") == 1
+        assert command[command.index("-skip_frame") + 1] == "nokey"
+
+    def test_the_skip_is_applied_to_the_input(self) -> None:
+        """It is a decoder setting, so after `-i` it would configure nothing.
+
+        ffmpeg accepts it in either position without complaint; in the wrong
+        one it simply has no effect, and the only visible symptom is a cost
+        that never went down.
+        """
+        command = argv(keyframes_only=True)
+        assert command.index("-skip_frame") < command.index("-i")
+
+    def test_the_frame_rate_is_left_to_the_stream(self) -> None:
+        """`-vsync 0` keeps ffmpeg from padding the gaps back out.
+
+        Without it ffmpeg pads a sparse input up to a constant rate by
+        repeating pictures, which would undo the saving and emit the same
+        still many times over.
+        """
+        command = argv(keyframes_only=True)
+        assert command[command.index("-vsync") + 1] == "0"
+
+    def test_a_preview_still_decodes_everything(self) -> None:
+        """The saving belongs to stills; a preview needs every frame."""
+        assert "-skip_frame" not in argv()
+
+
+class TestWhichDecodeAStillCanAfford:
+    """Measured, never assumed. This is the whole point of the change.
+
+    Keyframes alone are cheap but only arrive as often as the camera sends
+    them, which is firmware's business and differs by model. Deciding from
+    the cameras that happened to be on the developer's desk would leave every
+    other camera either paying for frames nobody reads or handing out stills
+    older than it promised.
+    """
+
+    def test_a_stream_whose_keyframes_are_frequent_enough_takes_the_cheap_path(
+        self,
+    ) -> None:
+        assert keyframes_suffice(interval=2.9, max_age=3.0) is True
+
+    def test_the_boundary_counts_as_sufficient(self) -> None:
+        """Equal meets the promise: a still is at most `max_age` old."""
+        assert keyframes_suffice(interval=3.0, max_age=3.0) is True
+
+    def test_a_long_interval_keeps_the_full_decode(self) -> None:
+        """A ten-second keyframe cannot serve a three-second promise.
+
+        This camera pays what it paid before rather than being handed a
+        cheaper stale picture -- no camera ends up worse off than it was.
+        """
+        assert keyframes_suffice(interval=10.0, max_age=3.0) is False
+
+    def test_an_unmeasured_stream_keeps_the_full_decode(self) -> None:
+        """Nothing measured is not evidence of a short interval.
+
+        The safe reading is the expensive one: it is what the add-on did
+        before, so a session too young to have been measured behaves exactly
+        as it used to and settles onto the cheap path once it has.
+        """
+        assert keyframes_suffice(interval=None, max_age=3.0) is False
+
+
+class TestTheModeTravelsInTheSourceKey:
+    async def test_two_modes_are_two_sources(self, wedged_ffmpeg) -> None:
+        """So a stream that changes its rate is re-judged, with no state.
+
+        The mode is derived per request and put in the key, which is the same
+        mechanism that already keeps two viewers on different frame rates
+        apart. A source whose mode no longer matches simply stops being asked
+        for and the reaper collects it -- there is no escalation path to get
+        wrong.
+        """
+        intervals = {"A": 1.0}
+        manager = Stills(url_for, lambda did: intervals.get(did))
+        with contextlib.suppress(StillsError, TimeoutError):
+            await asyncio.wait_for(manager.async_still("A", max_age=3.0), 0.2)
+        intervals["A"] = 30.0
+        with contextlib.suppress(StillsError, TimeoutError):
+            await asyncio.wait_for(manager.async_still("A", max_age=3.0), 0.2)
+        modes = {key[-1] for key in manager._sources}
+        await manager.async_shutdown()
+        assert modes == {True, False}
+
+
+class TestAStillIsAsFreshAsItWasAskedFor:
+    """The age a caller asks for is the age it gets, not the module's own.
+
+    A source holds its last picture and hands it straight back when it is
+    fresh enough. What counts as fresh enough belongs to the caller: a
+    dashboard tile accepts a few seconds, and the whole decision about
+    decoding keyframes alone was made against that number. Checking a
+    different one here would quietly hand back a picture older than the
+    promise that justified the cheap decode.
+    """
+
+    async def test_a_held_picture_older_than_asked_for_is_not_returned(
+        self, wedged_ffmpeg
+    ) -> None:
+        manager = Stills(url_for, lambda did: 1.0)
+        source = _Source("A", url_for("A"), 0, None, True)
+        manager._sources[("A", 0, None, True)] = source
+        source._frame = b"\xff\xd8old\xff\xd9"
+        source._seq = 1
+        source._frame_at = time.monotonic() - 4.0
+
+        with pytest.raises((StillsError, TimeoutError)):
+            await asyncio.wait_for(manager.async_still("A", max_age=3.0), 0.3)
+        await manager.async_shutdown()
+
+    async def test_a_held_picture_within_the_age_is_returned_at_once(
+        self, wedged_ffmpeg
+    ) -> None:
+        manager = Stills(url_for, lambda did: 1.0)
+        source = _Source("A", url_for("A"), 0, None, True)
+        manager._sources[("A", 0, None, True)] = source
+        source._frame = b"\xff\xd8fresh\xff\xd9"
+        source._seq = 1
+        source._frame_at = time.monotonic() - 1.0
+
+        assert await manager.async_still("A", max_age=3.0) == b"\xff\xd8fresh\xff\xd9"
+        await manager.async_shutdown()

@@ -1,28 +1,41 @@
-"""Preview pictures, decoded from the RTSP stream this add-on publishes.
+"""JPEG pictures, decoded from the RTSP stream this add-on publishes.
 
-The obvious way to build a preview is to use the vendor library's own decoded
-JPEG callback -- it is already there, it costs nothing extra, and it is what
-snapshots use. It was built that way first, and it was wrong, because it makes
-the page a witness to something nobody depends on.
+Two callers want them and they want the same thing at different rates: the
+add-on page shows a preview, which is a rapid run of pictures, and Home
+Assistant asks for a snapshot, which is one. Both are served from here.
 
-The bridge has two paths out of a camera session:
+The obvious source is the vendor library's own decoded-JPEG callback -- it is
+already there, it needs no process of ours, and it is what snapshots used. It
+was built that way first, and it was wrong twice over.
+
+Wrong about the evidence, because the bridge has two paths out of a session:
 
     on_raw_video -> /api/stream -> go2rtc -> RTSP     what everything consumes
-    on_decode_jpg -> snapshots                        a side channel
+    on_decode_jpg                                     a side channel
 
-A preview drawn from the second one keeps producing pictures while the first is
-broken. Every component that matters -- the MPEG-TS stream endpoint, go2rtc's
-native reading of it, the RTSP server, the credentials guarding it -- can fail
-without the page showing anything wrong. A green light wired to a different
-circuit is worse than no light.
+A picture drawn from the second keeps arriving while the first is broken.
+Every component that matters -- the MPEG-TS endpoint, go2rtc's reading of it,
+the RTSP server, the credentials guarding it -- can fail with nothing on the
+page looking wrong. A green light wired to a different circuit is worse than
+no light.
 
-So the preview reads the published stream instead: one ffmpeg per camera being
-watched, pulling RTSP exactly as an NVR would, decoding to JPEG. A picture on
-the page is then proof of the whole chain, and its absence is a real failure
-rather than a cosmetic one.
+Wrong about the cost, because that callback decodes every frame the camera
+sends. A preview does want them all; a snapshot is asked for about every ten
+seconds and accepts a picture a few seconds old, so nineteen frames in twenty
+were decoded for pictures nobody read. Measured on a 4K camera, that was a
+thread holding 55% of a core, per camera, for as long as the session ran --
+whether or not a snapshot was ever requested.
 
-The cost is a decode per watched camera, which is why sources are started on
-demand and stopped once nobody is looking.
+So both read the published stream instead: one ffmpeg per camera being
+watched, pulling RTSP exactly as an NVR would. A picture is then proof of the
+whole chain, and its absence a real failure rather than a cosmetic one.
+
+What separates them is how much of the stream each has to decode. An
+inter-frame codec offers no middle ground -- a picture can only be decoded
+from the keyframe before it -- so a still either takes the keyframes alone or
+takes everything. Which is correct depends on how often this camera sends one,
+which is firmware's business and differs by model, so it is measured rather
+than assumed: see :func:`keyframes_suffice`.
 """
 
 from __future__ import annotations
@@ -62,6 +75,13 @@ _JPEG_QUALITY = 5
 QUALITIES = frozenset(_HEIGHT)
 
 
+#: How old a still may be before a newer one is waited for. A switched-off
+#: camera keeps its session connected while delivering nothing, so without an
+#: age check a dashboard would show the picture from before power-off
+#: indefinitely. It is also what decides whether keyframes alone will do --
+#: see :func:`keyframes_suffice`.
+_STILL_MAX_AGE_SECONDS = 3.0
+
 #: How long a source keeps running after the last request for it. Long enough
 #: that a page refresh reuses it, short enough that a closed tab stops paying.
 _IDLE_SECONDS = 15
@@ -90,18 +110,52 @@ _ERROR_TAIL = 1200
 _STOP_TIMEOUT = 5
 
 
-class PreviewError(Exception):
+def keyframes_suffice(interval: float | None, max_age: float) -> bool:
+    """Whether decoding keyframes alone can meet the freshness asked for.
+
+    An inter-frame codec offers no middle ground. A picture can only be
+    decoded from the keyframe before it, so a still is either taken from the
+    keyframes -- cheap, and no fresher than they arrive -- or from every
+    frame, at roughly fourteen times the cost against a 4K camera.
+
+    Which is correct is a property of the camera, not of this add-on. How
+    often a keyframe arrives is firmware's business and differs by model, so
+    it is measured from what the stream sent rather than assumed from the
+    cameras this was written against. `None` means nothing has been measured
+    yet, and it is deliberately not read as "often": the safe answer is the
+    expensive one, which is what the add-on did before, so a session too
+    young to have been measured behaves exactly as it used to and settles
+    onto the cheap path once it has.
+    """
+    return interval is not None and interval <= max_age
+
+
+class StillsError(Exception):
     """A preview could not be produced, with a reason worth showing."""
 
 
 class _Source:
     """One ffmpeg reading one camera's published stream."""
 
-    def __init__(self, did: str, url: str, fps: int, quality: str) -> None:
+    def __init__(
+        self,
+        did: str,
+        url: str,
+        fps: int,
+        height: int | None,
+        keyframes_only: bool = False,
+    ) -> None:
         self._did = did
         self._url = url
         self._fps = fps
-        self._quality = quality
+        #: The tallest picture to produce, or None to leave the size alone.
+        #: A height rather than a named quality: what to call a size belongs
+        #: to whoever is asking, and a still is not asked for by name.
+        self._height = height
+        #: Decode the keyframes and skip what lies between them. Correct only
+        #: where the caller's freshness allows it -- see `Stills.async_still`,
+        #: which decides from what the stream was measured to do.
+        self._keyframes_only = keyframes_only
         self._process: asyncio.subprocess.Process | None = None
         self._tasks: list[asyncio.Task] = []
         self._frame: bytes | None = None
@@ -148,13 +202,15 @@ class _Source:
             # camera's own is the best available, and dropping frames saves
             # the encoding of them, never the decoding.
             chain.append(f"fps={self._fps}")
-        # Quoted because `min` takes a comma, and an unquoted one would read as
-        # the end of this filter. `-2` and not `-1` for the width: yuv420p
-        # needs both dimensions even, and only the former guarantees it.
-        # `ih` makes the height a ceiling rather than a target -- a camera
-        # already sending less keeps its own size, since enlarging it would
-        # cost more for a picture carrying nothing extra.
-        chain.append(f"scale=-2:'min({_HEIGHT[self._quality]},ih)'")
+        if self._height is not None:
+            # Quoted because `min` takes a comma, and an unquoted one would
+            # read as the end of this filter. `-2` and not `-1` for the width:
+            # yuv420p needs both dimensions even, and only the former
+            # guarantees it. `ih` makes the height a ceiling rather than a
+            # target -- a camera already sending less keeps its own size,
+            # since enlarging it would cost more for a picture carrying
+            # nothing extra.
+            chain.append(f"scale=-2:'min({self._height},ih)'")
         return ",".join(chain)
 
     async def async_start(self) -> None:
@@ -162,6 +218,7 @@ class _Source:
         # costs nothing and removes UDP reordering as a source of artefacts.
         # -an: the preview has no use for audio, and decoding it would be
         # spent effort.
+        filters = self._filters()
         process = await asyncio.create_subprocess_exec(
             "ffmpeg",
             "-hide_banner",
@@ -169,11 +226,19 @@ class _Source:
             "warning",
             "-rtsp_transport",
             "tcp",
+            # Before `-i`, because it configures the decoder rather than the
+            # output. ffmpeg accepts it after as well and simply ignores it,
+            # so the wrong position costs nothing visible except the saving
+            # it was added for.
+            *(["-skip_frame", "nokey"] if self._keyframes_only else []),
             "-i",
             self._url,
             "-an",
-            "-vf",
-            self._filters(),
+            # Without this ffmpeg pads a sparse input back up to a constant
+            # rate by repeating pictures, which would hand out the same still
+            # many times over and undo the decode it just avoided.
+            *(["-vsync", "0"] if self._keyframes_only else []),
+            *(["-vf", filters] if filters else []),
             "-q:v",
             str(_JPEG_QUALITY),
             "-f",
@@ -246,7 +311,9 @@ class _Source:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(process.wait(), timeout=_STOP_TIMEOUT)
 
-    async def async_frame(self, after: int = 0) -> tuple[int, bytes]:
+    async def async_frame(
+        self, after: int = 0, max_age: float | None = None
+    ) -> tuple[int, bytes]:
         """The first picture newer than ``after``, waiting for one if needed.
 
         Holding the request until a new picture exists is what makes the page
@@ -258,10 +325,12 @@ class _Source:
         """
         self._last_request = time.monotonic()
 
-        fresh = (
-            self._frame is not None
-            and time.monotonic() - self._frame_at <= _MAX_AGE_SECONDS
-        )
+        # The caller's own bound, not this module's. A still is promised at a
+        # particular age, and that promise is what justified decoding only the
+        # keyframes -- checking a laxer number here would hand back a picture
+        # older than the one the cheap decode was chosen against.
+        limit = _MAX_AGE_SECONDS if max_age is None else max_age
+        fresh = self._frame is not None and time.monotonic() - self._frame_at <= limit
         if fresh and self._seq > after:
             assert self._frame is not None
             return self._seq, self._frame
@@ -283,9 +352,9 @@ class _Source:
         try:
             await asyncio.wait_for(ready.wait(), timeout=patience)
         except TimeoutError:
-            raise PreviewError(self._explain()) from None
+            raise StillsError(self._explain()) from None
         if self._frame is None:
-            raise PreviewError(self._explain())
+            raise StillsError(self._explain())
         return self._seq, self._frame
 
     def _explain(self) -> str:
@@ -359,18 +428,27 @@ class _Source:
         return " / ".join(self._stderr)[-_ERROR_TAIL:]
 
 
-class PreviewManager:
+class Stills:
     """Starts and stops preview sources as the page asks for them."""
 
-    def __init__(self, url_for) -> None:
+    def __init__(self, url_for, interval_for=None) -> None:
         #: Given a device id, returns the RTSP URL to read -- credentials
         #: included when the published stream requires them. That URL never
         #: leaves this process.
         self._url_for = url_for
+        #: Given a device id, how many seconds pass between that stream's
+        #: keyframes, or None if it has not been measured. Read per request
+        #: rather than remembered, so a camera that changes its rate is
+        #: re-judged without anything here holding stale state.
+        self._interval_for = interval_for or (lambda did: None)
         #: Keyed by what was asked for, not only by camera: two people looking
         #: at the same camera may want different frame rates, and neither
-        #: should silently get the other's.
-        self._sources: dict[tuple[str, int, str], _Source] = {}
+        #: should silently get the other's. The decode mode is part of the key
+        #: for the same reason -- it is derived per request, so a change in
+        #: what the stream does simply stops the old source being asked for
+        #: and the reaper collects it. There is no escalation path to get
+        #: wrong because there is no escalation.
+        self._sources: dict[tuple[str, int, int | None, bool], _Source] = {}
         #: Teardowns still running. Referenced only so they are not garbage
         #: collected before they finish -- nothing waits on them.
         self._closing: set[asyncio.Task] = set()
@@ -416,14 +494,51 @@ class PreviewManager:
         if error is not None:
             _LOGGER.warning("Could not stop a preview decoder: %s", safe_error(error))
 
+    async def async_still(self, did: str, max_age: float | None = None) -> bytes:
+        """One picture for a caller that wants the latest, not every one.
+
+        Snapshots used to come from the vendor library's own decoded-JPEG
+        callback, which decoded every frame the camera sent -- around twenty a
+        second -- to answer a request that arrives every ten and accepts a
+        picture `max_age` seconds old. Measured against a 4K camera that was
+        two thirds of a core per camera, running whenever a session ran,
+        whether or not anybody ever asked for a still.
+
+        It also made the snapshot the one thing on this page not drawn from
+        the published stream, so it kept producing pictures while the streams
+        everything else reads were broken -- the failure `bridge.stills`
+        exists to avoid, with snapshots quietly exempted from it.
+        """
+        if max_age is None:
+            max_age = _STILL_MAX_AGE_SECONDS
+        keyframes = keyframes_suffice(self._interval_for(did), max_age)
+        # No height: a still is what an automation saves and what a dashboard
+        # scales for itself, so it keeps the camera's own size. Measured, the
+        # scaling would have saved 0.8 of a percentage point.
+        _, image = await self._async_frame(
+            did, 0, None, keyframes, after=0, max_age=max_age
+        )
+        return image
+
     async def async_frame(
         self, did: str, fps: int, quality: str, after: int = 0
     ) -> tuple[int, bytes]:
         """A picture decoded from what this add-on publishes for ``did``."""
-        key = (did, fps, quality)
+        return await self._async_frame(did, fps, _HEIGHT[quality], False, after)
+
+    async def _async_frame(
+        self,
+        did: str,
+        fps: int,
+        height: int | None,
+        keyframes_only: bool,
+        after: int = 0,
+        max_age: float | None = None,
+    ) -> tuple[int, bytes]:
+        key = (did, fps, height, keyframes_only)
         source = self._sources.get(key)
         if source is None:
-            source = _Source(did, self._url_for(did), fps, quality)
+            source = _Source(did, self._url_for(did), fps, height, keyframes_only)
             # Seated before the spawn, not after. This is what makes a second
             # caller share this source instead of opening a rival one -- the
             # job a lock used to do -- and it is what lets a departing camera
@@ -448,21 +563,22 @@ class PreviewManager:
                 # spawned, so there is nothing to read and nothing to
                 # announce; saying otherwise would put a line in the log
                 # claiming a stream is being read when none is.
-                raise PreviewError(
+                raise StillsError(
                     "The camera was removed while its preview was opening."
                 )
             _LOGGER.info(
-                "Reading %s's published stream for a preview (%s fps, %s)",
+                "Reading %s's published stream (%s fps, %s, %s)",
                 did,
                 fps or "camera",
-                quality,
+                f"{height}p" if height else "full size",
+                "keyframes only" if keyframes_only else "every frame",
             )
         # No lock needed: the check and the assignment have no await between
         # them, so under asyncio's single thread no second caller can
         # interleave and start a rival reaper.
         if self._reaper is None:
             self._reaper = asyncio.create_task(self._reap())
-        return await source.async_frame(after)
+        return await source.async_frame(after, max_age)
 
     async def async_shutdown(self) -> None:
         if self._reaper is not None:

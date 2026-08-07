@@ -32,7 +32,6 @@ from miot.types import MIoTCameraCodec, MIoTCameraStatus, MIoTCameraVideoQuality
 from .const import (
     CONNECT_TIMEOUT_SECONDS,
     PARAMETER_SET_TIMEOUT_SECONDS,
-    SNAPSHOT_TIMEOUT_SECONDS,
 )
 from .framing import Consumer as _Consumer
 from .framing import MediaKind, MediaUnit, SessionStats
@@ -67,11 +66,6 @@ _CONSUMER_QUEUE_SIZE = 70
 #: reconnecting (a browser reloading a stream) reuses the live session rather
 #: than paying the connect cost again.
 _LINGER_SECONDS = 20.0
-
-#: A cached still older than this is not returned. A switched-off camera keeps
-#: its session CONNECTED while delivering nothing, so without an age check a
-#: dashboard would show the frame from before power-off indefinitely.
-_SNAPSHOT_MAX_AGE_SECONDS = 3.0
 
 
 def audio_codec_for(codec_id: MIoTCameraCodec) -> str | None:
@@ -138,17 +132,9 @@ class CameraSession:
         #: Guards the log line below, so an unsupported codec is explained once
         #: rather than fifty times a second.
         self._audio_codec_reported = False
-        self._latest_jpeg: bytes | None = None
-        self._latest_jpeg_at: float | None = None
-        #: Replaced, never cleared, on each decoded frame. A waiter takes a
-        #: reference before it waits, so two viewers cannot clear the event out
-        #: from under each other -- with one shared event, a preview clearing it
-        #: between a snapshot's clear and its wait made the snapshot miss the
-        #: very frame it woke for.
-        self._jpeg_ready = asyncio.Event()
         #: Set once the parameter sets a decoder needs have arrived. Replaced
         #: rather than cleared on teardown, for the same reason as
-        #: ``_jpeg_ready``: a waiter holds its own reference.
+        #: ``_parameters_ready``: a waiter holds its own reference.
         self._parameters_ready = asyncio.Event()
         self.stats = SessionStats()
 
@@ -238,9 +224,6 @@ class CameraSession:
             await instance.register_raw_video_async(
                 self._on_video, channel=self._channel
             )
-            await instance.register_decode_jpg_async(
-                self._on_jpeg, channel=self._channel
-            )
             if self._enable_audio:
                 # Requested from the camera by start_async above; without this
                 # registration the SDK receives every audio frame and discards
@@ -305,13 +288,6 @@ class CameraSession:
         self._parameter_sets = _ParameterSets()
         self._audio_codec = None
         self._audio_codec_reported = False
-        self._latest_jpeg = None
-        self._latest_jpeg_at = None
-        # Released rather than discarded, so anything waiting for a frame
-        # wakes up now and finds the session gone instead of waiting out
-        # its own timeout.
-        self._jpeg_ready.set()
-        self._jpeg_ready = asyncio.Event()
         self._parameters_ready.set()
         self._parameters_ready = asyncio.Event()
         self.stats = SessionStats()
@@ -443,44 +419,6 @@ class CameraSession:
                 f"switched off."
             ) from err
 
-    async def async_snapshot(self, max_age: float | None = None) -> bytes:
-        """Return a JPEG still, starting the session if needed.
-
-        Snapshots use the SDK's decoded-JPEG callback rather than decoding the
-        video stream, so a dashboard thumbnail does not require a decoder in
-        this process.
-
-        ``max_age`` is how old a held frame may be before a new one is waited
-        for. The default suits a dashboard tile; a live preview refreshing
-        twice a second passes something shorter, or every second request would
-        return the picture it already has.
-        """
-        async with self._hold():
-            if self._is_snapshot_fresh(max_age):
-                assert self._latest_jpeg is not None
-                return self._latest_jpeg
-
-            # Either nothing has arrived yet, or what we hold is stale because
-            # the camera stopped sending. Wait for a genuinely new frame rather
-            # than serving a picture of a room that no longer matches reality.
-            ready = self._jpeg_ready
-            try:
-                await asyncio.wait_for(ready.wait(), timeout=SNAPSHOT_TIMEOUT_SECONDS)
-            except TimeoutError as err:
-                raise CameraOffError(
-                    f"{self._info.name} is connected but sent no video within "
-                    f"{SNAPSHOT_TIMEOUT_SECONDS}s. The camera is most likely "
-                    f"switched off."
-                ) from err
-            assert self._latest_jpeg is not None
-            return self._latest_jpeg
-
-    def _is_snapshot_fresh(self, max_age: float | None = None) -> bool:
-        if self._latest_jpeg is None or self._latest_jpeg_at is None:
-            return False
-        limit = _SNAPSHOT_MAX_AGE_SECONDS if max_age is None else max_age
-        return (time.monotonic() - self._latest_jpeg_at) <= limit
-
     # ------------------------------------------------------------------
     # SDK callbacks
     # ------------------------------------------------------------------
@@ -499,9 +437,10 @@ class CameraSession:
             )
 
     def _handle_video(self, payload: bytes, ts: int) -> None:
+        now = time.monotonic()
         self.stats.frames += 1
         self.stats.bytes_total += len(payload)
-        self.stats.last_frame_at = time.monotonic()
+        self.stats.last_frame_at = now
 
         if self._codec is None:
             self._codec = detect_codec(payload)
@@ -517,6 +456,12 @@ class CameraSession:
                     self._parameters_ready.set()
                 elif is_keyframe(unit_type, self._codec):
                     self.stats.keyframes += 1
+                    # Timed, not just counted. Nothing declares how often a
+                    # camera sends one, and a still decoded from keyframes
+                    # alone is only as fresh as this -- so the decision to
+                    # decode that cheaply has to read what arrived rather
+                    # than assume what these cameras happen to do.
+                    self.stats.note_keyframe(now)
 
         self._fan_out(MediaUnit(MediaKind.VIDEO, ts, payload))
 
@@ -610,20 +555,6 @@ class CameraSession:
             is_keyframe(nal_type(unit, self._codec), self._codec)
             for unit in iter_nal_units(payload)
         )
-
-    async def _on_jpeg(self, did: str, data: bytes, ts: int, channel: int) -> None:
-        try:
-            self._latest_jpeg = bytes(data)
-            self._latest_jpeg_at = time.monotonic()
-            # Wake everyone waiting on this frame, then hand out a fresh event
-            # for the next one. No `await` runs between the two, so no waiter
-            # can arrive in between and miss a wake-up.
-            self._jpeg_ready.set()
-            self._jpeg_ready = asyncio.Event()
-        except Exception as err:  # pragma: no cover - defensive
-            _LOGGER.error(
-                "Dropping a still from %s: %s", self._info.name, safe_error(err)
-            )
 
 
 class SessionManager:

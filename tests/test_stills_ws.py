@@ -25,7 +25,7 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from bridge.api import BridgeApi
-from bridge.preview import PreviewError
+from bridge.stills import StillsError
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
 
@@ -33,7 +33,7 @@ _JPEG = b"\xff\xd8preview\xff\xd9"
 
 
 class _Previews:
-    """Stands in for `PreviewManager`, handing out a fixed run of frames.
+    """Stands in for `Stills`, handing out a fixed run of frames.
 
     Once they are gone it never returns, so the handler is left waiting the
     way it would be on a live camera between frames -- rather than seeing an
@@ -230,19 +230,19 @@ class TestTheDecoderIsReallyReclaimed:
     async def test_leaving_lets_the_manager_reap_the_source(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from bridge import preview
-        from bridge.preview import PreviewManager
+        from bridge import stills
+        from bridge.stills import Stills
         from conftest import NeverReportsExit
 
         async def spawn(*args: object, **kwargs: object) -> NeverReportsExit:
             return NeverReportsExit()
 
-        monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
+        monkeypatch.setattr(stills.asyncio, "create_subprocess_exec", spawn)
         # The real interval is fifteen seconds, which is a long time to hold a
         # test open for a timer whose duration is not what is being checked.
-        monkeypatch.setattr(preview, "_IDLE_SECONDS", 0.3)
+        monkeypatch.setattr(stills, "_IDLE_SECONDS", 0.3)
 
-        manager = PreviewManager(lambda did: f"rtsp://127.0.0.1:8554/camera_{did}")
+        manager = Stills(lambda did: f"rtsp://127.0.0.1:8554/camera_{did}")
         client = await _client(_api(manager))
         try:
             async with client.ws_connect("/api/preview/42/ws") as ws:
@@ -286,7 +286,7 @@ class TestACameraSwitchedOffWhileWatchedIsNamed:
         class _StopsWhenSwitchedOff:
             async def async_frame(self, did, fps, quality, after=0):
                 switch["powered_on"] = False
-                raise PreviewError("No video arrived from the published stream.")
+                raise StillsError("No video arrived from the published stream.")
 
         client = await _client(_api(_StopsWhenSwitchedOff(), switch=switch))
         try:
@@ -303,7 +303,7 @@ class TestACameraSwitchedOffWhileWatchedIsNamed:
 
         class _JustFails:
             async def async_frame(self, did, fps, quality, after=0):
-                raise PreviewError("No video arrived from the published stream.")
+                raise StillsError("No video arrived from the published stream.")
 
         client = await _client(_api(_JustFails(), switch=switch))
         try:

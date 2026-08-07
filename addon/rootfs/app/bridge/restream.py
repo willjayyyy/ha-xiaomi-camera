@@ -45,7 +45,7 @@ _RESTART_DELAY_SECONDS = 5.0
 
 #: How long to wait for a stopped go2rtc to report its exit, applied after the
 #: polite signal and again after the fatal one. See the same constant in
-#: `bridge.preview`: killing a process guarantees it dies, not that its exit
+#: `bridge.stills`: killing a process guarantees it dies, not that its exit
 #: status is still there to be collected, and waiting without a limit for
 #: something another thread may already have taken never ends. Longer than the
 #: preview's because go2rtc has live consumers to disconnect on the way out.

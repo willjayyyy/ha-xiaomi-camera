@@ -44,6 +44,7 @@ class _FakeInstance:
         self._first_frame_delay = first_frame_delay
         self._on_video = None
         self._feeder: asyncio.Task[None] | None = None
+        self.decode_jpg_registered = False
 
     async def start_async(self, **_kwargs: object) -> None:
         return None
@@ -57,6 +58,11 @@ class _FakeInstance:
         return 0
 
     async def register_decode_jpg_async(self, callback, channel: int = 0) -> int:
+        #: Recorded rather than merely accepted. Asking for this is what made
+        #: the library decode every frame the camera sent, and the cost was
+        #: invisible from outside: no log line, no error, just two thirds of a
+        #: core per camera for pictures only snapshots ever read.
+        self.decode_jpg_registered = True
         return 0
 
     async def _feed(self) -> None:
@@ -315,3 +321,28 @@ class TestAFailedStopIsReported:
         assert any("PPCS_Close" in record.getMessage() for record in caplog.records), (
             "a vendor stop that failed was reported as if it had worked"
         )
+
+
+class TestTheLibraryIsNotAskedToDecode:
+    """The session receives video; it does not decode it.
+
+    Registering the decoded-JPEG callback made the vendor library create an
+    H.265 decoder and run it over every frame that arrived -- around twenty a
+    second -- to serve snapshots, which are asked for about every ten seconds
+    and accept a picture a few seconds old. Measured on a 4K camera that was
+    a thread holding 55% of a core, per camera, for as long as the session
+    ran, whether or not a snapshot was ever requested.
+
+    Stills come from the published stream now, like the preview, which is
+    both cheaper and the only version that fails when the streams everything
+    else reads have failed.
+    """
+
+    async def test_starting_a_session_registers_no_decoder(self) -> None:
+        client = _FakeClient()
+        session = _session(client)
+        async with session.subscribe():
+            pass
+        assert client.instances
+        assert not any(instance.decode_jpg_registered for instance in client.instances)
+        await session.async_stop()

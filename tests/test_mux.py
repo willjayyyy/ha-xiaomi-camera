@@ -21,7 +21,7 @@ import io
 
 import av
 import pytest
-from bridge.framing import MediaKind, MediaUnit
+from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.mux import AUDIO_CODEC_OPUS, StreamMuxer
 from bridge.nal import Codec
 
@@ -200,3 +200,51 @@ def test_every_video_codec_the_project_detects_can_be_packaged(codec) -> None:
     muxer = StreamMuxer(codec, AUDIO_CODEC_OPUS)
     kinds, _ = _demux(_drain(muxer, [_video(0), _audio(0)]))
     assert sorted(kinds) == ["audio", "video"]
+
+
+class TestTheKeyframeIntervalIsMeasured:
+    """How often the camera sends a keyframe, from what it actually sent.
+
+    Nothing declares it. It is a property of whatever firmware is on the
+    other end, it varies by model, and the add-on cannot ask -- so a still
+    can only be as fresh as this allows, and any decision that trades
+    freshness for work has to read it rather than assume it.
+    """
+
+    def test_it_is_unknown_before_two_keyframes_have_arrived(self) -> None:
+        """One keyframe is a point, not an interval.
+
+        Unknown has to be distinguishable from small: a caller that mistook
+        "nothing measured yet" for "arrives constantly" would promise a
+        freshness the stream has not been shown to support.
+        """
+        stats = SessionStats()
+        assert stats.keyframe_interval is None
+        stats.note_keyframe(at=100.0)
+        assert stats.keyframe_interval is None
+
+    def test_it_reports_the_longest_recent_gap_not_the_average(self) -> None:
+        """The worst case is what a freshness promise has to be kept against.
+
+        A camera that mostly sends one a second and occasionally takes eight
+        would look comfortable on an average and leave a still eight seconds
+        stale in practice.
+        """
+        stats = SessionStats()
+        for at in (100.0, 101.0, 102.0, 110.0, 111.0):
+            stats.note_keyframe(at=at)
+        assert stats.keyframe_interval == 8.0
+
+    def test_it_forgets_gaps_that_no_longer_describe_the_stream(self) -> None:
+        """A camera whose rate changes must not be judged on its old one.
+
+        Firmware switches keyframe interval when the resolution or the scene
+        changes, and a single long-ago gap would otherwise hold the estimate
+        pessimistic for the life of the session.
+        """
+        stats = SessionStats()
+        stats.note_keyframe(at=0.0)
+        stats.note_keyframe(at=30.0)
+        for index in range(1, 40):
+            stats.note_keyframe(at=30.0 + index)
+        assert stats.keyframe_interval == 1.0

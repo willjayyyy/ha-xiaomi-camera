@@ -29,10 +29,10 @@ from .config import (
 )
 from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER
 from .discovery import async_announce, async_withdraw
-from .preview import PreviewManager
 from .redact import install as install_redaction
 from .redact import safe_error
 from .restream import Restreamer
+from .stills import Stills
 from .store import CredentialStore
 from .streaming import SessionManager
 
@@ -62,7 +62,9 @@ class Bridge:
         self._registry: CameraRegistry | None = None
         self._sessions: SessionManager | None = None
         self._restreamer = Restreamer(options)
-        self._previews = PreviewManager(self._restreamer.internal_rtsp_url)
+        self._previews = Stills(
+            self._restreamer.internal_rtsp_url, self._keyframe_interval
+        )
         self._api = BridgeApi(
             account=self._account,
             registry_provider=lambda: self._registry,
@@ -74,6 +76,24 @@ class Bridge:
         )
         self._discovery_uuid: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
+
+    def _keyframe_interval(self, did: str) -> float | None:
+        """How often ``did``'s stream sends a keyframe, if it has been seen.
+
+        Read from the live session rather than remembered here, so a camera
+        that changes its keyframe interval -- firmware does this when the
+        resolution or the scene changes -- is judged on what it sends now.
+        `None` while nothing is running or nothing has been measured, which
+        callers must read as "unknown" rather than as "often".
+        """
+        sessions = self._sessions
+        registry = self._registry
+        if sessions is None or registry is None:
+            return None
+        info = registry.get(did)
+        if info is None:
+            return None
+        return sessions.session_for(info).stats.keyframe_interval
 
     async def async_start(self) -> None:
         await self._api.async_start()
