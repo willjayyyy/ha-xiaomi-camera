@@ -75,12 +75,23 @@ _JPEG_QUALITY = 5
 QUALITIES = frozenset(_HEIGHT)
 
 
-#: How old a still may be before a newer one is waited for. A switched-off
-#: camera keeps its session connected while delivering nothing, so without an
-#: age check a dashboard would show the picture from before power-off
-#: indefinitely. It is also what decides whether keyframes alone will do --
-#: see :func:`keyframes_suffice`.
-_STILL_MAX_AGE_SECONDS = 3.0
+#: How many keyframes may fail to arrive before a held picture is refused.
+#: Counted in keyframes rather than seconds because seconds mean different
+#: things on different cameras: three missed on a stream that sends one a
+#: second is three seconds, and on one that sends every ten it is thirty. Both
+#: are the same statement about the camera, which no fixed number of seconds
+#: could make.
+_STALE_AFTER_KEYFRAMES = 3
+
+#: Below this, jitter alone would look like a camera that had stopped. It is
+#: also the bound this add-on used before any of it was measured, so a fast
+#: stream behaves exactly as it always did.
+_STALE_FLOOR_SECONDS = 3.0
+
+#: Used while nothing has been measured. Generous on purpose: no evidence is
+#: not evidence of failure, and a wrongly refused snapshot reads as a broken
+#: camera where a slightly old one reads as a slightly old one.
+_STALE_UNMEASURED_SECONDS = 15.0
 
 #: How long a source keeps running after the last request for it. Long enough
 #: that a page refresh reuses it, short enough that a closed tab stops paying.
@@ -108,6 +119,45 @@ _ERROR_TAIL = 1200
 #: vendor library that runs threads of its own. Waiting without a limit after
 #: `kill` is waiting for something that may already have been taken.
 _STOP_TIMEOUT = 5
+
+
+def stale_after(interval: float | None) -> float:
+    """How old a held picture may be before it is refused outright.
+
+    A different job from promising freshness, and it was worth separating:
+    one number was doing both, and the number had been chosen back when a
+    still cost nothing, so it was never anything but "comfortably less than
+    forever". Left as it was, it also decided a fourteen-fold difference in
+    work -- and on the cameras this was written against it fell on the wrong
+    side of that decision by two hundredths of a second.
+
+    This one answers only the original question: has the camera stopped
+    sending? A camera can be switched off while its session stays connected,
+    answering every call and delivering nothing, and without this a dashboard
+    would go on showing the room as it was before the power went out.
+    """
+    if interval is None:
+        return _STALE_UNMEASURED_SECONDS
+    return max(_STALE_FLOOR_SECONDS, _STALE_AFTER_KEYFRAMES * interval)
+
+
+def patience_for(held: bool, max_age: float | None) -> float:
+    """How long to wait for a picture that has not arrived yet.
+
+    Waiting has to outlast the gap between pictures, and that gap is the
+    camera's business. A fixed bound worked while every camera to hand sent a
+    keyframe every three seconds; on a stream that sends one every ten it
+    would give up before the next could arrive and report a working camera as
+    a broken one, every time.
+
+    So the age a caller would accept answers this too: someone willing to
+    take a thirty-second-old picture is saying that a stream this slow is
+    still a working one. With nothing held yet the wait covers connecting as
+    well, which is a different and larger thing.
+    """
+    if not held:
+        return _FIRST_FRAME_TIMEOUT
+    return _MAX_AGE_SECONDS if max_age is None else max_age
 
 
 def keyframes_suffice(interval: float | None, max_age: float) -> bool:
@@ -340,15 +390,14 @@ class _Source:
         # camera.
         ready = self._ready
         # Waiting for the first picture and waiting for the next one are not
-        # the same wait. The first has to cover RTSP connecting and a keyframe
-        # coming round, which these cameras send about every three seconds.
-        # Once a picture has arrived both are settled, so silence after that
-        # means something stopped -- and the bound for that is already
-        # defined: the age past which a held picture may no longer stand in
-        # for the present is the same instant it is fair to say there is
-        # none. Using the longer one left a viewer watching a frozen frame
-        # for twenty seconds after a camera was switched off.
-        patience = _FIRST_FRAME_TIMEOUT if self._frame is None else _MAX_AGE_SECONDS
+        # the same wait. The first has to cover RTSP connecting as well as a
+        # keyframe coming round. Once a picture has arrived, silence means
+        # something stopped -- and how long to allow before saying so is the
+        # caller's own bound, because how long is too long depends entirely on
+        # how often this camera sends anything. Using a fixed one left a
+        # viewer watching a frozen frame for twenty seconds after a camera was
+        # switched off, and would have called a slow camera broken.
+        patience = patience_for(self._frame is not None, max_age)
         try:
             await asyncio.wait_for(ready.wait(), timeout=patience)
         except TimeoutError:
@@ -509,9 +558,20 @@ class Stills:
         everything else reads were broken -- the failure `bridge.stills`
         exists to avoid, with snapshots quietly exempted from it.
         """
+        interval = self._interval_for(did)
         if max_age is None:
-            max_age = _STILL_MAX_AGE_SECONDS
-        keyframes = keyframes_suffice(self._interval_for(did), max_age)
+            # The promise is what the stream gives without decoding pictures
+            # nobody reads: one keyframe's worth. Every camera can keep it,
+            # whatever its interval, so the ordinary path -- a dashboard
+            # thumbnail -- is cheap everywhere rather than only where the
+            # keyframes happen to be close enough together.
+            keyframes = True
+            max_age = stale_after(interval)
+        else:
+            # Asked for something specific. Keyframes alone may not reach it,
+            # and where they cannot the frames between them get decoded --
+            # which is the one point at which paying for them is justified.
+            keyframes = keyframes_suffice(interval, max_age)
         # No height: a still is what an automation saves and what a dashboard
         # scales for itself, so it keeps the camera's own size. Measured, the
         # scaling would have saved 0.8 of a percentage point.

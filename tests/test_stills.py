@@ -21,12 +21,16 @@ from types import SimpleNamespace
 import pytest
 from bridge import stills
 from bridge.stills import (
+    _FIRST_FRAME_TIMEOUT,
     _HEIGHT,
     _JPEG_QUALITY,
+    _MAX_AGE_SECONDS,
     Stills,
     StillsError,
     _Source,
     keyframes_suffice,
+    patience_for,
+    stale_after,
 )
 from conftest import NeverReportsExit
 
@@ -770,3 +774,91 @@ class TestAStillIsAsFreshAsItWasAskedFor:
 
         assert await manager.async_still("A", max_age=3.0) == b"\xff\xd8fresh\xff\xd9"
         await manager.async_shutdown()
+
+
+class TestWhenAHeldPictureHasGoneStale:
+    """Refusing an old picture is a different job from promising a fresh one.
+
+    A camera can be switched off while its session stays connected, answering
+    every call and sending nothing; without an age check a dashboard would go
+    on showing the room as it was before the power went out. That check needs
+    a bound, and the bound is evidence rather than preference: keyframes that
+    should have arrived and did not.
+
+    Counted in keyframes because seconds mean different things on different
+    cameras. Three missed on a stream that sends one a second is three
+    seconds; on one that sends every ten it is thirty. Both are the same
+    statement about the camera, which a fixed number of seconds could not
+    make.
+    """
+
+    def test_it_is_three_missed_keyframes(self) -> None:
+        assert stale_after(3.2) == pytest.approx(9.6)
+
+    def test_a_fast_stream_keeps_a_floor(self) -> None:
+        """Otherwise jitter alone would look like a camera that had stopped."""
+        assert stale_after(0.2) == 3.0
+
+    def test_an_unmeasured_stream_gets_a_generous_bound(self) -> None:
+        """Nothing measured is no evidence, and refusing on none is worse.
+
+        A wrongly refused snapshot reads as a broken camera; a slightly old
+        one reads as a slightly old one.
+        """
+        assert stale_after(None) == 15.0
+
+
+class TestWhatAStillPromisesByDefault:
+    """The freshest the stream gives cheaply, unless a caller asks for more.
+
+    Every camera can keep that promise, whatever its keyframe interval, so
+    the ordinary path -- a dashboard thumbnail -- never decodes pictures
+    nobody reads. A caller who genuinely needs fresher says so and pays for
+    it, which is the only point at which paying is justified.
+    """
+
+    async def test_the_default_takes_the_cheap_decode_on_any_camera(
+        self, wedged_ffmpeg
+    ) -> None:
+        for interval in (None, 0.5, 3.2, 30.0):
+            manager = Stills(url_for, lambda did, i=interval: i)
+            with contextlib.suppress(StillsError, TimeoutError):
+                await asyncio.wait_for(manager.async_still("A"), 0.2)
+            assert [key[-1] for key in manager._sources] == [True], (
+                f"interval {interval} should still promise only keyframe freshness"
+            )
+            await manager.async_shutdown()
+
+    async def test_asking_for_more_than_the_keyframes_give_costs_a_full_decode(
+        self, wedged_ffmpeg
+    ) -> None:
+        manager = Stills(url_for, lambda did: 30.0)
+        with contextlib.suppress(StillsError, TimeoutError):
+            await asyncio.wait_for(manager.async_still("A", max_age=3.0), 0.2)
+        assert [key[-1] for key in manager._sources] == [False]
+        await manager.async_shutdown()
+
+
+class TestHowLongToWaitForAPictureThatHasNotArrived:
+    """Waiting has to outlast the gap between pictures, whatever it is.
+
+    A fixed number worked while every camera on the desk sent a keyframe
+    every three seconds. On a stream that sends one every ten it would give
+    up before the next could arrive, and report a working camera as a broken
+    one -- every time, forever.
+    """
+
+    def test_the_first_picture_gets_the_connection_and_a_keyframe(self) -> None:
+        """Nothing is held yet, so this covers RTSP setup as well."""
+        assert patience_for(held=False, max_age=3.0) == _FIRST_FRAME_TIMEOUT
+
+    def test_afterwards_it_waits_as_long_as_the_caller_would_accept(self) -> None:
+        """The age asked for is also the answer to how long to look for it.
+
+        A caller who accepts a picture up to thirty seconds old is saying
+        that a stream this slow is still a working one.
+        """
+        assert patience_for(held=True, max_age=30.0) == 30.0
+
+    def test_a_caller_with_no_opinion_gets_the_preview_s_bound(self) -> None:
+        assert patience_for(held=True, max_age=None) == _MAX_AGE_SECONDS
