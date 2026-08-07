@@ -19,7 +19,13 @@ from types import SimpleNamespace
 
 import pytest
 from bridge import preview
-from bridge.preview import _QUALITY, PreviewError, PreviewManager, _Source
+from bridge.preview import (
+    _HEIGHT,
+    _JPEG_QUALITY,
+    PreviewError,
+    PreviewManager,
+    _Source,
+)
 from conftest import NeverReportsExit
 
 
@@ -65,6 +71,18 @@ def argv(fps: int = 0, quality: str = "balanced") -> list[str]:
     return captured
 
 
+def filters(command: list[str]) -> str:
+    """The one `-vf` argument, insisting there is exactly one.
+
+    ffmpeg does not merge repeated `-vf` flags -- it silently keeps the last
+    and discards the rest. Everything the preview asks of the picture has to
+    arrive in a single comma-separated chain, so this refuses to read a
+    command where a second one could have thrown the first away.
+    """
+    assert command.count("-vf") == 1, f"-vf appears {command.count('-vf')}x"
+    return command[command.index("-vf") + 1]
+
+
 class TestSettingsReachFfmpeg:
     def test_two_viewers_asking_for_different_things_get_their_own(self) -> None:
         """Settings arrive per request, so they cannot leak between viewers.
@@ -75,28 +93,84 @@ class TestSettingsReachFfmpeg:
         manager = PreviewManager(url_for)
         assert manager._sources == {}
 
-    @pytest.mark.parametrize("quality", sorted(_QUALITY))
-    def test_each_quality_becomes_an_ffmpeg_scale_value(self, quality: str) -> None:
-        command = argv(quality=quality)
-        assert command[command.index("-q:v") + 1] == str(_QUALITY[quality])
+    @pytest.mark.parametrize("quality", sorted(_HEIGHT))
+    def test_each_quality_becomes_a_height(self, quality: str) -> None:
+        assert f"min({_HEIGHT[quality]}," in filters(argv(quality=quality)).replace(
+            " ", ""
+        )
 
     def test_a_frame_rate_becomes_a_filter(self) -> None:
-        assert "fps=12" in argv(fps=12)
+        assert "fps=12" in filters(argv(fps=12))
 
     def test_zero_leaves_the_frame_rate_alone(self) -> None:
-        # Not `fps=0`, which ffmpeg rejects: the filter is omitted entirely so
-        # the camera's own rate passes through.
-        command = argv(fps=0)
-        assert "-vf" not in command
+        # Not `fps=0`, which ffmpeg rejects: the rate is left out so the
+        # camera's own passes through. The size is still asked for -- no rate
+        # limit is not the same as no filtering.
+        value = filters(argv(fps=0))
+        assert "fps=" not in value
+        assert "scale=" in value
 
 
-class TestQualityScale:
-    def test_higher_quality_is_a_lower_number(self) -> None:
-        """ffmpeg's scale is inverted, which is exactly why it is not exposed."""
-        assert _QUALITY["high"] < _QUALITY["balanced"] < _QUALITY["low"]
+class TestThePictureIsScaledDown:
+    """What the camera sends is not what a card on the page can use.
 
-    def test_every_step_is_within_ffmpeg_s_range(self) -> None:
-        assert all(2 <= value <= 31 for value in _QUALITY.values())
+    At `video_quality: high` these cameras send 3840x2160. Encoding that
+    straight to JPEG measured 193 Mbps for a card a few hundred pixels wide,
+    and nothing downstream could keep up -- the page stuttered while the
+    encoder was producing a picture far finer than it could ever display.
+    Scaling to 360 brought the same stream to 9.1 Mbps and cut a core's worth
+    of work to a third of it.
+    """
+
+    def test_a_frame_rate_and_a_size_share_one_filter(self) -> None:
+        """Both requests have to arrive as one argument.
+
+        The rate limit was here first. Adding the size as a second `-vf` would
+        drop it without a word, and the preview would quietly go back to
+        encoding at the camera's full rate.
+        """
+        value = filters(argv(fps=12, quality="low"))
+        assert "fps=12" in value
+        assert "scale=" in value
+
+    def test_it_never_enlarges_a_smaller_camera(self) -> None:
+        """`video_quality: low` sends 848x480; asking for 720 must not stretch.
+
+        The height is bounded by the source's own, so a camera that already
+        sends less than was asked for is passed through at its own size rather
+        than blown up into a bigger, blurrier, more expensive picture.
+        """
+        value = filters(argv(quality="high")).replace(" ", "")
+        assert "ih" in value, "the height must be bounded by the source's own"
+        assert "min(720,ih)" in value
+
+    def test_the_width_is_left_even(self) -> None:
+        """`yuv420p` needs both dimensions even; `-1` can produce an odd one."""
+        assert "scale=-2:" in filters(argv()).replace(" ", "")
+
+
+class TestJpegCompression:
+    @pytest.mark.parametrize("quality", sorted(_HEIGHT))
+    def test_compression_no_longer_follows_the_knob(self, quality: str) -> None:
+        """The knob moves resolution now, because that is what a viewer sees.
+
+        Measured on a 4K source: `-q:v 2` against `-q:v 12` is 2.6x the bytes
+        for a difference invisible at the size a card draws. Resolution is
+        what decides whether the picture looks sharp, so that is what the
+        setting was given.
+        """
+        command = argv(quality=quality)
+        assert command[command.index("-q:v") + 1] == str(_JPEG_QUALITY)
+
+    def test_it_is_within_ffmpeg_s_range(self) -> None:
+        assert 2 <= _JPEG_QUALITY <= 31
+
+    def test_every_height_is_even(self) -> None:
+        """`yuv420p` again: an odd target height cannot be encoded."""
+        assert all(height % 2 == 0 for height in _HEIGHT.values())
+
+    def test_higher_quality_is_a_taller_picture(self) -> None:
+        assert _HEIGHT["low"] < _HEIGHT["balanced"] < _HEIGHT["high"]
 
 
 class TestSourceCommand:

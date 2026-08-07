@@ -41,14 +41,25 @@ _LOGGER = logging.getLogger(__name__)
 _SOI = b"\xff\xd8"
 _EOI = b"\xff\xd9"
 
-#: The add-on's quality settings, on ffmpeg's scale where lower is better.
-#: Named rather than exposed as a number: the scale is inverted, its useful
-#: range is not obvious, and nobody should have to know either to make the
-#: picture sharper.
-_QUALITY = {"low": 12, "balanced": 6, "high": 2}
+#: The tallest picture each setting will produce, in pixels. Resolution is what
+#: the setting moves, because resolution is what a viewer sees: on a 4K source
+#: the JPEG compression could be loosened all the way and the difference stayed
+#: invisible at the size a card draws, while costing 2.6x the bytes. Height
+#: alone -- the width follows from the source's own shape, which is not this
+#: module's to decide.
+#:
+#: Read as a ceiling, never a target. A camera sending less than was asked for
+#: is passed through at its own size; enlarging it would produce a bigger,
+#: blurrier, more expensive picture carrying nothing extra.
+_HEIGHT = {"low": 360, "balanced": 480, "high": 720}
+
+#: The compression every preview uses, on ffmpeg's scale where lower is better.
+#: Fixed rather than exposed: once the picture is scaled to something a card can
+#: show, this knob stops being visible and only moves the byte count.
+_JPEG_QUALITY = 5
 
 #: The names a caller may ask for.
-QUALITIES = frozenset(_QUALITY)
+QUALITIES = frozenset(_HEIGHT)
 
 
 #: How long a source keeps running after the last request for it. Long enough
@@ -118,6 +129,34 @@ class _Source:
     def idle_for(self) -> float:
         return time.monotonic() - self._last_request
 
+    def _filters(self) -> str:
+        """Everything asked of the picture, as the one chain ffmpeg accepts.
+
+        A second `-vf` does not add to the first: ffmpeg keeps the last one and
+        discards the rest without saying so. Whatever is asked of the picture
+        has to be joined here, or adding a request silently withdraws one
+        already made.
+
+        The size is not optional. A camera at `video_quality: high` sends
+        3840x2160, and encoding that whole into JPEG measured 193 Mbps for a
+        card a few hundred pixels wide -- a picture finer than anything
+        downstream could carry, let alone display.
+        """
+        chain = []
+        if self._fps:
+            # Left out entirely at zero, which ffmpeg rejects as a rate. The
+            # camera's own is the best available, and dropping frames saves
+            # the encoding of them, never the decoding.
+            chain.append(f"fps={self._fps}")
+        # Quoted because `min` takes a comma, and an unquoted one would read as
+        # the end of this filter. `-2` and not `-1` for the width: yuv420p
+        # needs both dimensions even, and only the former guarantees it.
+        # `ih` makes the height a ceiling rather than a target -- a camera
+        # already sending less keeps its own size, since enlarging it would
+        # cost more for a picture carrying nothing extra.
+        chain.append(f"scale=-2:'min({_HEIGHT[self._quality]},ih)'")
+        return ",".join(chain)
+
     async def async_start(self) -> None:
         # -rtsp_transport tcp: the stream is read over loopback, where TCP
         # costs nothing and removes UDP reordering as a source of artefacts.
@@ -133,13 +172,10 @@ class _Source:
             "-i",
             self._url,
             "-an",
-            # No filter at all unless a limit was asked for. The camera's own
-            # rate is the best available, ffmpeg decodes every frame either
-            # way, and dropping some of them afterwards discards work already
-            # done rather than saving any.
-            *(["-vf", f"fps={self._fps}"] if self._fps else []),
+            "-vf",
+            self._filters(),
             "-q:v",
-            str(_QUALITY[self._quality]),
+            str(_JPEG_QUALITY),
             "-f",
             "image2pipe",
             "-vcodec",
