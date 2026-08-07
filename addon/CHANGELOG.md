@@ -2,9 +2,11 @@
 
 ## 1.4.0
 
-Previews no longer stutter, and the published streams look better for less.
+Previews no longer stutter, the add-on is far lighter on the processor, and
+the published streams look better for less.
 
-**Upgrade if previews are choppy, or if your camera is 2K or 4K.**
+**Upgrade if previews are choppy, if the add-on has been using a lot of
+processor time, or if your camera is 2K or 4K.**
 
 - Fixed: previews stuttered and kept the machine busy, worst at the sharpest
   setting. The picture is now sized for the page instead of being sent at the
@@ -16,6 +18,7 @@ Previews no longer stutter, and the published streams look better for less.
 - New "Transcode quality" setting, for more detail than the default if you
   have the processor and network for it.
 - A stream no longer enlarges a camera that sends less than it asked for.
+- The add-on uses far less processor time, whether or not anyone is watching.
 
 **Note:** on a 4K camera the full-size H.264 and H.265 streams now use
 considerably more bandwidth. Their old limit was far too low for that
@@ -24,9 +27,9 @@ larger files if you record from one of them.
 
 ### 中文
 
-预览不再卡顿，发布出去的视频流也更好看、更省。
+预览不再卡顿，加载项对 CPU 的占用大幅下降，发布出去的视频流也更好看、更省。
 
-**如果预览卡顿，或者你的摄像头是 2K / 4K，请升级。**
+**如果预览卡顿、加载项一直占用很高的 CPU，或者你的摄像头是 2K / 4K，请升级。**
 
 - 修复：预览卡顿，而且一直占着机器不放，画质选得越高越明显。现在发出去的画面
   按页面大小裁好，不再整帧发摄像头的原始分辨率。
@@ -35,6 +38,7 @@ larger files if you record from one of them.
   有人走动时该给的细节一点不少。
 - 新增「转码画质」设置，机器和网络有富余的话，可以要比默认更多的细节。
 - 摄像头本身分辨率不够时，不会再被硬拉大。
+- 加载项对 CPU 的占用大幅下降，不管有没有人在看。
 
 **注意**：4K 摄像头的「原始尺寸」H.264 / H.265 两路流现在会明显更占带宽。它们
 原来的上限对这个分辨率定得太低，画质甚至不如旁边的 1440p。如果你在用这两路
