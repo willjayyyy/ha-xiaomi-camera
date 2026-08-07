@@ -13,7 +13,13 @@ from pathlib import Path
 
 import pytest
 from bridge import config
-from bridge.config import AccessMode, Options, VideoQuality, load_options
+from bridge.config import (
+    AccessMode,
+    Options,
+    TranscodeQuality,
+    VideoQuality,
+    load_options,
+)
 
 
 def write_options(tmp_path: Path, **overrides: object) -> Path:
@@ -256,3 +262,70 @@ class TestTheImageSaysWhatItWasBuiltFrom:
         assert banner is not None, "the startup line moved or was renamed"
         assert "build=%s" in banner.group()
         assert "build_ref()" in source
+
+
+class TestTranscodeQuality:
+    def test_it_is_read_from_the_options_file(self, tmp_path: Path) -> None:
+        path = write_options(tmp_path, transcode_quality="sharp")
+        assert (
+            load_options(path, supervised=True).transcode_quality
+            is TranscodeQuality.SHARP
+        )
+
+    def test_its_values_do_not_collide_with_the_camera_setting(self) -> None:
+        """Two settings on one screen must not share a word for different things.
+
+        `video_quality` asks the camera for `low` or `high`; this one says how
+        finely the add-on re-encodes whatever arrives. A `high` in both would
+        read as one choice offered twice, and the two are independent -- a 4K
+        camera can be re-encoded coarsely, and a small one almost losslessly.
+        """
+        camera = {quality.value for quality in VideoQuality}
+        transcode = {quality.value for quality in TranscodeQuality}
+        assert not (camera & transcode)
+
+    def test_a_file_written_by_an_older_version_still_starts(
+        self, tmp_path: Path
+    ) -> None:
+        """The key is simply absent there, and absent has to mean unchanged.
+
+        Supervisor keeps the options a user saved, not the schema they were
+        saved against, so every added setting meets files that predate it.
+        """
+        path = write_options(tmp_path)
+        assert (
+            load_options(path, supervised=True).transcode_quality
+            is TranscodeQuality.STANDARD
+        )
+
+    def test_an_unknown_value_names_the_setting_and_the_choices(
+        self, tmp_path: Path
+    ) -> None:
+        path = write_options(tmp_path, transcode_quality="ludicrous")
+        with pytest.raises(ValueError, match="transcode_quality must be one of"):
+            load_options(path, supervised=True)
+
+
+class TestTheAddOnDeclaresEverySetting:
+    """A setting has to exist in three places, and nothing links them.
+
+    `_DEFAULTS` is what the bridge reads, `config.yaml`'s `options` is what a
+    fresh install starts with, and its `schema` is what Supervisor's form will
+    accept. Missing from any one of them the setting fails differently and
+    quietly: unschema'd it cannot be typed, undefaulted it is dropped on read,
+    unoffered it never appears. This project has shipped a setting that was
+    threaded everywhere except the one place that assigned it.
+    """
+
+    @staticmethod
+    def _addon() -> dict:
+        import yaml
+
+        path = Path(__file__).resolve().parent.parent / "addon" / "config.yaml"
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_every_setting_has_a_starting_value(self) -> None:
+        assert set(config._DEFAULTS) == set(self._addon()["options"])
+
+    def test_every_setting_can_be_typed_into_the_form(self) -> None:
+        assert set(config._DEFAULTS) == set(self._addon()["schema"])

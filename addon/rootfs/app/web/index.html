@@ -339,7 +339,7 @@ const I18N = {
     prefFps: "Frame rate", prefQuality: "Quality",
     fpsCamera: "Camera's rate",
     audioOn: "Audio",
-    qualityHigh: "High", qualityBalanced: "Medium", qualityLow: "Low",
+    qualityHigh: "High", qualityMedium: "Medium", qualityLow: "Low",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
     finish: "Finish sign-in", cancel: "Cancel",
     step1Link: "Open the Xiaomi sign-in page",
@@ -379,7 +379,7 @@ const I18N = {
     prefFps: "帧率", prefQuality: "画质",
     fpsCamera: "原生帧率",
     audioOn: "声音",
-    qualityHigh: "高", qualityBalanced: "中", qualityLow: "低",
+    qualityHigh: "高", qualityMedium: "中", qualityLow: "低",
     connect: "连接小米账号", disconnect: "断开连接",
     finish: "完成登录", cancel: "取消",
     step1Link: "打开小米登录页面",
@@ -551,7 +551,14 @@ const FPS_LADDER = [20, 15, 12, 8, 5, 2];
 //: when it never does.
 const FPS_ASSUMED = 20;
 
-const DEFAULT_PREFS = { fps: 12, quality: "balanced" };
+const DEFAULT_PREFS = { fps: 12, quality: "medium" };
+
+// What the add-on will accept. Stored preferences are read back from a browser
+// that may have saved them under an older version, and a value this add-on no
+// longer knows is rejected outright rather than ignored -- so an unrecognised
+// one has to fall back here, or the preview simply never opens and the page
+// gives no hint why.
+const QUALITIES = ["high", "medium", "low"];
 
 /**
  * Per-camera preview settings, remembered in this browser.
@@ -563,11 +570,18 @@ const DEFAULT_PREFS = { fps: 12, quality: "balanced" };
  * means nothing to save, migrate or keep in step on the add-on side.
  */
 function prefsFor(did) {
+  let stored = {};
   try {
-    return { ...DEFAULT_PREFS, ...JSON.parse(localStorage.getItem(`xcam.prefs.${did}`) || "{}") };
-  } catch {
-    return { ...DEFAULT_PREFS };
-  }
+    stored = JSON.parse(localStorage.getItem(`xcam.prefs.${did}`) || "{}");
+  } catch { /* unreadable or not ours; the defaults are the answer */ }
+  const prefs = { ...DEFAULT_PREFS, ...stored };
+  // Checked rather than trusted. This is the one input the page takes from its
+  // own past, and the add-on refuses a quality it does not recognise -- so a
+  // name that has since been retired would leave the preview permanently
+  // failing to open for anyone who had picked it.
+  if (!QUALITIES.includes(prefs.quality)) prefs.quality = DEFAULT_PREFS.quality;
+  if (!Number.isInteger(prefs.fps) || prefs.fps < 0) prefs.fps = DEFAULT_PREFS.fps;
+  return prefs;
 }
 
 function savePrefs(did, prefs) {
@@ -598,7 +612,7 @@ function prefLabel(prefs) {
 }
 
 function prefControl(camera, prefs) {
-  const quality = ["high", "balanced", "low"].map((name) => ({
+  const quality = QUALITIES.map((name) => ({
     value: name,
     label: t(`quality${name[0].toUpperCase()}${name.slice(1)}`),
   }));

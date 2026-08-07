@@ -18,11 +18,12 @@ import contextlib
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 from urllib.parse import quote
 
 import yaml
 
-from .config import Options
+from .config import Options, TranscodeQuality
 from .const import (
     API_PORT,
     GO2RTC_API_PORT,
@@ -44,7 +45,7 @@ _RESTART_DELAY_SECONDS = 5.0
 
 #: How long to wait for a stopped go2rtc to report its exit, applied after the
 #: polite signal and again after the fatal one. See the same constant in
-#: `bridge.preview`: killing a process guarantees it dies, not that its exit
+#: `bridge.stills`: killing a process guarantees it dies, not that its exit
 #: status is still there to be collected, and waiting without a limit for
 #: something another thread may already have taken never ends. Longer than the
 #: preview's because go2rtc has live consumers to disconnect on the way out.
@@ -86,6 +87,33 @@ _H265_ENCODER = (
     "-profile:v main -pix_fmt:v yuv420p"
 )
 
+#: The quality each setting asks for, on the encoders' own scale where lower
+#: is finer. Two tables because the scales are not the same one: x265 needs a
+#: higher number for the picture x264 gives at a lower one, and sharing a
+#: constant would have made every H.265 variant quietly worse than its H.264
+#: twin while the configuration read as though they matched.
+_CRF: Final[dict[str, dict[TranscodeQuality, int]]] = {
+    "h264": {
+        TranscodeQuality.STANDARD: 23,
+        TranscodeQuality.SHARP: 20,
+        TranscodeQuality.MAXIMUM: 17,
+    },
+    "h265": {
+        TranscodeQuality.STANDARD: 28,
+        TranscodeQuality.SHARP: 25,
+        TranscodeQuality.MAXIMUM: 22,
+    },
+}
+
+#: How far the safety valve opens as the quality rises. A cap left where it
+#: was would bind before the finer picture arrived, so the setting would buy
+#: nothing on exactly the busy scenes that motivated raising it.
+_CEILING_MULTIPLIER: Final[dict[TranscodeQuality, int]] = {
+    TranscodeQuality.STANDARD: 1,
+    TranscodeQuality.SHARP: 2,
+    TranscodeQuality.MAXIMUM: 4,
+}
+
 
 @dataclass(frozen=True)
 class StreamSpec:
@@ -100,7 +128,10 @@ class StreamSpec:
     key: str
     codec: str
     height: int | None
-    bitrate: str
+    #: The most this variant may ever spend, not what it aims to spend. The
+    #: quality is asked for with `-crf`; this is only what stops an unusually
+    #: busy picture running away with the network.
+    ceiling: str
 
     @property
     def template(self) -> str:
@@ -108,36 +139,49 @@ class StreamSpec:
 
         go2rtc looks the name up in its `ffmpeg` map, so a variant needs its
         own entry there -- `h264/360` and friends, generated below. Passing
-        scale and bitrate through `#raw=` instead does not work: go2rtc
+        scale and quality through `#raw=` instead does not work: go2rtc
         appends the `#video=` template's arguments afterwards, and ffmpeg
-        takes the last `-b:v` it is given.
+        takes the last of any argument it is given twice.
         """
         if self.height is None:
             return self.codec
         return f"{self.codec}/{self.height}"
 
 
-#: Heights above the source are not suppressed. This configuration is written
-#: when the camera list changes, and the source resolution is unknown until a
-#: peer-to-peer session runs -- so there is no moment at which a height could
-#: be filtered out. An upscale wastes nothing that is not already idle: no
-#: producer starts until a consumer connects.
+#: A height is a ceiling, never a target: a camera sending less than a rung
+#: asks for is published at its own size. Rungs above the source therefore
+#: cost nothing and lie about nothing -- which is what lets the ladder be the
+#: same everywhere instead of being tuned to whatever any one vendor calls
+#: "2K". The source resolution is unknown when this file is written, since it
+#: is not settled until a peer-to-peer session delivers a frame, so the
+#: decision has to be one ffmpeg makes per stream rather than one made here.
 #:
 #: The root's codec field is "original": the camera's own encoding is not
 #: known until a session delivers its first frame, and the root never names
-#: a codec anywhere -- neither in its key nor in its go2rtc name. The
-#: bitrate is documentary only (the root carries no `#video=` argument, so
-#: no template is ever generated for it).
+#: a codec anywhere -- neither in its key nor in its go2rtc name. Its ceiling
+#: is documentary only (the root carries no `#video=` argument, so no template
+#: is ever generated for it).
+#:
+#: The ceilings are a ladder, and their ratios are the part worth reading:
+#: each rung may spend roughly in proportion to the pixels it carries.
+#: `transcode_quality` moves the whole ladder rather than any single rung,
+#: which is what keeps the ratios from drifting apart one plausible-looking
+#: edit at a time. They are deliberately loose -- a valve, not a setting --
+#: so that on ordinary scenes the quality target is what decides the bitrate.
 STREAM_SPECS: tuple[StreamSpec, ...] = (
-    StreamSpec("original", "original", None, "2M"),
-    StreamSpec("h265", "h265", None, "2M"),
-    StreamSpec("h265_720", "h265", 720, "2M"),
-    StreamSpec("h265_360", "h265", 360, "512k"),
-    StreamSpec("h265_180", "h265", 180, "256k"),
-    StreamSpec("h264", "h264", None, "2M"),
-    StreamSpec("h264_720", "h264", 720, "2M"),
-    StreamSpec("h264_360", "h264", 360, "512k"),
-    StreamSpec("h264_180", "h264", 180, "256k"),
+    StreamSpec("original", "original", None, "24M"),
+    StreamSpec("h265", "h265", None, "24M"),
+    StreamSpec("h265_1440", "h265", 1440, "16M"),
+    StreamSpec("h265_1080", "h265", 1080, "10M"),
+    StreamSpec("h265_720", "h265", 720, "6M"),
+    StreamSpec("h265_360", "h265", 360, "2M"),
+    StreamSpec("h265_180", "h265", 180, "1M"),
+    StreamSpec("h264", "h264", None, "24M"),
+    StreamSpec("h264_1440", "h264", 1440, "16M"),
+    StreamSpec("h264_1080", "h264", 1080, "10M"),
+    StreamSpec("h264_720", "h264", 720, "6M"),
+    StreamSpec("h264_360", "h264", 360, "2M"),
+    StreamSpec("h264_180", "h264", 180, "1M"),
 )
 
 #: The variant every other one is derived from: the camera's own encoding at
@@ -183,11 +227,37 @@ def stream_name(did: str, key: str = ROOT_KEY) -> str:
     return f"camera_{did}_{key}"
 
 
-def _encoder_templates() -> dict[str, str]:
+def _bits(rate: str) -> int:
+    """`24M` or `512k` as a plain count of bits per second."""
+    return int(rate[:-1]) * {"k": 1_000, "M": 1_000_000}[rate[-1]]
+
+
+def _rate(bits: int) -> str:
+    """The shortest form ffmpeg accepts, so the config stays readable."""
+    if bits % 1_000_000 == 0:
+        return f"{bits // 1_000_000}M"
+    return f"{bits // 1_000}k"
+
+
+def _encoder_templates(quality: TranscodeQuality) -> dict[str, str]:
     """One go2rtc encoder template per published variant.
 
     Merged into go2rtc's own table, so these names -- `h264`, `h264/360` and
     so on -- become valid `#video=` values.
+
+    Quality is asked for, and bandwidth is only capped. A bitrate target
+    spends its whole allowance on a still room at night and then runs out on
+    the one second somebody walks through it, which is backwards: a viewer
+    perceives the picture, not the byte count, and a camera pointed at a
+    room that rarely changes is the case this add-on exists for. `-crf` asks
+    for a quality and spends what that costs; `-maxrate` is the valve that
+    keeps an unusually busy picture off the network's back.
+
+    It also settles what no bitrate could. The full-size variants re-encode
+    whatever resolution the camera happens to send, and that is not known
+    when this file is written -- a figure picked here would be far too small
+    for a 4K sensor and wasteful on a 480p one. A quality target needs no
+    such knowledge.
     """
     base = {"h264": _H264_ENCODER, "h265": _H265_ENCODER}
     templates = dict(base)
@@ -196,9 +266,22 @@ def _encoder_templates() -> dict[str, str]:
             # The root is served directly from the endpoint and carries no
             # `#video=` argument, so it keeps no template here.
             continue
-        template = f"{base[spec.codec]} -b:v {spec.bitrate}"
+        # The buffer holds two seconds at the ceiling: long enough to spend on
+        # a keyframe without the frames after it paying for the whole burst.
+        ceiling = _bits(spec.ceiling) * _CEILING_MULTIPLIER[quality]
+        template = (
+            f"{base[spec.codec]} -crf {_CRF[spec.codec][quality]} "
+            f"-maxrate {_rate(ceiling)} -bufsize {_rate(ceiling * 2)}"
+        )
         if spec.height is not None:
-            template += f" -vf scale=-2:{spec.height}"
+            # `min(..., ih)` rather than the height alone, so a camera that
+            # already sends less is published at its own size instead of being
+            # stretched -- more bandwidth and more work for a softer picture
+            # than the source. Quoted because `min` takes a comma, which would
+            # otherwise read as the end of this filter; go2rtc splits its
+            # templates on whitespace and leaves a token that does not begin
+            # with a quote alone, so ffmpeg receives this exactly as written.
+            template += f" -vf scale=-2:'min({spec.height},ih)'"
         templates[spec.template] = template
     return templates
 
@@ -254,7 +337,7 @@ def build_config(options: Options, dids: list[str]) -> dict:
         # contradict the loopback-only guarantee of `local` mode.
         "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
         "streams": streams,
-        "ffmpeg": _encoder_templates(),
+        "ffmpeg": _encoder_templates(options.transcode_quality),
     }
 
     if options.requires_credentials:

@@ -38,9 +38,9 @@ from .config import Options
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
 from .framing import MediaKind
 from .mux import StreamMuxer
-from .preview import QUALITIES, PreviewError, PreviewManager
 from .redact import safe_error
-from .streaming import CameraOffError, StreamError
+from .stills import QUALITIES, Stills, StillsError
+from .streaming import StreamError
 from .webauth import SESSION_COOKIE, build_guards, session_token
 
 if TYPE_CHECKING:
@@ -119,7 +119,7 @@ class BridgeApi:
         restreamer: Restreamer,
         refresh_callback,
         options: Options,
-        previews: PreviewManager,
+        previews: Stills,
     ) -> None:
         self._previews = previews
         self._options = options
@@ -289,14 +289,21 @@ class BridgeApi:
         session = self._session_for(did)
         if session is None:
             raise web.HTTPNotFound(text=f"unknown camera {did}")
-        try:
-            image = await session.async_snapshot(max_age=_max_age(request))
-        except CameraOffError as err:
+        # Asked before anything is started, and only for a definite "off":
+        # such a camera answers every call and sends nothing, so waiting for a
+        # picture would spend the whole first-frame timeout rediscovering what
+        # the power switch already said. The preview socket asks the same
+        # question for the same reason.
+        if self._power_state(did) is False:
             # 409 rather than 503: the bridge is healthy and the request is
             # well-formed; the camera is simply switched off.
-            raise web.HTTPConflict(text=str(err)) from err
-        except StreamError as err:
-            raise web.HTTPServiceUnavailable(text=str(err)) from err
+            raise web.HTTPConflict(text=f"{did} is switched off")
+        try:
+            image = await self._previews.async_still(did, _max_age(request))
+        except StillsError as err:
+            if await self._read_power_state(did) is False:
+                raise web.HTTPConflict(text=f"{did} is switched off") from err
+            raise web.HTTPServiceUnavailable(text=safe_error(err)) from err
         return web.Response(
             body=image,
             content_type="image/jpeg",
@@ -479,7 +486,7 @@ class BridgeApi:
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
-        quality = request.query.get("quality", "balanced")
+        quality = request.query.get("quality", "medium")
         if quality not in QUALITIES:
             raise web.HTTPBadRequest(
                 text=f"quality must be one of {', '.join(sorted(QUALITIES))}"
@@ -513,7 +520,7 @@ class BridgeApi:
                         did, fps, quality, seq
                     )
                     await ws.send_bytes(image)
-            except PreviewError as err:
+            except StillsError as err:
                 # Asked again rather than recalled: the case worth naming is a
                 # camera switched off since the list was last read, and the
                 # remembered value is by definition the one from before that.

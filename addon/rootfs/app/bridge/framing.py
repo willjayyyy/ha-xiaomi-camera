@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -80,6 +81,13 @@ class ParameterSets:
         return b"".join(_ANNEX_B_START_CODE + unit for unit in self.units)
 
 
+#: How many keyframe gaps are kept. Long enough that one unlucky gap does not
+#: swing the answer, short enough that a camera which changes its keyframe
+#: interval -- firmware does this when the resolution or the scene changes --
+#: is judged on what it sends now rather than on what it used to.
+_KEYFRAME_SAMPLES = 20
+
+
 @dataclass
 class SessionStats:
     """Diagnostics for a live session, surfaced through the API."""
@@ -88,6 +96,16 @@ class SessionStats:
     frames: int = 0
     bytes_total: int = 0
     keyframes: int = 0
+    #: When the last keyframe arrived, and the gaps before it. Kept because
+    #: nothing declares how often a camera sends one: it is firmware's
+    #: business, it differs by model, and there is no way to ask. Anything
+    #: that trades freshness for work -- a still decoded from keyframes alone
+    #: rather than from every frame -- can only be correct if it reads what
+    #: this stream actually does instead of assuming what ours does.
+    _last_keyframe_at: float | None = field(default=None, repr=False)
+    _keyframe_gaps: deque[float] = field(
+        default_factory=lambda: deque(maxlen=_KEYFRAME_SAMPLES), repr=False
+    )
     #: Times a consumer fell behind far enough to lose data. Counted because a
     #: single dropped frame costs everything until the next keyframe -- about
     #: three seconds on these cameras -- and that is exactly what a viewer
@@ -121,6 +139,31 @@ class SessionStats:
     last_frame_at: float | None = None
     consumers: int = 0
 
+    def note_keyframe(self, at: float) -> None:
+        """Record a keyframe's arrival so the interval can be measured."""
+        if self._last_keyframe_at is not None:
+            self._keyframe_gaps.append(at - self._last_keyframe_at)
+        self._last_keyframe_at = at
+
+    @property
+    def keyframe_interval(self) -> float | None:
+        """The longest recent gap between keyframes, or None if unmeasured.
+
+        The longest rather than the mean, because what this is read for is
+        keeping a promise about freshness, and a promise is kept against the
+        worst case. A camera that usually sends one a second and occasionally
+        takes eight would look comfortable on an average while leaving a still
+        eight seconds stale.
+
+        `None` until a gap has actually been seen, and it must stay
+        distinguishable from a small number: a caller that read "nothing
+        measured yet" as "arrives constantly" would promise a freshness this
+        stream has not been shown to support.
+        """
+        if not self._keyframe_gaps:
+            return None
+        return max(self._keyframe_gaps)
+
     def as_dict(self) -> dict[str, object]:
         uptime = time.monotonic() - self.started_at if self.started_at else 0.0
         return {
@@ -128,6 +171,11 @@ class SessionStats:
             "frames": self.frames,
             "bytes": self.bytes_total,
             "keyframes": self.keyframes,
+            "keyframe_interval": (
+                round(self.keyframe_interval, 2)
+                if self.keyframe_interval is not None
+                else None
+            ),
             "uptime_seconds": round(uptime, 1),
             # Measured rather than declared: the camera announces nothing, and
             # what it actually sends is what a viewer can be offered.

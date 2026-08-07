@@ -41,6 +41,39 @@ class VideoQuality(StrEnum):
     HIGH = "high"
 
 
+class TranscodeQuality(StrEnum):
+    """How finely the add-on re-encodes what the camera sends it.
+
+    Distinct from :class:`VideoQuality`, and the two are independent: that one
+    asks the camera for a bigger or smaller picture, this one says how much
+    care goes into re-encoding whatever arrives. A 4K camera can be
+    re-encoded coarsely and a small one almost losslessly. They share no
+    value for that reason -- a `high` in both would read as one choice
+    offered twice.
+
+    One setting rather than a figure per variant. The useful part of those
+    figures is their ratio to each other, and a dozen separately editable
+    fields is a dozen chances for that relationship to drift while every value
+    still looks defensible on its own.
+
+    Named rather than given as a number for the same reason ffmpeg's quality
+    scale is not exposed: what a viewer wants to say is "sharper", and the
+    number that means it runs backwards and differs per encoder.
+    """
+
+    #: Visually lossless for most scenes, and what Home Assistant's own live
+    #: view and most NVRs are sized for.
+    STANDARD = "standard"
+
+    #: Noticeably finer on detailed scenes, for roughly half again the
+    #: bandwidth.
+    SHARP = "sharp"
+
+    #: As much detail as these encoders will produce at this speed. For a
+    #: machine with the CPU and a network with the room.
+    MAXIMUM = "maximum"
+
+
 def build_ref() -> str:
     """The commit this image was built from, or ``unknown`` if it says none.
 
@@ -84,6 +117,7 @@ class Options:
     enable_audio: bool
     log_level: str
     web_password: str = ""
+    transcode_quality: TranscodeQuality = TranscodeQuality.STANDARD
     supervised: bool = True
 
     @property
@@ -156,6 +190,7 @@ _DEFAULTS: dict[str, object] = {
     "rtsp_username": "",
     "rtsp_password": "",
     "video_quality": VideoQuality.LOW.value,
+    "transcode_quality": TranscodeQuality.STANDARD.value,
     "enable_audio": False,
     "log_level": "info",
     "web_password": "",
@@ -171,6 +206,7 @@ _ENV_PREFIX = "XIAOMI_CAMERA_"
 
 _ACCESS_MODES: Final = frozenset(mode.value for mode in AccessMode)
 _QUALITIES: Final = frozenset(quality.value for quality in VideoQuality)
+_TRANSCODE_QUALITIES: Final = frozenset(q.value for q in TranscodeQuality)
 
 
 def _env_overrides() -> dict[str, object]:
@@ -226,6 +262,14 @@ def load_options(
         rtsp_password=str(raw["rtsp_password"] or ""),
         video_quality=VideoQuality(
             _choice(_QUALITIES, raw["video_quality"], "video_quality", "low or high")
+        ),
+        transcode_quality=TranscodeQuality(
+            _choice(
+                _TRANSCODE_QUALITIES,
+                raw["transcode_quality"],
+                "transcode_quality",
+                ", ".join(sorted(_TRANSCODE_QUALITIES)),
+            )
         ),
         enable_audio=bool(raw["enable_audio"]),
         log_level=_choice(

@@ -1,5 +1,49 @@
 # Changelog
 
+## 1.4.0
+
+Previews no longer stutter, the add-on is far lighter on the processor, and
+the published streams look better for less.
+
+**Upgrade if previews are choppy, if the add-on has been using a lot of
+processor time, or if your camera is 2K or 4K.**
+
+- Fixed: previews stuttered and kept the machine busy, worst at the sharpest
+  setting. The picture is now sized for the page instead of being sent at the
+  camera's full resolution.
+- New 1440p and 1080p streams, so a 2K or 4K camera no longer drops straight
+  to 720p.
+- Streams now hold a steady picture quality rather than a steady bitrate: a
+  quiet room costs almost nothing, and a busy one gets the detail it needs.
+- New "Transcode quality" setting, for more detail than the default if you
+  have the processor and network for it.
+- A stream no longer enlarges a camera that sends less than it asked for.
+- The add-on uses far less processor time, whether or not anyone is watching.
+
+**Note:** on a 4K camera the full-size H.264 and H.265 streams now use
+considerably more bandwidth. Their old limit was far too low for that
+resolution, and the picture was worse than the 1440p stream beside it. Expect
+larger files if you record from one of them.
+
+### 中文
+
+预览不再卡顿，加载项对 CPU 的占用大幅下降，发布出去的视频流也更好看、更省。
+
+**如果预览卡顿、加载项一直占用很高的 CPU，或者你的摄像头是 2K / 4K，请升级。**
+
+- 修复：预览卡顿，而且一直占着机器不放，画质选得越高越明显。现在发出去的画面
+  按页面大小裁好，不再整帧发摄像头的原始分辨率。
+- 新增 1440p 和 1080p 两路流，2K / 4K 摄像头不必再直接掉到 720p。
+- 各路流现在保持稳定的画质，而不是稳定的码率：房间没动静时几乎不花带宽，
+  有人走动时该给的细节一点不少。
+- 新增「转码画质」设置，机器和网络有富余的话，可以要比默认更多的细节。
+- 摄像头本身分辨率不够时，不会再被硬拉大。
+- 加载项对 CPU 的占用大幅下降，不管有没有人在看。
+
+**注意**：4K 摄像头的「原始尺寸」H.264 / H.265 两路流现在会明显更占带宽。它们
+原来的上限对这个分辨率定得太低，画质甚至不如旁边的 1440p。如果你在用这两路
+录像，文件会变大。
+
 ## 1.3.1
 
 Stops the add-on from staying busy after you close a preview.

@@ -697,3 +697,38 @@ class TestCamerasEndpointReachability:
             await client.close()
 
         assert payload["cameras"][0]["rtsp_reachable_off_host"] is True
+
+
+class TestTheSessionMeasuresItsKeyframeInterval:
+    """Read from the stream rather than assumed from the cameras to hand.
+
+    How often a keyframe arrives is firmware's business and differs by model.
+    Anything that trades freshness for work -- a still decoded from keyframes
+    alone -- is only correct on a camera whose interval has been seen, so the
+    session records what actually arrives.
+    """
+
+    def test_two_keyframes_give_an_interval(self, monkeypatch) -> None:
+        session = _bare_session()
+        # Settable rather than a fixed sequence: the number of clock reads per
+        # frame is an implementation detail, and a test that pins it fails the
+        # next time an unrelated one is added.
+        now = [100.0]
+        monkeypatch.setattr("bridge.streaming.time.monotonic", lambda: now[0])
+        session._handle_video(_KEYFRAME_PAYLOAD, ts=0)
+        now[0] = 104.5
+        session._handle_video(_KEYFRAME_PAYLOAD, ts=1)
+        assert session.stats.keyframe_interval == 4.5
+
+    def test_ordinary_frames_do_not_count_as_keyframes(self, monkeypatch) -> None:
+        """Otherwise every stream would look like it sent one constantly.
+
+        That is the failure worth guarding: it reads as "fresh enough for
+        anything" and would pick the cheap path on a camera that cannot
+        support it.
+        """
+        session = _bare_session()
+        monkeypatch.setattr("bridge.streaming.time.monotonic", lambda: 100.0)
+        session._handle_video(_ORDINARY_PAYLOAD, ts=0)
+        session._handle_video(_ORDINARY_PAYLOAD, ts=1)
+        assert session.stats.keyframe_interval is None

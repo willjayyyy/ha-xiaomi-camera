@@ -33,6 +33,17 @@ configuration:
       recordings included — not just the picture on this add-on's page. "low" is
       enough for a dashboard tile and the lightest on your network and this machine;
       "high" gives more detail for more bandwidth and more decoding work.
+  transcode_quality:
+    name: Transcode quality
+    description: >-
+      How finely the add-on re-encodes the picture for the streams it publishes at
+      other sizes. Separate from "Video quality" above, which decides what the
+      camera sends in the first place — you can ask the camera for its sharpest
+      picture and still re-encode it coarsely, or the other way round. Each stream
+      spends only what its scene needs, so a still room costs little and a busy one
+      costs more; raising this asks for more detail everywhere and costs CPU and
+      bandwidth to match. The camera's own stream is passed through untouched and
+      is unaffected.
   enable_audio:
     name: Include audio
     description: >-
