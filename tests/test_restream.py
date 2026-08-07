@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from bridge.config import AccessMode, Options, VideoQuality
+from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
 from bridge.const import (
     ALL_INTERFACES,
     GO2RTC_API_PORT,
@@ -47,7 +47,12 @@ _LABEL_FILES = (
 )
 
 
-def make_options(mode: AccessMode, user: str = "", password: str = "") -> Options:
+def make_options(
+    mode: AccessMode,
+    user: str = "",
+    password: str = "",
+    transcode_quality: TranscodeQuality = TranscodeQuality.STANDARD,
+) -> Options:
     return Options(
         access_mode=mode,
         rtsp_username=user,
@@ -55,6 +60,7 @@ def make_options(mode: AccessMode, user: str = "", password: str = "") -> Option
         video_quality=VideoQuality.LOW,
         enable_audio=False,
         log_level="info",
+        transcode_quality=transcode_quality,
     )
 
 
@@ -122,10 +128,22 @@ class TestStreamSources:
         assert not source.startswith("ffmpeg:")
         assert "#video=" not in source
 
-    def test_nine_streams_per_camera(self) -> None:
-        """Four heights across both codecs, plus the root."""
+    def test_thirteen_streams_per_camera(self) -> None:
+        """Six heights across both codecs, plus the root."""
         config = build_config(make_options(AccessMode.LOCAL), ["1", "2", "3"])
-        assert len(config["streams"]) == 27
+        assert len(config["streams"]) == 39
+
+    def test_the_heights_step_down_from_a_modern_sensor(self) -> None:
+        """1440 and 1080 sit between 720 and what these cameras now send.
+
+        The ladder was drawn when the source was 848x480, where 720 was
+        already most of the picture. A camera at `video_quality: high` sends
+        3840x2160, and dropping straight from that to 720 skipped the two
+        sizes consumers ask for most. Variants cost nothing until something
+        connects to one, so an unused rung is free.
+        """
+        offered = {spec.height for spec in STREAM_SPECS if spec.codec == "h264"}
+        assert {1440, 1080} <= offered
 
     def test_the_compatibility_stream_has_its_own_name(self) -> None:
         """Two names rather than two codecs under one.
@@ -165,6 +183,49 @@ class TestStreamSources:
         assert "-g 25" in config["ffmpeg"]["h265"]
         assert "-g 25" in config["ffmpeg"]["h265/360"]
 
+    def test_quality_is_targeted_and_bandwidth_only_capped(self) -> None:
+        """Constant quality with a safety valve, not a bitrate to fill.
+
+        A bitrate target spends its whole allowance on a still room at night,
+        and runs out on the one second someone walks through it -- which is
+        exactly backwards, because a viewer perceives quality, not bytes.
+        `-crf` asks for a quality and spends what that costs; `-maxrate`
+        exists only so an unusually busy picture cannot run away with the
+        network.
+
+        It also settles what a bitrate could not: the full-size variant's
+        resolution is whatever the camera sends, and is unknown when this
+        configuration is written. A quality target needs no such knowledge.
+        """
+        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
+            "h264/720"
+        ]
+        assert "-crf 23" in template
+        assert "-b:v" not in template, "a target would defeat the point of -crf"
+        assert "-maxrate 6M" in template
+        assert "-bufsize 12M" in template
+
+    def test_the_full_size_variant_is_sized_too(self) -> None:
+        """The rung a bitrate could never size, because its height is unknown."""
+        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
+            "h264"
+        ]
+        assert "-crf 23" in template
+        assert "-maxrate 24M" in template
+
+    def test_a_scaled_variant_never_enlarges_its_source(self) -> None:
+        """The height is a ceiling, so any camera gets the best it can give.
+
+        Without this the 1440 rung would stretch a camera that sends less --
+        more bandwidth and more CPU for a softer picture than the source it
+        came from. The preview reads the same way, and the two paths must not
+        answer this differently.
+        """
+        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
+            "h264/1440"
+        ]
+        assert "scale=-2:'min(1440,ih)'" in template
+
     def test_the_compatibility_stream_reuses_the_original(self) -> None:
         # Naming the stream rather than repeating the URL keeps both on one
         # session against the camera.
@@ -172,6 +233,51 @@ class TestStreamSources:
         assert config["streams"][stream_name("42", "h264")].startswith(
             f"ffmpeg:{stream_name('42')}#"
         )
+
+
+class TestTranscodeQualityMovesOneKnob:
+    """One setting, moving every figure that has to agree with the others.
+
+    Twelve independently editable numbers would be twelve places for the
+    relationship between the heights to drift, and drift between values that
+    each looked right alone is a defect this project has shipped four times.
+    The ratios stay in the table where they can be read side by side; the
+    setting moves all of them together.
+    """
+
+    def test_the_two_encoders_do_not_share_a_scale(self) -> None:
+        """x265's numbers are not x264's: the same figure is a softer picture.
+
+        Giving both the same constant would have made every H.265 variant
+        quietly worse than its H.264 twin while the configuration read as if
+        they matched.
+        """
+        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        assert "-crf 23" in config["ffmpeg"]["h264/720"]
+        assert "-crf 28" in config["ffmpeg"]["h265/720"]
+
+    def test_asking_for_sharper_lowers_the_quality_number(self) -> None:
+        config = build_config(
+            make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.SHARP),
+            ["42"],
+        )
+        assert "-crf 20" in config["ffmpeg"]["h264/720"]
+        assert "-crf 25" in config["ffmpeg"]["h265/720"]
+
+    def test_the_valve_opens_with_the_quality(self) -> None:
+        """A cap left where it was would bind before the new quality arrived.
+
+        Then the setting would buy nothing on exactly the busy pictures that
+        motivated raising it.
+        """
+        standard = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"]
+        maximum = build_config(
+            make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.MAXIMUM),
+            ["42"],
+        )["ffmpeg"]
+        assert "-maxrate 6M" in standard["h264/720"]
+        assert "-maxrate 24M" in maximum["h264/720"]
+        assert "-bufsize 48M" in maximum["h264/720"]
 
 
 class TestAudioFollowsVideo:
@@ -226,10 +332,10 @@ class TestAudioFollowsVideo:
 class TestStreamCatalogue:
     """Nine streams per camera: the root plus four heights across two codecs."""
 
-    def test_every_camera_gets_nine_streams(self) -> None:
+    def test_every_camera_gets_thirteen_streams(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         mine = [name for name in config["streams"] if name.startswith("camera_42")]
-        assert len(mine) == 9, sorted(mine)
+        assert len(mine) == 13, sorted(mine)
 
     def test_every_derived_stream_name_states_its_codec(self) -> None:
         """Derived variants never omit their codec; the root has none to state.
@@ -275,11 +381,11 @@ class TestStreamCatalogue:
             "#video=h264/360#audio=copy#audio=aac"
         )
 
-    def test_each_variant_template_sets_its_own_scale_and_bitrate(self) -> None:
+    def test_each_variant_template_sets_its_own_scale_and_ceiling(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         template = config["ffmpeg"]["h264/360"]
-        assert "scale=-2:360" in template
-        assert "-b:v 512k" in template
+        assert "scale=-2:'min(360,ih)'" in template
+        assert "-maxrate 2M" in template
 
     def test_scaling_keeps_the_width_even(self) -> None:
         """`-2` derives an even width; `yuv420p` requires both dimensions even.
@@ -298,25 +404,27 @@ class TestStreamCatalogue:
         assert "scale" not in config["ffmpeg"]["h265"]
         assert "scale" not in config["streams"][stream_name("42")]
 
-    def test_the_source_resolution_codec_streams_are_bitrate_capped(self) -> None:
+    def test_the_source_resolution_codec_streams_are_capped_too(self) -> None:
         """The full-resolution transcodes are real transcodes, not copies.
 
-        Unlike the original root, they are not `#video=copy`, so leaving them
-        without `-b:v` would let libx264/libx265 fall back to CRF-based rate
-        control instead of the documented 2M ceiling.
+        Unlike the original root they are not `#video=copy`, so they need
+        both a quality to aim for and something to stop them. The ceiling is
+        the loosest of any rung because what they are re-encoding is whatever
+        the camera sends -- possibly 4K -- and a valve that binds in normal
+        use would be a bitrate target wearing another name.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "-b:v 2M" in config["ffmpeg"]["h264"]
-        assert "-b:v 2M" in config["ffmpeg"]["h265"]
-        assert "scale" not in config["ffmpeg"]["h264"]
-        assert "scale" not in config["ffmpeg"]["h265"]
+        for codec in ("h264", "h265"):
+            assert "-crf" in config["ffmpeg"][codec]
+            assert "-maxrate 24M" in config["ffmpeg"][codec]
+            assert "scale" not in config["ffmpeg"][codec]
 
 
 class TestStreamDescriptions:
     """What the integration reads instead of hardcoding the list."""
 
     def test_it_describes_every_published_stream(self) -> None:
-        """Against the nine keys literally, not `[s.key for s in STREAM_SPECS]`.
+        """Against the thirteen keys literally, not `[s.key for s in STREAM_SPECS]`.
 
         That comparison is a restatement of the implementation under test: it
         passes for any `STREAM_SPECS`, including an empty one, so it cannot
@@ -327,10 +435,14 @@ class TestStreamDescriptions:
         assert [d["key"] for d in described] == [
             "original",
             "h265",
+            "h265_1440",
+            "h265_1080",
             "h265_720",
             "h265_360",
             "h265_180",
             "h264",
+            "h264_1440",
+            "h264_1080",
             "h264_720",
             "h264_360",
             "h264_180",

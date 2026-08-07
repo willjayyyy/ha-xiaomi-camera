@@ -479,7 +479,7 @@ class BridgeApi:
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
-        quality = request.query.get("quality", "balanced")
+        quality = request.query.get("quality", "medium")
         if quality not in QUALITIES:
             raise web.HTTPBadRequest(
                 text=f"quality must be one of {', '.join(sorted(QUALITIES))}"

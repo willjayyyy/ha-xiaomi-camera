@@ -51,7 +51,7 @@ _EOI = b"\xff\xd9"
 #: Read as a ceiling, never a target. A camera sending less than was asked for
 #: is passed through at its own size; enlarging it would produce a bigger,
 #: blurrier, more expensive picture carrying nothing extra.
-_HEIGHT = {"low": 360, "balanced": 480, "high": 720}
+_HEIGHT = {"low": 360, "medium": 480, "high": 720}
 
 #: The compression every preview uses, on ffmpeg's scale where lower is better.
 #: Fixed rather than exposed: once the picture is scaled to something a card can

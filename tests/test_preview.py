@@ -43,7 +43,7 @@ def url_for(did: str) -> str:
     return f"rtsp://127.0.0.1:8554/camera_{did}"
 
 
-def argv(fps: int = 0, quality: str = "balanced") -> list[str]:
+def argv(fps: int = 0, quality: str = "medium") -> list[str]:
     """The command a source would run, without running it."""
     captured: list[str] = []
 
@@ -170,7 +170,7 @@ class TestJpegCompression:
         assert all(height % 2 == 0 for height in _HEIGHT.values())
 
     def test_higher_quality_is_a_taller_picture(self) -> None:
-        assert _HEIGHT["low"] < _HEIGHT["balanced"] < _HEIGHT["high"]
+        assert _HEIGHT["low"] < _HEIGHT["medium"] < _HEIGHT["high"]
 
 
 class TestSourceCommand:
@@ -225,8 +225,8 @@ class TestAWedgedTeardownStaysContained:
 
     async def test_another_camera_is_still_watchable(self, wedged_ffmpeg) -> None:
         manager = PreviewManager(url_for)
-        await manager.async_frame("A", 0, "balanced")
-        await manager.async_frame("B", 0, "balanced")
+        await manager.async_frame("A", 0, "medium")
+        await manager.async_frame("B", 0, "medium")
 
         # A has left the device list. Its teardown will wedge, in the
         # background, where dropping does not wait for it.
@@ -235,7 +235,7 @@ class TestAWedgedTeardownStaysContained:
 
         try:
             _, frame = await asyncio.wait_for(
-                manager.async_frame("B", 0, "balanced"), timeout=1
+                manager.async_frame("B", 0, "medium"), timeout=1
             )
             assert frame.startswith(b"\xff\xd8")
         finally:
@@ -249,14 +249,14 @@ class TestAWedgedTeardownStaysContained:
         one needed the same lock that teardown was holding.
         """
         manager = PreviewManager(url_for)
-        await manager.async_frame("A", 0, "balanced")
+        await manager.async_frame("A", 0, "medium")
 
         manager.drop({"C"})
         await asyncio.sleep(0.05)
 
         try:
             _, frame = await asyncio.wait_for(
-                manager.async_frame("C", 0, "balanced"), timeout=1
+                manager.async_frame("C", 0, "medium"), timeout=1
             )
             assert frame.startswith(b"\xff\xd8")
         finally:
@@ -300,8 +300,8 @@ class TestDroppingCannotBeBlocked:
     ) -> None:
         """The shape of the failure that shipped: all of them leaving at once."""
         manager = PreviewManager(url_for)
-        await manager.async_frame("A", 0, "balanced")
-        await manager.async_frame("B", 0, "balanced")
+        await manager.async_frame("A", 0, "medium")
+        await manager.async_frame("B", 0, "medium")
 
         try:
             manager.drop(set())
@@ -329,7 +329,7 @@ class TestDroppingCannotBeBlocked:
         monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", never_finishes)
 
         manager = PreviewManager(url_for)
-        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(spawning.wait(), timeout=1)
 
         try:
@@ -366,7 +366,7 @@ class TestASourceStartingWhenItsCameraLeaves:
 
     async def _run(self, held_spawn) -> tuple[PreviewManager, asyncio.Task]:
         manager = PreviewManager(url_for)
-        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(held_spawn.entered.wait(), timeout=1)
         manager.drop({"B"})  # A departs, mid-spawn
         held_spawn.release.set()  # the spawn now completes
@@ -424,9 +424,9 @@ class TestOpeningIsSharedHonestly:
         monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", failing_spawn)
 
         manager = PreviewManager(url_for)
-        first = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        first = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(entered.wait(), timeout=1)
-        second = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        second = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.sleep(0.05)  # let the second one reach the wait
         release.set()
 
@@ -458,7 +458,7 @@ class TestOpeningIsSharedHonestly:
         monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", held_spawn)
 
         manager = PreviewManager(url_for)
-        watching = asyncio.create_task(manager.async_frame("A", 0, "balanced"))
+        watching = asyncio.create_task(manager.async_frame("A", 0, "medium"))
         await asyncio.wait_for(entered.wait(), timeout=1)
         manager.drop({"B"})  # A departs while it is being opened
         release.set()
@@ -498,7 +498,7 @@ class TestATeardownFailureIsNotSwallowed:
         monkeypatch.setattr(preview.asyncio, "create_subprocess_exec", spawn)
 
         manager = PreviewManager(url_for)
-        await manager.async_frame("A", 0, "balanced")
+        await manager.async_frame("A", 0, "medium")
 
         try:
             manager.drop(set())
@@ -540,8 +540,8 @@ class TestShutdownCannotHangTheAddOn:
         monkeypatch.setattr(preview, "_STOP_TIMEOUT", 0.05)
 
         manager = PreviewManager(url_for)
-        await manager.async_frame("A", 0, "balanced")
-        await manager.async_frame("B", 0, "balanced")
+        await manager.async_frame("A", 0, "medium")
+        await manager.async_frame("B", 0, "medium")
         # Held now, because shutting down empties the table -- and with the
         # real teardown replaced, nothing else will ever cancel the readers
         # these sources started.
@@ -580,7 +580,7 @@ class TestTeardownIsBounded:
         self, wedged_ffmpeg, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(preview, "_STOP_TIMEOUT", 0.05)
-        source = _Source("A", url_for("A"), 0, "balanced")
+        source = _Source("A", url_for("A"), 0, "medium")
         await source.async_start()
 
         await asyncio.wait_for(source.async_stop(), timeout=2)
@@ -607,7 +607,7 @@ class TestAStoppedStreamIsReportedSooner:
         monkeypatch.setattr(preview, "_FIRST_FRAME_TIMEOUT", 10)
         monkeypatch.setattr(preview, "_MAX_AGE_SECONDS", 0.2)
 
-        source = _Source("A", url_for("A"), 0, "balanced")
+        source = _Source("A", url_for("A"), 0, "medium")
         await source.async_start()
         try:
             seq, frame = await asyncio.wait_for(source.async_frame(0), timeout=2)

@@ -37,6 +37,7 @@ options:
   rtsp_username: ""
   rtsp_password: ""
   video_quality: low
+  transcode_quality: standard
   enable_audio: false
   log_level: info
   web_password: ""
@@ -49,6 +50,11 @@ schema:
   rtsp_username: str?
   rtsp_password: password?
   video_quality: list(low|high)
+  # How finely the add-on re-encodes what the camera sends -- distinct from
+  # video_quality, which decides what the camera sends in the first place.
+  # Shares no value with it on purpose: the same word in both would read as
+  # one choice offered twice, and the two are independent.
+  transcode_quality: list(standard|sharp|maximum)
   enable_audio: bool
   log_level: list(trace|debug|info|notice|warning|error|fatal)
   # Required when access_mode is 'lan', in every deployment, because that is
