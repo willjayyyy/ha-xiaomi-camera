@@ -34,11 +34,12 @@ import av.error
 from aiohttp import web
 
 from .account import AccountManager, LinkFailedError
-from .config import Options
+from .config import Options, TranscodeQuality, VideoQuality
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
 from .framing import MediaKind
 from .mux import StreamMuxer
 from .redact import safe_error
+from .settings import Defaults, Resolved, SettingsStore
 from .stills import QUALITIES, Stills, StillsError
 from .streaming import StreamError
 from .webauth import SESSION_COOKIE, build_guards, session_token
@@ -120,9 +121,15 @@ class BridgeApi:
         refresh_callback,
         options: Options,
         previews: Stills,
+        settings_store: SettingsStore | None = None,
     ) -> None:
         self._previews = previews
         self._options = options
+        # Optional only so the many tests that build a `BridgeApi` to exercise
+        # one unrelated handler (streaming, previews, linking) do not each
+        # need a store of their own. Every handler that actually reads or
+        # writes settings requires a real one, wired once in `__main__.py`.
+        self._settings_store = settings_store
         self._account = account
         self._registry_provider = registry_provider
         self._sessions_provider = sessions_provider
@@ -168,6 +175,12 @@ class BridgeApi:
                 web.post("/api/login", self._login),
                 web.post("/api/logout", self._logout),
                 web.get("/api/preview/{did}/ws", self._preview_ws),
+                # These belong to the page, not the control plane: the page
+                # is where a person changes them, and the integration has no
+                # business writing video settings over the loopback API.
+                web.get("/api/settings", self._settings),
+                web.put("/api/settings", self._set_defaults),
+                web.put("/api/cameras/{did}/settings", self._set_camera_settings),
                 web.get("/", self._index),
                 web.static("/static", _STATIC_DIR, show_index=False),
             ]
@@ -274,6 +287,17 @@ class BridgeApi:
                         "rtsp_reachable_off_host": (
                             self._restreamer.rtsp_reachable_off_host
                         ),
+                        # Resolved is what the camera actually gets right now
+                        # -- its own override where it has one, the shared
+                        # default otherwise. Override is only what this
+                        # camera says for itself, so the page can show which
+                        # fields are following the default versus set here.
+                        "settings": _settings_dict(
+                            self._settings_store.resolved_for(description.did)
+                        ),
+                        "override": self._settings_store.override_for(
+                            description.did
+                        ).as_dict(),
                     }
                     for description in descriptions
                 ]
@@ -464,6 +488,58 @@ class BridgeApi:
         await self._account.async_unlink()
         await self._refresh_callback()
         return web.json_response({"status": "ok"})
+
+    async def _settings(self, request: web.Request) -> web.Response:
+        """Video settings this page owns, plus a read-only view of the rest.
+
+        The mirror exists so the page can show every setting in one place
+        without becoming a second place to change the ones it does not own.
+        Passwords are not mirrored at all: showing them would put credentials
+        in a response, and there is nothing useful to show about them anyway.
+        """
+        defaults = self._settings_store.defaults
+        return web.json_response(
+            {
+                "defaults": _settings_dict(defaults),
+                "addon": {
+                    "access_mode": self._options.access_mode.value,
+                    "log_level": self._options.log_level,
+                    "rtsp_credentials_set": bool(self._options.rtsp_password),
+                    "web_password_set": bool(self._options.web_password),
+                },
+            }
+        )
+
+    async def _set_defaults(self, request: web.Request) -> web.Response:
+        body = await _json_body(request)
+        try:
+            changes = _settings_changes(body)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        self._settings_store.set_defaults(**changes)
+        # `explicit=True`: someone is looking at the page they just changed a
+        # setting on. Without it a viewer keeps seeing the old picture until
+        # they happen to reconnect, which reads as a setting that did nothing.
+        await self._refresh_callback(explicit=True)
+        return web.json_response({"ok": True})
+
+    async def _set_camera_settings(self, request: web.Request) -> web.Response:
+        did = request.match_info["did"]
+        body = await _json_body(request)
+        try:
+            changes = _settings_changes(body, allow_clear=True)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        session_affecting = {"quality", "audio"} & set(changes)
+        self._settings_store.set_override(did, **changes)
+        sessions: SessionManager | None = self._sessions_provider()
+        if session_affecting and sessions is not None:
+            # Picture size and audio are negotiated when the peer-to-peer
+            # session opens, so this camera's session is reopened -- and only
+            # this camera's.
+            await sessions.async_reload(did)
+        await self._refresh_callback(explicit=True)
+        return web.json_response({"ok": True})
 
     async def _preview_ws(self, request: web.Request) -> web.WebSocketResponse:
         """Pictures from one camera, over one connection.
@@ -666,6 +742,52 @@ async def _json_body(request: web.Request) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise web.HTTPBadRequest(text="expected a JSON object")
     return payload
+
+
+def _settings_dict(settings: Defaults | Resolved) -> dict[str, object]:
+    """`Defaults` and `Resolved` serialised the same way -- they carry the same
+    three fields, and the page has no reason to see them rendered differently.
+    """
+    return {
+        "quality": settings.quality.value,
+        "audio": settings.audio,
+        "transcode_quality": settings.transcode_quality.value,
+    }
+
+
+def _settings_changes(body: dict, *, allow_clear: bool = False) -> dict:
+    """Validated settings from a request body.
+
+    Names the setting and the accepted values in the error. A bare enum
+    ValueError names neither, which leaves someone who sent `"ultra"` with
+    nothing to act on.
+    """
+    changes: dict[str, object] = {}
+    parsers = {
+        "quality": VideoQuality,
+        "transcode_quality": TranscodeQuality,
+    }
+    for key, cls in parsers.items():
+        if key not in body:
+            continue
+        raw = body[key]
+        if raw is None and allow_clear:
+            changes[key] = None
+            continue
+        try:
+            changes[key] = cls(raw)
+        except ValueError:
+            allowed = ", ".join(member.value for member in cls)
+            raise ValueError(f"{key} must be one of {allowed}, not {raw!r}") from None
+    if "audio" in body:
+        raw = body["audio"]
+        if raw is None and allow_clear:
+            changes["audio"] = None
+        elif isinstance(raw, bool):
+            changes["audio"] = raw
+        else:
+            raise ValueError(f"audio must be true or false, not {raw!r}")
+    return changes
 
 
 __all__ = ["BridgeApi"]

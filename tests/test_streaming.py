@@ -22,6 +22,7 @@ from bridge.framing import MediaKind, MediaUnit, SessionStats
 from bridge.framing import ParameterSets as _ParameterSets
 from bridge.mux import AUDIO_CODEC_OPUS
 from bridge.nal import Codec
+from bridge.settings import SettingsStore
 from bridge.streaming import CameraSession, audio_codec_for
 from miot.types import MIoTCameraCodec, MIoTCameraVideoQuality
 
@@ -638,7 +639,9 @@ class TestCamerasEndpointReachability:
     about to show can be rewritten to something reachable off this host.
     """
 
-    async def test_the_field_is_read_from_the_restreamer_not_recomputed(self) -> None:
+    async def test_the_field_is_read_from_the_restreamer_not_recomputed(
+        self, tmp_path
+    ) -> None:
         """Drives the real ``BridgeApi._cameras`` handler over a real
         ``aiohttp`` request/response, the same seam as ``test_the_counter_has_a_writer``
         above, rather than asserting against ``restreamer.rtsp_reachable_off_host``
@@ -685,6 +688,7 @@ class TestCamerasEndpointReachability:
             refresh_callback=None,
             options=None,
             previews=None,
+            settings_store=SettingsStore(tmp_path / "settings.json"),
         )
         app = web.Application()
         app.router.add_get("/api/cameras", api._cameras)

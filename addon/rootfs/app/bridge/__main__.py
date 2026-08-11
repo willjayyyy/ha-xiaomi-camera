@@ -24,12 +24,12 @@ from .config import (
     data_is_ephemeral,
     load_options,
 )
-from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER
+from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER, SETTINGS_FILE
 from .discovery import async_announce, async_withdraw
 from .redact import install as install_redaction
 from .redact import safe_error
 from .restream import Restreamer
-from .settings import Resolved
+from .settings import SettingsStore
 from .stills import Stills
 from .store import CredentialStore
 from .streaming import SessionManager
@@ -57,6 +57,12 @@ class Bridge:
         self._previews = Stills(
             self._restreamer.internal_rtsp_url, self._keyframe_interval
         )
+        # One store for the whole process: the API reads and writes it, the
+        # session manager resolves each camera's picture size and audio from
+        # it, and `async_refresh` resolves the same values for the restreamer.
+        # Three separate stores would each answer "what does this camera get"
+        # independently, and independent answers are exactly what drifts.
+        self._settings = SettingsStore(SETTINGS_FILE)
         self._api = BridgeApi(
             account=self._account,
             registry_provider=lambda: self._registry,
@@ -65,6 +71,7 @@ class Bridge:
             refresh_callback=self.async_refresh,
             options=options,
             previews=self._previews,
+            settings_store=self._settings,
         )
         self._discovery_uuid: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -114,8 +121,14 @@ class Bridge:
 
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 
-    async def async_refresh(self) -> None:
-        """Re-read the camera list and republish the RTSP streams."""
+    async def async_refresh(self, *, explicit: bool = False) -> None:
+        """Re-read the camera list and republish the RTSP streams.
+
+        `explicit` comes from the caller, which already knows why this ran:
+        a settings write someone is watching for versus a background refresh
+        whose viewers should be left on their existing connection. See
+        `Restreamer.async_apply` for what the distinction changes.
+        """
         await self._async_sync_session_binding()
         if self._registry is None:
             return
@@ -145,19 +158,10 @@ class Bridge:
             # device does not keep its native instance alive for the lifetime
             # of the process.
             await self._sessions.async_prune({c.did for c in cameras})
-        # Per-camera overrides are not wired in yet -- every camera resolves
-        # to the add-on's own global settings until the settings store is
-        # connected here. `async_apply` already takes a mapping so that
-        # connecting it changes nothing on this end but the values inside.
+        self._settings.prune({c.did for c in cameras})
         await self._restreamer.async_apply(
-            {
-                c.did: Resolved(
-                    self._options.video_quality,
-                    self._options.enable_audio,
-                    self._options.transcode_quality,
-                )
-                for c in cameras
-            }
+            {c.did: self._settings.resolved_for(c.did) for c in cameras},
+            explicit=explicit,
         )
         self._previews.drop({c.did for c in cameras})
 
@@ -202,19 +206,7 @@ class Bridge:
             return
 
         self._registry = CameraRegistry(client)
-        # SettingsStore is not wired into the process yet -- that arrives in
-        # a later task -- so every camera resolves to the add-on's own
-        # global settings for now. The resolver shape already matches what
-        # the store will provide, so connecting it later changes nothing
-        # here but the values the lambda returns.
-        self._sessions = SessionManager(
-            client,
-            resolver=lambda did: Resolved(
-                self._options.video_quality,
-                self._options.enable_audio,
-                self._options.transcode_quality,
-            ),
-        )
+        self._sessions = SessionManager(client, resolver=self._settings.resolved_for)
 
     async def _refresh_loop(self) -> None:
         while True:
