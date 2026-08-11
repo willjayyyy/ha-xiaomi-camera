@@ -127,7 +127,7 @@ FROM ${BUILD_FROM}
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ARG GO2RTC_VERSION="1.9.9"
+ARG GO2RTC_VERSION="1.9.14"
 ARG TARGETARCH
 
 # The commit this image was built from, passed in by CI. A version number

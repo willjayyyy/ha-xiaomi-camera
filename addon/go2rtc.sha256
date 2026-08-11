@@ -10,5 +10,5 @@
 #     curl -fsSL "https://github.com/AlexxIT/go2rtc/releases/download/v<VERSION>/go2rtc_linux_$a" \
 #       | sha256sum | sed "s|-$|go2rtc_linux_$a|"
 #   done
-aca941066c816cd69f4d689bf556f924057f5087449c2fdd7d5854d9aaec8ea9 go2rtc_linux_amd64
-d13d4d692833d9606ac0d0e25675bba58e804f3f401e4f70761c867f38d2777a go2rtc_linux_arm64
+32d616af226bd731678ffde328b94cfb94e30339bfefc469cfb76323144615a6 go2rtc_linux_amd64
+359fabade8a7a51e81a55fe6df6b0ef81764a5e1d63179577534eaaa71904b50 go2rtc_linux_arm64
