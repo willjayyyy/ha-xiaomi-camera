@@ -13,6 +13,7 @@ import json
 import re
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
 import pytest
 from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
@@ -650,9 +651,31 @@ def test_the_root_never_gets_a_template():
     assert not any(key.startswith(ROOT_KEY) for key in templates)
 
 
-def test_source_for_reads_the_bridges_own_stream_endpoint():
+def test_source_for_points_at_a_route_the_control_plane_actually_serves():
+    """The URL `source_for` hands to go2rtc has to be a route this add-on
+    actually answers.
+
+    Those are two facts owned by two files with nothing else making them
+    agree: renaming the route in `api.py` without a matching change here
+    would leave go2rtc dialing a 404 -- and that failure surfaces only as
+    "the camera never connects", with nothing in the log pointing back to a
+    renamed route.
+
+    `build_control_app` registers its routes from bound methods on `self`
+    without calling any of them or touching account/session state, so a bare
+    instance built without `__init__` is enough to read the route table back
+    -- this does not stand up a server.
+    """
+    from bridge.api import BridgeApi
+
+    app = BridgeApi.__new__(BridgeApi).build_control_app()
+    routes = {resource.canonical for resource in app.router.resources()}
+    assert "/api/stream/{did}" in routes
+
     settings = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
-    assert source_for("42", settings) == f"http://{LOOPBACK}:{API_PORT}/api/stream/42"
+    parsed = urlsplit(source_for("42", settings))
+    assert parsed.port == API_PORT
+    assert parsed.path == "/api/stream/{did}".replace("{did}", "42")
 
 
 def test_source_for_is_the_only_producer_of_a_root_source_url():

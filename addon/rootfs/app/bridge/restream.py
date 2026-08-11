@@ -459,6 +459,10 @@ class Restreamer:
         Compares the whole mapping, not just which cameras exist: a changed
         transcode quality changes which template a stream names, and a
         comparison on the camera set alone would leave the old one running.
+        Equality on a dict ignores key order, which matters because the cloud
+        does not guarantee a stable device order -- treating a reordering as
+        a change would restart go2rtc, dropping every live viewer, on an
+        unrelated refresh.
         """
         if cameras == self._cameras and self._process is not None:
             return
