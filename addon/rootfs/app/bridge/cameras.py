@@ -235,9 +235,32 @@ class CameraRegistry:
         list but absent from ``self._cameras``, and are reported alongside the
         supported ones so this reads as "your camera is on a list" rather than
         as a broken add-on.
+
+        ``get_cameras_async`` itself runs the same unguarded
+        ``model.split(".")[1]`` that ``_device_class`` below guards against,
+        over every device on the account in one loop with no per-device
+        isolation -- confirmed by reading the same pinned SDK source. One
+        dotless model string there raises ``IndexError`` before any of this
+        method's own guarding runs, which is exactly the crash this method
+        exists to prevent, just one call earlier. Caught here rather than
+        left to reach ``/api/cameras`` as a 500 that empties the entire
+        camera list over one unrelated device.
         """
-        self._cameras = await self._client.get_cameras_async()
         all_devices = await self._client.get_devices_async()
+        try:
+            self._cameras = await self._client.get_cameras_async()
+        except IndexError:
+            culprits = [
+                did
+                for did, info in all_devices.items()
+                if _device_class(info.model) == ""
+            ]
+            _LOGGER.error(
+                "get_cameras_async() raised on malformed model string(s) for "
+                "device(s) %s; camera list for this refresh falls back to the "
+                "unfiltered device list below",
+                ", ".join(culprits) if culprits else "<undetermined>",
+            )
         power_states = await self._async_read_power_states(list(self._cameras))
         self._power_states = power_states
 

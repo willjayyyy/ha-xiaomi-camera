@@ -608,6 +608,56 @@ class TestTerminationIsBounded:
         await asyncio.wait_for(restreamer._async_terminate(), timeout=2)
 
 
+class TestGo2rtcSpawnArguments:
+    """go2rtc's `-config` order is load-bearing, not cosmetic.
+
+    `PUT`/`DELETE` on its streams API persist into whichever `-config` path
+    was given *first* -- measured, not assumed (see the module docstring on
+    `_STATE_PATH`). The state file is passed first and the generated
+    configuration second precisely so those writes land in the throwaway
+    file rather than the one this module regenerates. Nothing else pins that
+    order, so a future edit swapping the two arguments would silently
+    reintroduce the corruption this branch fixed, with every test in this
+    file still green.
+    """
+
+    async def test_the_state_file_is_passed_before_the_generated_config(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from bridge import restream
+        from conftest import NeverReportsExit
+
+        state_path = tmp_path / "go2rtc-state.yaml"
+        config_path = tmp_path / "go2rtc.yaml"
+        monkeypatch.setattr(restream, "_STATE_PATH", state_path)
+        monkeypatch.setattr(restream, "_CONFIG_PATH", config_path)
+        monkeypatch.setattr(restream, "_STOP_TIMEOUT", 0.05)
+
+        captured: list[str] = []
+
+        async def fake_exec(*args: str, **kwargs: object) -> NeverReportsExit:
+            captured.extend(args)
+            return NeverReportsExit()
+
+        monkeypatch.setattr(restream.asyncio, "create_subprocess_exec", fake_exec)
+
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        await restreamer.async_start()
+        try:
+            # `NeverReportsExit.stdout` never closes, so `_relay_output` stays
+            # parked reading it and the spawn above never happens a second
+            # time -- give the supervisor task a moment to reach it.
+            await asyncio.sleep(0.05)
+        finally:
+            await restreamer.async_stop()
+
+        positions = [i for i, arg in enumerate(captured) if arg == "-config"]
+        assert len(positions) == 2, f"expected two -config flags, got {captured}"
+        first_value, second_value = (captured[i + 1] for i in positions)
+        assert first_value == str(state_path), "the state file must come first"
+        assert second_value == str(config_path), "the generated config must come second"
+
+
 def test_every_variant_has_a_template_at_every_quality():
     """A stream may name any quality at any time, so all of them exist up front."""
     templates = _encoder_templates()
@@ -972,3 +1022,50 @@ class TestApplyingWithoutRestarting:
         )
 
         assert touched == []
+        # Distinguishes "nothing needed delivering" from "nothing happened
+        # at all": `async_apply` must still have processed the change and
+        # stored the new mapping, not short-circuited before comparing it.
+        assert restreamer._cameras == {
+            "aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD)
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_camera_leaving_the_account_has_its_streams_removed(
+        self, monkeypatch, tmp_path
+    ):
+        """A camera that disappears from the account -- sold, deleted,
+        deauthorized -- must have its streams removed from the running
+        go2rtc, and removing them must not touch a camera that is still
+        there. `_async_deliver`'s removal branch was rewritten and had no
+        test exercising it at all."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        removed: list[str] = []
+        touched: list[str] = []
+
+        class _Api:
+            async def set_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def replace_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def remove_stream(self, name):
+                removed.append(name)
+                return True
+
+        restreamer._api = _Api()
+        standard = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+        await restreamer.async_apply({"aaa": standard, "bbb": standard})
+        removed.clear()
+        touched.clear()
+
+        await restreamer.async_apply({"bbb": standard})
+
+        assert removed, "the departed camera's streams were never removed"
+        assert all(name.startswith("camera_aaa") for name in removed)
+        assert not touched, "the remaining camera's streams were touched for nothing"

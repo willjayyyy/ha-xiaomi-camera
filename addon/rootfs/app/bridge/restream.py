@@ -52,9 +52,11 @@ _CONFIG_PATH = Path("/data/go2rtc.yaml")
 #: neither side can parse, and the next restart would take every stream down
 #: with only a parse error to explain it.
 #:
-#: Passing this file first gives those writes somewhere of their own. It is
-#: read at startup and never written by us; ours is passed second, so where
-#: both name the same stream ours is the one that wins.
+#: Passing this file first gives those writes somewhere of their own. We
+#: write it exactly once -- `_ensure_state_file` creates it if it is missing,
+#: so go2rtc always has somewhere to read at startup -- and never again after
+#: that; ours is passed second, so where both name the same stream ours is
+#: the one that wins.
 _STATE_PATH = Path("/data/go2rtc-state.yaml")
 
 _BINARY = "/usr/local/bin/go2rtc"

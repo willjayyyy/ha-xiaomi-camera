@@ -442,11 +442,16 @@ class _FakeCameraClient:
     async def get_cameras_async(self) -> dict[str, SimpleNamespace]:
         # Mirrors `is_camera_model`'s own two checks: an allowed device class
         # first (real allow_classes is `camera`/`wifispeaker`/`controller`;
-        # only `camera` matters to these tests), then the denylist.
+        # only `camera` matters to these tests), then the denylist. The index
+        # is unguarded, deliberately -- `is_camera_model` itself does
+        # `model.split(".")[1]` with no length check, so a device with no dot
+        # in its model string raises `IndexError` here exactly as it would
+        # against the real SDK, aborting this whole dict comprehension rather
+        # than quietly excluding just that one device.
         return {
             did: d
             for did, d in self._devices.items()
-            if d.model.split(".")[1:2] == ["camera"] and d.model not in _VENDOR_DENYLIST
+            if d.model.split(".")[1] == "camera" and d.model not in _VENDOR_DENYLIST
         }
 
 
