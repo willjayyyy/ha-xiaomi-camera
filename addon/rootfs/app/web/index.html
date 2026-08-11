@@ -121,6 +121,11 @@
   ol li { margin-bottom: 12px; }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 500; white-space: nowrap; }
+  /* `.status`'s own `display` above outranks the browser's default
+     `[hidden] { display: none }` (author styles beat user-agent ones
+     regardless of selector weight), so a hidden status pill needs this
+     restated explicitly or the attribute does nothing. */
+  .status[hidden] { display: none; }
   .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
   /* On a card the state is a label, not a headline: a pill at the size of the
      caption beside it, rather than coloured text competing with the name. */
@@ -207,9 +212,11 @@
   .settings-btn svg { width: 17px; height: 17px; fill: currentColor; }
   .settings-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
   .settings-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .cam-foot { padding: 0 16px 16px; display: flex; align-items: center; gap: 8px; }
-  .cam-note { color: var(--muted); font-size: .88rem; margin: -6px 0 0; padding: 0 16px 16px; }
   .cam.refused .cam-row { padding: 20px 16px; }
+  /* Grid items stretch to the row's tallest card by default -- fine for two
+     full cards with a preview, but a refused card next to one leaves it
+     mostly blank instead of sized to what little it actually has to show. */
+  .cam.refused { align-self: start; }
 
   /* Playback ---------------------------------------------------------------
      A play control shown over a placeholder this page drew itself can stay
@@ -239,7 +246,6 @@
     backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
     opacity: 1;
   }
-  .preview .controls[hidden] { display: none; }
   /* Gated on a real pointer: many mobile browsers latch `:hover` after a tap
      and never release it, so a bare `:hover` rule leaves the controls stuck
      open -- or requiring a second tap -- on the device most viewers hold. */
@@ -312,6 +318,10 @@
   }
   .seg button:hover { border-color: var(--accent); }
   .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; border-color: transparent; }
+  /* The option actually in effect while "Follow default" is what is pressed
+     -- an outline, not a fill, so it reads as information rather than as a
+     second selected state competing with the real one. */
+  .seg button.current { border-color: var(--accent); }
   .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
   /* Overlay ------------------------------------------------------------------
@@ -375,6 +385,14 @@
   .overlay-panel.enlarge .overlay-close:hover { background: rgba(0, 0, 0, .68); }
   .overlay-panel.enlarge .overlay-body { padding: 0; display: flex; }
   .overlay-panel.enlarge img { display: block; max-width: 94vw; max-height: 84vh; margin: auto; }
+  /* Shown in place of the picture when the preview it belongs to fails while
+     enlarged -- see `settle` in `startPreview`. `.placeholder`'s own colour
+     (below, under `.preview`) does not reach here: this sits directly under
+     `.overlay-panel`, not a `.preview`, so the light-on-dark colour is
+     restated for it specifically. */
+  .overlay-panel.enlarge .placeholder {
+    margin: auto; padding: 40px; color: #c7cbd1; font-size: .9rem; text-align: center;
+  }
 
   .msg { padding: 13px 17px; border-radius: 12px; margin-bottom: 16px; display: none; }
   .msg.show { display: block; }
@@ -557,6 +575,7 @@ const I18N = {
     transcodeStandard: "Standard", transcodeSharp: "Sharp", transcodeMaximum: "Maximum",
     followDefault: "Follow default",
     previewGroup: "This viewer only",
+    addressGroup: "Address",
     settingsSaveFailed: "Could not save that setting.",
     // Add-on settings mirror ------------------------------------------------
     addonHeading: "Add-on settings", addonAccess: "Access", addonLogLevel: "Log level",
@@ -617,6 +636,7 @@ const I18N = {
     transcodeStandard: "标准", transcodeSharp: "锐利", transcodeMaximum: "最高",
     followDefault: "跟随默认",
     previewGroup: "仅本设备生效",
+    addressGroup: "地址",
     settingsSaveFailed: "设置未能保存。",
     // Add-on settings mirror ------------------------------------------------
     addonHeading: "加载项设置", addonAccess: "访问方式", addonLogLevel: "日志级别",
@@ -749,6 +769,11 @@ async function refreshStatus() {
       setStatus(t("notConnected"), "warn");
       $("link-btn").hidden = false;
       $("unlink-btn").hidden = true;
+      // Stopped before the markup holding them is discarded -- Disconnect
+      // goes through this branch, and unlike `loadCameras`/`renderCameras`
+      // it used to skip this, leaving any running preview's socket and
+      // peer-to-peer session open with nothing left able to close them.
+      $("cameras").querySelectorAll("[data-preview]").forEach(stopPreview);
       $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("connectToSee"))}</p>`;
       $("defaults-card").hidden = true;
       $("addon-card").hidden = true;
@@ -853,11 +878,23 @@ function savePrefs(did, prefs) {
   } catch { /* private browsing; the setting simply does not persist */ }
 }
 
-function segment(kind, choices, selected) {
-  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label }) =>
-    `<button type="button" data-value="${escapeHtml(value)}" `
-    + `aria-pressed="${String(value) === String(selected)}">${escapeHtml(label)}</button>`
-  ).join("")}</div>`;
+/**
+ * `current` marks which option is actually in effect right now, independent
+ * of `selected` (which option is pressed). The two agree everywhere except a
+ * camera's sheet on a field following the default: there, "Follow default"
+ * is `selected` -- it is the choice that is active, and the one another tap
+ * would change -- while the concrete option matching the resolved value gets
+ * `current`, so the expanded control still answers "what am I getting"
+ * rather than only "what did I choose here". Outside the sheet the two
+ * arguments are always the same value, and `current` marks nothing extra.
+ */
+function segment(kind, choices, selected, current = selected) {
+  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label }) => {
+    const isCurrent = String(value) === String(current) && String(value) !== String(selected);
+    return `<button type="button" data-value="${escapeHtml(value)}" `
+      + `aria-pressed="${String(value) === String(selected)}"`
+      + `${isCurrent ? ' class="current"' : ""}>${escapeHtml(label)}</button>`;
+  }).join("")}</div>`;
 }
 
 function fpsChoices(camera) {
@@ -882,6 +919,15 @@ const SUPPORT_STATES = {
   unsupported: { cls: "err", label: "notSupported" },
 };
 
+/**
+ * A camera's status pill, or `null` for "nothing worth saying".
+ *
+ * A healthy, streamable camera gets no pill at all: a badge on every card
+ * turns the list into a dashboard, and three coloured pills side by side
+ * make the one that actually matters -- a refused camera's red "Not
+ * supported" -- no more prominent than the rest. No pill is what "everything
+ * is fine" looks like; pills are reserved for what is not.
+ */
 function cameraState(camera) {
   if (camera.support !== "full") {
     const state = SUPPORT_STATES[camera.support] || SUPPORT_STATES.unsupported;
@@ -891,7 +937,7 @@ function cameraState(camera) {
   // A switched-off camera answers normally and then sends nothing, so it needs
   // to be called out rather than left looking like a broken stream.
   if (camera.powered_on === false) return { cls: "warn", label: t("switchedOff") };
-  return { cls: "ok", label: t("ready") };
+  return null;
 }
 
 //: Inline rather than an icon font: an icon font is a web font, and this page
@@ -947,8 +993,16 @@ const FOLLOW_DEFAULT = "__follow__";
  * `.seg` control offering every choice. `allowFollow` prepends "Follow
  * default" and is what turns this same row into the one a camera's sheet
  * uses; `rawValue === null` is what "follow default" looks like coming back.
+ *
+ * `resolvedValue` is what the camera is actually getting right now -- from
+ * `settings` on the camera payload, resolved server-side, never recomputed
+ * here. It defaults to `rawValue` itself, which is a no-op everywhere except
+ * a sheet row following the default: there the two differ, and the row's
+ * collapsed value still reads "Follow default" (the copy discipline this
+ * page uses throughout), but the expanded control marks the concrete option
+ * actually in effect -- see `segment`'s `current` parameter.
  */
-function settingRowHtml(field, rawValue, { allowFollow = false } = {}) {
+function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = rawValue } = {}) {
   const choices = [
     ...(allowFollow ? [{ value: FOLLOW_DEFAULT, label: t("followDefault") }] : []),
     ...field.choices(),
@@ -961,7 +1015,7 @@ function settingRowHtml(field, rawValue, { allowFollow = false } = {}) {
       <span class="setting-value" data-value>${escapeHtml(valueLabel)}</span>
       <span class="setting-chevron" aria-hidden="true">›</span>
     </button>
-    <div class="setting-choices" hidden>${segment(field.key, choices, selected)}</div>
+    <div class="setting-choices" hidden>${segment(field.key, choices, selected, String(resolvedValue))}</div>
   </div>`;
 }
 
@@ -1087,6 +1141,13 @@ function initOverlay() {
   overlay.title = $("overlay-title");
   overlay.closeBtn = $("overlay-close");
   overlay.body = $("overlay-body");
+  // The session currently shown enlarged, if any -- the single fact both
+  // `openEnlargePreview`'s close handler and `startPreview`'s `settle`
+  // consult before touching the `<img>` node. See the comment on `settle`
+  // for why two independent answers to "where does this picture live" was
+  // the actual bug, not a missing null check.
+  overlay.previewSession = null;
+  wireCopy(overlay.body);
   overlay.backdrop.addEventListener("click", closeOverlay);
   overlay.closeBtn.addEventListener("click", closeOverlay);
   document.addEventListener("keydown", (event) => {
@@ -1157,11 +1218,26 @@ function renderCameraSheetBody(did) {
   const camera = cameras.find((c) => c.did === did);
   if (!camera || overlay.root.hidden) return;
   const rows = SETTINGS_FIELDS
-    .map((field) => settingRowHtml(field, camera.override[field.key] ?? null, { allowFollow: true }))
+    .map((field) => settingRowHtml(field, camera.override[field.key] ?? null, {
+      allowFollow: true,
+      resolvedValue: camera.settings[field.key],
+    }))
     .join("");
   const prefs = prefsFor(did);
   const fpsField = previewFpsField(camera);
   const qualityField = previewQualityField();
+  // Copying a stream address is a once-per-NVR errand, not something wanted
+  // at a glance every time this page opens -- and the address was truncated
+  // mid-string at a card's width anyway, so it moved here where there is
+  // room to read it and reason to look for it.
+  const address = displayUrl(camera.rtsp_url, camera.rtsp_reachable_off_host);
+  const addressGroup = `
+    <span class="setting-group-label">${escapeHtml(t("addressGroup"))}</span>
+    <div class="row">
+      <code>${escapeHtml(address)}</code>
+      <button class="copy" data-copy="${escapeHtml(address)}">${escapeHtml(t("copy"))}</button>
+    </div>
+    ${camera.rtsp_requires_credentials ? `<p class="hint">${escapeHtml(t("credentialsHint"))}</p>` : ""}`;
   overlay.body.innerHTML = `
     <span class="setting-group-label">${escapeHtml(t("cameraSettings"))}</span>
     <div class="settings-list" data-sheet-camera>${rows}</div>
@@ -1169,7 +1245,8 @@ function renderCameraSheetBody(did) {
     <div class="settings-list" data-sheet-preview>
       ${settingRowHtml(fpsField, prefs.fps)}
       ${settingRowHtml(qualityField, prefs.quality)}
-    </div>`;
+    </div>
+    ${addressGroup}`;
 
   // `_field` supplies what `SETTINGS_FIELDS` cannot for the two preview rows,
   // which the shared row component does not otherwise know how to parse.
@@ -1239,14 +1316,23 @@ function camElementFor(did) {
  */
 function openEnlargePreview(cam) {
   const box = cam.querySelector("[data-preview]");
-  const img = box.querySelector("img.visible");
+  const session = box._preview;
   // No picture yet to enlarge -- a still-connecting or failed card offers no
   // enlarge control, but its picture click delegation would otherwise reach
   // here too before the image exists.
-  if (!img) return;
-  openOverlay("", "enlarge", (body) => body.appendChild(img), () => {
-    const controls = box.querySelector(".controls");
-    box.insertBefore(img, controls || null);
+  if (!session || !session.img.classList.contains("visible")) return;
+  overlay.previewSession = session;
+  openOverlay("", "enlarge", (body) => body.appendChild(session.img), () => {
+    overlay.previewSession = null;
+    // Put the picture back only if this is still the running preview. A
+    // failure while enlarged (`settle`, below) already moved the picture out
+    // from under this session and told the viewer directly in the overlay
+    // itself -- reinserting a frozen frame here, after the card has already
+    // been rebuilt around a retry button with no `.controls` to anchor to,
+    // is the bug this ownership check exists to prevent.
+    if (box._preview === session) {
+      box.insertBefore(session.img, box.querySelector(".controls") || null);
+    }
   });
   overlay.panel.requestFullscreen?.().catch(() => { /* the overlay is already showing */ });
 }
@@ -1271,8 +1357,11 @@ function renderCameras() {
  * and no address -- it cannot stream, and a control promising a picture for
  * one would be a lie. Every other card keeps only what a person does often:
  * play, stop, enlarge, and the control that opens this camera's settings.
- * Everything about *how it is configured* lives behind that control instead
- * of on the card -- see the sheet built by `openCameraSheet`.
+ * Everything about *how it is configured* -- including the RTSP address,
+ * which is copied once while wiring up an NVR and not glanced at on every
+ * visit, and was truncated mid-string at this card width regardless -- lives
+ * behind that control instead of on the card. See the sheet built by
+ * `openCameraSheet`.
  */
 function cameraCardHtml(c) {
   const st = cameraState(c);
@@ -1283,7 +1372,9 @@ function cameraCardHtml(c) {
         c.stream_audio ? ` · ${escapeHtml(t("audioOn"))}` : ""
       }</div>
     </div>
-    <span class="status ${st.cls}" data-status><span class="dot"></span>${escapeHtml(st.label)}</span>
+    <span class="status ${st ? st.cls : ""}" data-status${st ? "" : " hidden"}>${
+      st ? `<span class="dot"></span>${escapeHtml(st.label)}` : ""
+    }</span>
     ${
       c.support === "full"
         ? `<button type="button" class="settings-btn" data-settings-open aria-label="${escapeHtml(t("settingsButton"))}">${ICONS.gear}</button>`
@@ -1295,18 +1386,12 @@ function cameraCardHtml(c) {
     return `<article class="cam refused" data-did="${escapeHtml(c.did)}">${nameRow}</article>`;
   }
 
-  const address = displayUrl(c.rtsp_url, c.rtsp_reachable_off_host);
   return `<article class="cam" data-did="${escapeHtml(c.did)}">
     <div class="preview" data-preview>
       <div class="placeholder">${escapeHtml(t("tapToView"))}</div>
       <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>
     </div>
     ${nameRow}
-    <div class="cam-foot">
-      <code>${escapeHtml(address)}</code>
-      <button class="copy" data-copy="${escapeHtml(address)}">${escapeHtml(t("copy"))}</button>
-    </div>
-    ${c.rtsp_requires_credentials ? `<p class="cam-note">${escapeHtml(t("credentialsHint"))}</p>` : ""}
   </article>`;
 }
 
@@ -1330,22 +1415,29 @@ function wireCameraGrid(container) {
     const settingsBtn = event.target.closest("[data-settings-open]");
     if (settingsBtn) { openCameraSheet(settingsBtn.closest(".cam").dataset.did); return; }
 
-    const copyBtn = event.target.closest("[data-copy]");
-    if (copyBtn) {
-      navigator.clipboard?.writeText(copyBtn.dataset.copy).then(() => {
-        const original = copyBtn.textContent;
-        copyBtn.textContent = t("copied");
-        setTimeout(() => { copyBtn.textContent = original; }, 1500);
-      }).catch(() => { /* clipboard unavailable over plain http; ignore */ });
-      return;
-    }
-
     // The picture itself is a second entrance to the same enlarge handler,
     // once it is playing -- a touch screen has no cursor to hint that it is
     // clickable, so the corner control is what a viewer discovers first, but
     // tapping the picture does the same thing once they know.
     const preview = event.target.closest(".preview[data-playing]");
     if (preview && !event.target.closest("button")) openEnlargePreview(preview.closest(".cam"));
+  });
+}
+
+/**
+ * Wire every `[data-copy]` button inside `container`, once. Used for the
+ * settings sheet's address group -- the only place a copyable address
+ * appears now that the card itself does not carry one.
+ */
+function wireCopy(container) {
+  container.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-copy]");
+    if (!btn) return;
+    navigator.clipboard?.writeText(btn.dataset.copy).then(() => {
+      const original = btn.textContent;
+      btn.textContent = t("copied");
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    }).catch(() => { /* clipboard unavailable over plain http; ignore */ });
   });
 }
 
@@ -1461,6 +1553,10 @@ function startPreview(cam) {
     const next = STATES[reason];
     const badge = cam.querySelector("[data-status]");
     if (!next || !badge) return;
+    // A healthy camera renders this element hidden rather than absent -- see
+    // `cameraCardHtml` -- exactly so there is something here to reveal when
+    // a picture that was working stops being one.
+    badge.hidden = false;
     badge.className = `status ${next.cls}`;
     badge.innerHTML = `<span class="dot"></span>${escapeHtml(t(next.label))}`;
   };
@@ -1473,8 +1569,21 @@ function startPreview(cam) {
     box._preview = null;
     box.removeAttribute("data-playing");
     if (session.socket) session.socket.close();
+    if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
     box.innerHTML = `<div class="placeholder">${escapeHtml(text)}</div>
       <button type="button" class="play-btn" data-retry aria-label="${escapeHtml(t("retry"))}">${ICONS.retry}</button>`;
+    // `box._preview` no longer being `session` (just above) is what
+    // `openEnlargePreview`'s close handler checks before reinserting this
+    // session's picture -- that is the single place ownership of the `<img>`
+    // node is decided, so a failure here does not also need to know where
+    // the node currently lives. It only needs to tell whoever is looking at
+    // it: if this session's picture is the one currently enlarged, the
+    // overlay is showing a frame that just went stale, and it says so rather
+    // than being left frozen and silent while the card underneath it changes.
+    if (overlay.previewSession === session) {
+      overlay.previewSession = null;
+      overlay.body.innerHTML = `<div class="placeholder">${escapeHtml(text)}</div>`;
+    }
   };
 
   const fail = () => {
