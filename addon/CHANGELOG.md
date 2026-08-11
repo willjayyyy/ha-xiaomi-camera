@@ -1,5 +1,31 @@
 # Changelog
 
+## 2.0.0
+
+Picture, sound and transcode quality move to the add-on page and become
+per-camera, and previews there get a lot more useful.
+
+- Picture size, sound and transcode quality are now set per camera, on the
+  add-on page, with a shared default. They used to be one setting for every
+  camera, in the add-on's Supervisor configuration.
+- Changing a setting no longer interrupts the other cameras.
+- Previews on the add-on page start only when you open them, any number can
+  run at once, and each can be enlarged.
+- Cameras the vendor's library does not support are now listed with the
+  reason, instead of quietly missing from the list.
+
+### 中文
+
+画面、声音、转码画质搬到加载项页面，改为每台摄像头单独设置，页面里的预览也
+好用了不少。
+
+- 画质、声音、转码画质改为每台摄像头单独设置，位置移到加载项页面，并带一个
+  共用的默认值。以前是所有摄像头共用一个设置，填在加载项的 Supervisor
+  配置里。
+- 改设置不再打断其他摄像头的画面。
+- 加载项页面的预览改为按需打开，可以同时开任意多个，每个都能放大看。
+- 官方库不支持的机型会列出并说明原因，不再无声消失。
+
 ## 1.4.0
 
 Previews no longer stutter, the add-on is far lighter on the processor, and

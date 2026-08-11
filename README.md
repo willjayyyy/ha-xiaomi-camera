@@ -174,16 +174,18 @@ a snapshot.
 | Stream access | `local` | `local` keeps video on the Home Assistant machine. `lan` shares it with your whole network for tools like Frigate, and then requires a username and password. |
 | RTSP username / password | — | Required when stream access is `lan` |
 | Web page password | — | Required when stream access is `lan`. Optional otherwise, but **if you set it, it is always asked for** — through the Home Assistant panel too. |
-| Video quality | `low` | Enough for a dashboard tile. Higher quality uses more bandwidth. |
-| Include audio | off | Carry the camera's microphone on the published streams |
 | Log level | `info` | Turn up to `debug` when reporting a problem |
+
+Picture size, sound and transcode quality moved off this table: set them per
+camera, with a shared default, on the add-on's own page.
 
 ## Audio
 
-Turn on **Include audio** and the camera's microphone rides along on every
-published stream. The original stream carries it in the camera's own encoding,
-passed through untouched. The H.264 streams — produced for players that cannot
-decode H.265 — additionally offer an AAC copy of the same audio.
+Turn on **Sound** for a camera, on the add-on page, and its microphone rides
+along on every published stream. The original stream carries it in the
+camera's own encoding, passed through untouched. The H.264 streams — produced
+for players that cannot decode H.265 — additionally offer an AAC copy of the
+same audio.
 
 Whether you hear it depends on what plays the stream:
 
