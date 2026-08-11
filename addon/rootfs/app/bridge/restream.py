@@ -33,6 +33,7 @@ from .const import (
     SRTP_PORT,
     WEBRTC_PORT,
 )
+from .go2rtc_api import Go2rtcApi
 from .redact import safe_error
 from .settings import Resolved
 
@@ -380,6 +381,7 @@ class Restreamer:
         self._process: asyncio.subprocess.Process | None = None
         self._supervisor: asyncio.Task[None] | None = None
         self._cameras: dict[str, Resolved] = {}
+        self._api = Go2rtcApi()
 
     @property
     def requires_credentials(self) -> bool:
@@ -453,8 +455,10 @@ class Restreamer:
         )
         return f"rtsp://{credentials}{LOOPBACK}:{RTSP_PORT}/{stream_name(did)}"
 
-    async def async_apply(self, cameras: Mapping[str, Resolved]) -> None:
-        """Write the configuration and (re)start go2rtc if anything changed.
+    async def async_apply(
+        self, cameras: Mapping[str, Resolved], *, explicit: bool = False
+    ) -> None:
+        """Make the running configuration match `cameras`.
 
         Compares the whole mapping, not just which cameras exist: a changed
         transcode quality changes which template a stream names, and a
@@ -463,16 +467,93 @@ class Restreamer:
         does not guarantee a stable device order -- treating a reordering as
         a change would restart go2rtc, dropping every live viewer, on an
         unrelated refresh.
+
+        The file is rewritten first and always: it is what a restart rebuilds
+        from, so a change delivered only to the running process would be
+        undone the next time go2rtc restarted -- silently, and long after the
+        change was made.
+
+        With the file correct, the running process is brought up to date the
+        cheapest way that works. Changing streams in place keeps every viewer
+        connected; a restart drops all of them, and is used only when go2rtc
+        is not running yet or refuses a change.
+
+        `explicit` distinguishes why the mapping changed, and comes from the
+        caller because the caller already knows: a settings write someone is
+        watching for (`explicit=True`) against a background refresh -- a
+        camera's address changing, a periodic re-read of the device list --
+        whose viewers are left on their existing connection.
         """
         if cameras == self._cameras and self._process is not None:
             return
+
+        previous = self._cameras
         self._cameras = dict(cameras)
+        config = build_config(self._options, self._cameras)
         _CONFIG_PATH.write_text(
-            yaml.safe_dump(build_config(self._options, self._cameras), sort_keys=False),
-            encoding="utf-8",
+            yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
         )
-        _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._cameras))
+
+        if self._process is None:
+            _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._cameras))
+            await self.async_restart()
+            return
+
+        if await self._async_deliver(previous, config["streams"], explicit=explicit):
+            _LOGGER.info("Updated %d camera stream(s) in place", len(self._cameras))
+            return
+
+        _LOGGER.info("Could not update streams in place; restarting go2rtc")
         await self.async_restart()
+
+    async def _async_deliver(
+        self,
+        previous: Mapping[str, Resolved],
+        streams: dict[str, str],
+        *,
+        explicit: bool,
+    ) -> bool:
+        """Push the new stream table to the running go2rtc.
+
+        All or nothing: a partial delivery would leave the process in a state
+        no file describes, which is exactly the divided truth this avoids.
+        Any failure along the way -- one removal, one update -- gives up on
+        the whole delivery and lets the caller restart, rather than leaving
+        some streams live and others not.
+
+        Two kinds of change, delivered differently, because `PATCH` changes
+        what a stream *will* dial and never moves a viewer already connected
+        to it -- measured, not assumed (see the go2rtc API findings).
+
+        A camera that changed address is the background case: the source the
+        current viewer holds is already dead, so leaving it alone costs
+        nothing and the repair applies to every later dial. `PATCH` is right,
+        and it writes to no file.
+
+        A setting somebody just changed is the opposite. They are watching
+        and waiting to see it, and a stream that keeps serving the old
+        picture until they happen to reconnect reads as a setting that did
+        nothing. Those streams are replaced, which drops their consumers so
+        they redial -- for that one camera only, which is the price the
+        design accepts for an explicit action and refuses for a background
+        one.
+        """
+        for did in previous:
+            if did in self._cameras:
+                continue
+            for spec in STREAM_SPECS:
+                if not await self._api.remove_stream(stream_name(did, spec.key)):
+                    return False
+        # Which kind of change this is comes from the caller, which knows:
+        # a refresh of the camera list is background, a settings write is
+        # not. Deriving it here instead -- by remembering what each stream
+        # last pointed at and comparing -- would be a second record of
+        # something already known, kept in sync by hand.
+        deliver = self._api.replace_stream if explicit else self._api.set_stream
+        for name, src in streams.items():
+            if not await deliver(name, src):
+                return False
+        return True
 
     async def async_start(self) -> None:
         if self._supervisor is None:

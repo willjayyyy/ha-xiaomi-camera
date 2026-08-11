@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 import pytest
+import yaml
 from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
 from bridge.const import (
     ALL_INTERFACES,
@@ -728,3 +729,160 @@ def test_stream_names_do_not_depend_on_any_setting():
     assert set(build_config(options, plain)["streams"]) == set(
         build_config(options, fancy)["streams"]
     )
+
+
+class TestApplyingWithoutRestarting:
+    """`async_apply` reuses the running go2rtc instead of restarting it,
+    whenever the change can be delivered through its API -- see the module
+    docstring on `Restreamer._async_deliver` for why the two kinds of change
+    it distinguishes are delivered differently.
+    """
+
+    @pytest.mark.asyncio
+    async def test_changing_one_cameras_quality_does_not_restart_go2rtc(
+        self, tmp_path, monkeypatch
+    ):
+        """A restart drops every viewer on every camera. One camera's setting
+        must not cost the other seven their picture."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        restarts = []
+        monkeypatch.setattr(restreamer, "async_restart", lambda: restarts.append(1))
+        monkeypatch.setattr(restreamer, "_process", object())
+        delivered: list[tuple[str, str]] = []
+
+        class _Api:
+            async def set_stream(self, name, src):
+                delivered.append((name, src))
+                return True
+
+            async def remove_stream(self, name):
+                return True
+
+        restreamer._api = _Api()
+
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        )
+        restarts.clear()
+        delivered.clear()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+        )
+
+        assert restarts == []
+        assert any(name == "camera_aaa_h264_360" for name, _ in delivered)
+
+    @pytest.mark.asyncio
+    async def test_a_failed_delivery_falls_back_to_a_restart(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        restarts = []
+
+        async def _fake_restart() -> None:
+            restarts.append(1)
+
+        monkeypatch.setattr(restreamer, "async_restart", _fake_restart)
+        monkeypatch.setattr(restreamer, "_process", object())
+
+        class _Api:
+            async def set_stream(self, name, src):
+                return False
+
+            async def remove_stream(self, name):
+                return False
+
+        restreamer._api = _Api()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        )
+        restarts.clear()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+        )
+        assert restarts == [1]
+
+    @pytest.mark.asyncio
+    async def test_the_file_is_rewritten_even_when_the_change_was_delivered_live(
+        self, monkeypatch, tmp_path
+    ):
+        """The file is the truth. A live delivery that left it stale would be
+        undone by the next restart, silently and hours later."""
+        config_path = tmp_path / "go2rtc.yaml"
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", config_path)
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+
+        class _Api:
+            async def set_stream(self, name, src):
+                return True
+
+            async def remove_stream(self, name):
+                return True
+
+        restreamer._api = _Api()
+
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        )
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM)}
+        )
+
+        # Read back what a restart would rebuild from, not what the mock API
+        # happened to receive. `_encoder_templates()` deliberately emits every
+        # quality's template regardless of what any camera currently asks
+        # for -- see its own docstring -- so both "standard" and "maximum"
+        # templates are present in `ffmpeg` either way; that is what makes
+        # switching a stream to a quality live, without a restart, possible
+        # at all. What the file must get right is which template *this
+        # stream* names, so the check reads the `streams` entry rather than
+        # scanning the whole document for a substring that the `ffmpeg` table
+        # would always contain.
+        written = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        video_360 = written["streams"][stream_name("aaa", "h264_360")]
+        assert "#video=h264/360/maximum" in video_360
+        assert "#video=h264/360/standard" not in video_360
+
+    @pytest.mark.asyncio
+    async def test_a_background_refresh_does_not_drop_viewers(
+        self, monkeypatch, tmp_path
+    ):
+        """A camera changing address in the background must not cost the
+        other seven their picture -- or this one its viewer, whose source is
+        already dead and will be repaired on the next dial."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        used: list[str] = []
+
+        class _Api:
+            async def set_stream(self, name, src):
+                used.append("patch")
+                return True
+
+            async def replace_stream(self, name, src):
+                used.append("replace")
+                return True
+
+            async def remove_stream(self, name):
+                return True
+
+        restreamer._api = _Api()
+        settings = {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        await restreamer.async_apply(settings)
+        used.clear()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+        )
+        assert set(used) == {"patch"}
+        used.clear()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM)},
+            explicit=True,
+        )
+        assert set(used) == {"replace"}
