@@ -95,3 +95,31 @@ async def test_replacing_a_stream_deletes_before_putting():
     api = Go2rtcApi(session_factory=lambda: session)
     assert await api.replace_stream("camera_aaa", "http://x/") is True
     assert [method for method, _ in session.calls] == ["DELETE", "PUT"]
+
+
+@pytest.mark.asyncio
+async def test_removing_a_stream_succeeds():
+    session = _FakeSession({"DELETE": 200})
+    api = Go2rtcApi(session_factory=lambda: session)
+    assert await api.remove_stream("camera_aaa") is True
+    assert [method for method, _ in session.calls] == ["DELETE"]
+
+
+@pytest.mark.asyncio
+async def test_removing_a_stream_sends_the_name_under_src_not_name():
+    """go2rtc's DELETE handler reads the stream name from `src`, unlike
+    PATCH/PUT which use `name`. A `name=` here would silently stop removing
+    streams -- this is the test that would catch that "cleanup"."""
+    session = _FakeSession({"DELETE": 200})
+    api = Go2rtcApi(session_factory=lambda: session)
+    await api.remove_stream("camera_aaa")
+    _, url = session.calls[0]
+    assert url == f"{api._base}?src=camera_aaa"
+
+
+@pytest.mark.asyncio
+async def test_removing_a_stream_reports_failure_on_a_non_2xx_response():
+    session = _FakeSession({"DELETE": 500})
+    api = Go2rtcApi(session_factory=lambda: session)
+    assert await api.remove_stream("camera_aaa") is False
+    assert [method for method, _ in session.calls] == ["DELETE"]

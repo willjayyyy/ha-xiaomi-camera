@@ -64,13 +64,26 @@ class Go2rtcApi:
         `PUT` alone would leave every current viewer on the old source, since
         it does not touch an existing connection either.
         """
-        query = urlencode({"name": name, "src": src})
-        if not await self._call("DELETE", f"{self._base}?{urlencode({'src': name})}"):
+        if not await self._call("DELETE", self._delete_url(name)):
             return False
+        query = urlencode({"name": name, "src": src})
         return await self._call("PUT", f"{self._base}?{query}")
 
     async def remove_stream(self, name: str) -> bool:
-        return await self._call("DELETE", f"{self._base}?{urlencode({'src': name})}")
+        return await self._call("DELETE", self._delete_url(name))
+
+    def _delete_url(self, name: str) -> str:
+        """The URL for deleting one stream by name.
+
+        Not `?name=<name>`, unlike every other verb here: go2rtc's `DELETE
+        /api/streams` handler is `delete(streams, src)` -- it reads the
+        stream name out of the `src` query parameter, not `name`. This is
+        not a typo carried over from `set_stream`/`replace_stream`; it is
+        go2rtc's own inconsistency, in the same handler its author annotated
+        "Not sure about all this API. Should be rewrited...". Fixing it here
+        to `name=` would silently break stream removal.
+        """
+        return f"{self._base}?{urlencode({'src': name})}"
 
     async def _call(self, method: str, url: str) -> bool:
         try:
