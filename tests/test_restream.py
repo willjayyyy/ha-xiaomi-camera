@@ -29,6 +29,7 @@ from bridge.restream import (
     Restreamer,
     StreamSpec,
     _audio_codecs,
+    _encoder_templates,
     build_config,
     stream_name,
 )
@@ -154,7 +155,7 @@ class TestStreamSources:
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert config["streams"][stream_name("42", "h264")].endswith(
-            "#video=h264#audio=copy#audio=aac"
+            "#video=h264/standard#audio=copy#audio=aac"
         )
         assert stream_name("42", "h264") != stream_name("42")
 
@@ -165,23 +166,23 @@ class TestStreamSources:
         the better encoder at a given bitrate.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "libx264" in config["ffmpeg"]["h264"]
-        assert "libopenh264" not in config["ffmpeg"]["h264"]
+        assert "libx264" in config["ffmpeg"]["h264/standard"]
+        assert "libopenh264" not in config["ffmpeg"]["h264/standard"]
 
     def test_h265_is_encoded_with_the_standard_encoder(self) -> None:
         """libx265 rather than kvazaar, in the full-size and scaled forms."""
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "libx265" in config["ffmpeg"]["h265"]
-        assert "kvazaar" not in config["ffmpeg"]["h265"]
-        assert "libx265" in config["ffmpeg"]["h265/360"]
-        assert "kvazaar" not in config["ffmpeg"]["h265/360"]
+        assert "libx265" in config["ffmpeg"]["h265/standard"]
+        assert "kvazaar" not in config["ffmpeg"]["h265/standard"]
+        assert "libx265" in config["ffmpeg"]["h265/360/standard"]
+        assert "kvazaar" not in config["ffmpeg"]["h265/360/standard"]
 
     def test_both_encoders_shorten_the_keyframe_interval(self) -> None:
         """go2rtc defaults to -g 50; HLS cannot start anywhere but a keyframe."""
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "-g 25" in config["ffmpeg"]["h264"]
-        assert "-g 25" in config["ffmpeg"]["h265"]
-        assert "-g 25" in config["ffmpeg"]["h265/360"]
+        assert "-g 25" in config["ffmpeg"]["h264/standard"]
+        assert "-g 25" in config["ffmpeg"]["h265/standard"]
+        assert "-g 25" in config["ffmpeg"]["h265/360/standard"]
 
     def test_quality_is_targeted_and_bandwidth_only_capped(self) -> None:
         """Constant quality with a safety valve, not a bitrate to fill.
@@ -198,7 +199,7 @@ class TestStreamSources:
         configuration is written. A quality target needs no such knowledge.
         """
         template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264/720"
+            "h264/720/standard"
         ]
         assert "-crf 23" in template
         assert "-b:v" not in template, "a target would defeat the point of -crf"
@@ -208,7 +209,7 @@ class TestStreamSources:
     def test_the_full_size_variant_is_sized_too(self) -> None:
         """The rung a bitrate could never size, because its height is unknown."""
         template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264"
+            "h264/standard"
         ]
         assert "-crf 23" in template
         assert "-maxrate 24M" in template
@@ -222,7 +223,7 @@ class TestStreamSources:
         answer this differently.
         """
         template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264/1440"
+            "h264/1440/standard"
         ]
         assert "scale=-2:'min(1440,ih)'" in template
 
@@ -253,16 +254,16 @@ class TestTranscodeQualityMovesOneKnob:
         they matched.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "-crf 23" in config["ffmpeg"]["h264/720"]
-        assert "-crf 28" in config["ffmpeg"]["h265/720"]
+        assert "-crf 23" in config["ffmpeg"]["h264/720/standard"]
+        assert "-crf 28" in config["ffmpeg"]["h265/720/standard"]
 
     def test_asking_for_sharper_lowers_the_quality_number(self) -> None:
         config = build_config(
             make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.SHARP),
             ["42"],
         )
-        assert "-crf 20" in config["ffmpeg"]["h264/720"]
-        assert "-crf 25" in config["ffmpeg"]["h265/720"]
+        assert "-crf 20" in config["ffmpeg"]["h264/720/sharp"]
+        assert "-crf 25" in config["ffmpeg"]["h265/720/sharp"]
 
     def test_the_valve_opens_with_the_quality(self) -> None:
         """A cap left where it was would bind before the new quality arrived.
@@ -275,9 +276,9 @@ class TestTranscodeQualityMovesOneKnob:
             make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.MAXIMUM),
             ["42"],
         )["ffmpeg"]
-        assert "-maxrate 6M" in standard["h264/720"]
-        assert "-maxrate 24M" in maximum["h264/720"]
-        assert "-bufsize 48M" in maximum["h264/720"]
+        assert "-maxrate 6M" in standard["h264/720/standard"]
+        assert "-maxrate 24M" in maximum["h264/720/maximum"]
+        assert "-bufsize 48M" in maximum["h264/720/maximum"]
 
 
 class TestAudioFollowsVideo:
@@ -378,12 +379,12 @@ class TestStreamCatalogue:
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         assert config["streams"][stream_name("42", "h264_360")].endswith(
-            "#video=h264/360#audio=copy#audio=aac"
+            "#video=h264/360/standard#audio=copy#audio=aac"
         )
 
     def test_each_variant_template_sets_its_own_scale_and_ceiling(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        template = config["ffmpeg"]["h264/360"]
+        template = config["ffmpeg"]["h264/360/standard"]
         assert "scale=-2:'min(360,ih)'" in template
         assert "-maxrate 2M" in template
 
@@ -392,16 +393,20 @@ class TestStreamCatalogue:
 
         go2rtc's own `#height=` parameter emits `-1`, which can produce an odd
         width, so it is deliberately not used.
+
+        A scaled template's name carries a height as its middle segment --
+        `h264/360/standard` -- while a full-size one does not, so the segment
+        count is what tells the two apart now that quality names every entry.
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         for name, template in config["ffmpeg"].items():
-            if "/" in name:
+            if name.count("/") == 2:
                 assert "scale=-2:" in template, name
 
     def test_the_source_resolution_streams_do_not_scale(self) -> None:
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
-        assert "scale" not in config["ffmpeg"]["h264"]
-        assert "scale" not in config["ffmpeg"]["h265"]
+        assert "scale" not in config["ffmpeg"]["h264/standard"]
+        assert "scale" not in config["ffmpeg"]["h265/standard"]
         assert "scale" not in config["streams"][stream_name("42")]
 
     def test_the_source_resolution_codec_streams_are_capped_too(self) -> None:
@@ -415,9 +420,10 @@ class TestStreamCatalogue:
         """
         config = build_config(make_options(AccessMode.LOCAL), ["42"])
         for codec in ("h264", "h265"):
-            assert "-crf" in config["ffmpeg"][codec]
-            assert "-maxrate 24M" in config["ffmpeg"][codec]
-            assert "scale" not in config["ffmpeg"][codec]
+            template = config["ffmpeg"][f"{codec}/standard"]
+            assert "-crf" in template
+            assert "-maxrate 24M" in template
+            assert "scale" not in template
 
 
 class TestStreamDescriptions:
@@ -574,3 +580,47 @@ class TestTerminationIsBounded:
         restreamer._process = NeverReportsExit()
 
         await asyncio.wait_for(restreamer._async_terminate(), timeout=2)
+
+
+def test_every_variant_has_a_template_at_every_quality():
+    """A stream may name any quality at any time, so all of them exist up front."""
+    templates = _encoder_templates()
+    for spec in STREAM_SPECS:
+        if spec.key == ROOT_KEY:
+            continue
+        for quality in TranscodeQuality:
+            assert spec.template_for(quality) in templates
+
+
+def test_template_names_carry_the_quality():
+    spec = StreamSpec("h264_360", "h264", 360, "2M")
+    assert spec.template_for(TranscodeQuality.SHARP) == "h264/360/sharp"
+    full = StreamSpec("h264", "h264", None, "24M")
+    assert full.template_for(TranscodeQuality.MAXIMUM) == "h264/maximum"
+
+
+def test_quality_changes_the_crf_and_the_ceiling_together():
+    """A finer picture with the old cap would bind before the detail arrived."""
+    templates = _encoder_templates()
+    standard = templates["h264/360/standard"]
+    maximum = templates["h264/360/maximum"]
+    assert "-crf 23" in standard
+    assert "-crf 17" in maximum
+    assert "-maxrate 2M" in standard
+    assert "-maxrate 8M" in maximum
+
+
+def test_h265_asks_for_a_higher_crf_than_h264_for_the_same_picture():
+    templates = _encoder_templates()
+    assert "-crf 23" in templates["h264/720/standard"]
+    assert "-crf 28" in templates["h265/720/standard"]
+
+
+def test_scaling_never_enlarges_a_smaller_source():
+    templates = _encoder_templates()
+    assert "scale=-2:'min(360,ih)'" in templates["h264/360/standard"]
+
+
+def test_the_root_never_gets_a_template():
+    templates = _encoder_templates()
+    assert not any(key.startswith(ROOT_KEY) for key in templates)

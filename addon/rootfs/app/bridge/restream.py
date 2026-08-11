@@ -133,19 +133,22 @@ class StreamSpec:
     #: busy picture running away with the network.
     ceiling: str
 
-    @property
-    def template(self) -> str:
-        """The go2rtc encoder template this variant asks for.
+    def template_for(self, quality: TranscodeQuality) -> str:
+        """The go2rtc encoder template this variant asks for at this quality.
 
-        go2rtc looks the name up in its `ffmpeg` map, so a variant needs its
-        own entry there -- `h264/360` and friends, generated below. Passing
-        scale and quality through `#raw=` instead does not work: go2rtc
-        appends the `#video=` template's arguments afterwards, and ffmpeg
-        takes the last of any argument it is given twice.
+        go2rtc looks the name up in its `ffmpeg` map by whole string, without
+        parsing it, so the quality can be part of the name. That is what makes
+        a quality change a *stream* change: every combination already exists in
+        the table, and the stream simply names a different one. The table
+        itself is process-level and could not be changed without a restart.
+
+        Passing scale and quality through `#raw=` instead does not work:
+        go2rtc appends the `#video=` template's arguments afterwards, and
+        ffmpeg takes the last of any argument it is given twice.
         """
         if self.height is None:
-            return self.codec
-        return f"{self.codec}/{self.height}"
+            return f"{self.codec}/{quality.value}"
+        return f"{self.codec}/{self.height}/{quality.value}"
 
 
 #: A height is a ceiling, never a target: a camera sending less than a rung
@@ -239,50 +242,53 @@ def _rate(bits: int) -> str:
     return f"{bits // 1_000}k"
 
 
-def _encoder_templates(quality: TranscodeQuality) -> dict[str, str]:
-    """One go2rtc encoder template per published variant.
+def _encoder_templates() -> dict[str, str]:
+    """One go2rtc encoder template per published variant, at every quality.
 
-    Merged into go2rtc's own table, so these names -- `h264`, `h264/360` and
-    so on -- become valid `#video=` values.
+    Merged into go2rtc's own table, so these names -- `h264/360/sharp` and so
+    on -- become valid `#video=` values. All of them are generated whether or
+    not any camera currently asks for them: the table is read once at startup,
+    so a name absent from it cannot be adopted later without restarting the
+    process and dropping every live viewer.
 
     Quality is asked for, and bandwidth is only capped. A bitrate target
     spends its whole allowance on a still room at night and then runs out on
     the one second somebody walks through it, which is backwards: a viewer
-    perceives the picture, not the byte count, and a camera pointed at a
-    room that rarely changes is the case this add-on exists for. `-crf` asks
-    for a quality and spends what that costs; `-maxrate` is the valve that
-    keeps an unusually busy picture off the network's back.
+    perceives the picture, not the byte count. `-crf` asks for a quality and
+    spends what that costs; `-maxrate` is the valve that keeps an unusually
+    busy picture off the network's back.
 
     It also settles what no bitrate could. The full-size variants re-encode
-    whatever resolution the camera happens to send, and that is not known
-    when this file is written -- a figure picked here would be far too small
-    for a 4K sensor and wasteful on a 480p one. A quality target needs no
-    such knowledge.
+    whatever resolution the camera happens to send, and that is not known when
+    this file is written -- a figure picked here would be far too small for a
+    4K sensor and wasteful on a 480p one. A quality target needs no such
+    knowledge.
     """
     base = {"h264": _H264_ENCODER, "h265": _H265_ENCODER}
-    templates = dict(base)
-    for spec in STREAM_SPECS:
-        if spec.key == ROOT_KEY:
-            # The root is served directly from the endpoint and carries no
-            # `#video=` argument, so it keeps no template here.
-            continue
-        # The buffer holds two seconds at the ceiling: long enough to spend on
-        # a keyframe without the frames after it paying for the whole burst.
-        ceiling = _bits(spec.ceiling) * _CEILING_MULTIPLIER[quality]
-        template = (
-            f"{base[spec.codec]} -crf {_CRF[spec.codec][quality]} "
-            f"-maxrate {_rate(ceiling)} -bufsize {_rate(ceiling * 2)}"
-        )
-        if spec.height is not None:
-            # `min(..., ih)` rather than the height alone, so a camera that
-            # already sends less is published at its own size instead of being
-            # stretched -- more bandwidth and more work for a softer picture
-            # than the source. Quoted because `min` takes a comma, which would
-            # otherwise read as the end of this filter; go2rtc splits its
-            # templates on whitespace and leaves a token that does not begin
-            # with a quote alone, so ffmpeg receives this exactly as written.
-            template += f" -vf scale=-2:'min({spec.height},ih)'"
-        templates[spec.template] = template
+    templates: dict[str, str] = {}
+    for quality in TranscodeQuality:
+        for spec in STREAM_SPECS:
+            if spec.key == ROOT_KEY:
+                # The root is served directly from the endpoint and carries no
+                # `#video=` argument, so it keeps no template here.
+                continue
+            # The buffer holds two seconds at the ceiling: long enough to spend
+            # on a keyframe without the frames after it paying for the burst.
+            ceiling = _bits(spec.ceiling) * _CEILING_MULTIPLIER[quality]
+            template = (
+                f"{base[spec.codec]} -crf {_CRF[spec.codec][quality]} "
+                f"-maxrate {_rate(ceiling)} -bufsize {_rate(ceiling * 2)}"
+            )
+            if spec.height is not None:
+                # `min(..., ih)` rather than the height alone, so a camera that
+                # already sends less is published at its own size instead of
+                # being stretched -- more bandwidth and more work for a softer
+                # picture than the source. Quoted because `min` takes a comma,
+                # which would otherwise read as the end of this filter; go2rtc
+                # leaves a token that does not begin with a quote alone, so
+                # ffmpeg receives this exactly as written.
+                template += f" -vf scale=-2:'min({spec.height},ih)'"
+            templates[spec.template_for(quality)] = template
     return templates
 
 
@@ -319,7 +325,8 @@ def build_config(options: Options, dids: list[str]) -> dict:
             # Named after the root rather than repeating its URL, so all of
             # them share one session on the camera instead of opening several.
             streams[stream_name(did, spec.key)] = (
-                f"ffmpeg:{root}#video={spec.template}{audio}"
+                f"ffmpeg:{root}#video="
+                f"{spec.template_for(options.transcode_quality)}{audio}"
             )
 
     config: dict = {
@@ -337,7 +344,7 @@ def build_config(options: Options, dids: list[str]) -> dict:
         # contradict the loopback-only guarantee of `local` mode.
         "srtp": {"listen": f"{LOOPBACK}:{SRTP_PORT}"},
         "streams": streams,
-        "ffmpeg": _encoder_templates(options.transcode_quality),
+        "ffmpeg": _encoder_templates(),
     }
 
     if options.requires_credentials:
