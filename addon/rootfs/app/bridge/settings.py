@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -123,9 +124,6 @@ class SettingsStore:
     def resolved_for(self, did: str) -> Resolved:
         return resolve(self._defaults, self._cameras.get(did))
 
-    def resolved_all(self, dids: list[str]) -> dict[str, Resolved]:
-        return {did: self.resolved_for(did) for did in dids}
-
     def set_defaults(
         self,
         *,
@@ -226,8 +224,18 @@ class SettingsStore:
             },
         }
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        self._path.chmod(_OWNER_READ_WRITE)
+        temporary = self._path.with_suffix(".tmp")
+        # Opened with the restrictive mode rather than chmod'ed afterwards:
+        # the latter leaves a window in which the file exists world-readable.
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_READ_WRITE
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+        # Atomic replace keeps a crash mid-write from leaving a half-written
+        # file that would read as corrupt and silently discard every
+        # camera's settings back to factory defaults.
+        temporary.replace(self._path)
 
 
 def _defaults_from(raw: dict) -> Defaults:
