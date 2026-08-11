@@ -264,10 +264,13 @@ async def async_main() -> int:
             DATA_DIR,
         )
 
+    # No picture size here any more: it is per camera and lives in the
+    # settings store, so printing the add-on option would show someone
+    # diagnosing a stream a value that decides nothing. What was adopted from
+    # it, if anything, is logged once by `SettingsStore.seed_from_options`.
     _LOGGER.info(
-        "Starting bridge (access_mode=%s, quality=%s, supervised=%s, build=%s)",
+        "Starting bridge (access_mode=%s, supervised=%s, build=%s)",
         options.access_mode.value,
-        options.video_quality.value,
         options.supervised,
         build_ref(),
     )

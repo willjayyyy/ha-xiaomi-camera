@@ -133,6 +133,7 @@ class _Camera:
             "powered_on": True,
             "requires_pin": False,
             "support": self.support,
+            "publishable": self.publishable,
         }
 
 
@@ -411,3 +412,6 @@ async def test_a_refused_camera_reaches_the_page_with_its_support_level(
     assert dids == {"aaa", "bbb"}
     refused = next(c for c in body["cameras"] if c["did"] == "bbb")
     assert refused["support"] == "unsupported"
+    # The page asks this rather than re-deriving it from `support`, so it has
+    # to arrive on the wire.
+    assert refused["publishable"] is False

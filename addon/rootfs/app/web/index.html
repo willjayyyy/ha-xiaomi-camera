@@ -564,7 +564,7 @@ const I18N = {
     connectToSee: "Connect your Xiaomi account to see your cameras.",
     noCameras: "No supported cameras found on this account.",
     loadFailed: "Could not load the camera list.",
-    ready: "Ready", offline: "Offline", switchedOff: "Switched off",
+    offline: "Offline", switchedOff: "Switched off",
     connecting: "Connecting…",
     previewFailed: "Could not load the picture",
     cameraOffHint: "Turn the camera on to see a picture",
@@ -625,7 +625,7 @@ const I18N = {
     connectToSee: "连接小米账号后即可看到你的摄像头。",
     noCameras: "该账号下没有找到受支持的摄像头。",
     loadFailed: "无法加载摄像头列表。",
-    ready: "就绪", offline: "离线", switchedOff: "已关闭",
+    offline: "离线", switchedOff: "已关闭",
     connecting: "连接中…",
     previewFailed: "无法加载画面",
     cameraOffHint: "打开摄像头后才能看到画面",
@@ -936,9 +936,17 @@ const SUPPORT_STATES = {
  * make the one that actually matters -- a refused camera's red "Not
  * supported" -- no more prominent than the rest. No pill is what "everything
  * is fine" looks like; pills are reserved for what is not.
+ *
+ * Whether a camera can be published is read from `publishable`, which the
+ * add-on sends, rather than compared against `support` here. One function
+ * over there answers that question for the stream table, the session manager
+ * and the control plane's camera list; the page asking it a fourth way is how
+ * a later support level ends up meaning different things on either side of
+ * the wire. `support` is still read below -- but only for *which* pill, which
+ * is a question about the reason, not about the decision.
  */
 function cameraState(camera) {
-  if (camera.support !== "full") {
+  if (!camera.publishable) {
     const state = SUPPORT_STATES[camera.support] || SUPPORT_STATES.unsupported;
     return { cls: state.cls, label: t(state.label) };
   }
@@ -1108,6 +1116,16 @@ async function applyDefaultChange(key, value) {
     });
     if (!response.ok) throw new Error(await response.text());
     defaults = { ...defaults, [key]: value };
+    // Every camera that says nothing for itself on this field is now getting
+    // the new value, so its resolved settings say so too. Without this the
+    // sheet rebuilt below reads back the value it was resolved to a moment
+    // ago -- and the marker showing what a camera is actually getting is the
+    // one thing on that row that must not be a moment out of date.
+    for (const camera of cameras) {
+      if (camera.override?.[key] == null) {
+        camera.settings = { ...camera.settings, [key]: value };
+      }
+    }
     // A camera's sheet may be open on this same field showing "Follow
     // default" -- its value label is the default's own value, which just
     // changed underneath it. Cheaper to rebuild the open sheet than to track
@@ -1385,13 +1403,13 @@ function cameraCardHtml(c) {
       st ? `<span class="dot"></span>${escapeHtml(st.label)}` : ""
     }</span>
     ${
-      c.support === "full"
+      c.publishable
         ? `<button type="button" class="settings-btn" data-settings-open aria-label="${escapeHtml(t("settingsButton"))}">${ICONS.gear}</button>`
         : ""
     }
   </div>`;
 
-  if (c.support !== "full") {
+  if (!c.publishable) {
     return `<article class="cam refused" data-did="${escapeHtml(c.did)}">${nameRow}</article>`;
   }
 

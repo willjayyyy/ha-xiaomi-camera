@@ -446,7 +446,7 @@ class _FakeCameraClient:
         return {
             did: d
             for did, d in self._devices.items()
-            if d.model.split(".")[1] == "camera" and d.model not in _VENDOR_DENYLIST
+            if d.model.split(".")[1:2] == ["camera"] and d.model not in _VENDOR_DENYLIST
         }
 
 
@@ -477,13 +477,41 @@ async def test_a_refused_model_is_listed_rather_than_silently_dropped() -> None:
     # (design notes 1.4), so this add-on marks it "limited" -- not "full",
     # which is reserved for a model it actually streams today, and not
     # "unsupported", which would understate that a real path exists.
-    assert _by_did(descriptions, "bbb").support in {"limited", "unsupported"}
+    assert _by_did(descriptions, "bbb").support == "limited"
 
 
 async def test_a_refused_model_is_not_offered_a_working_stream() -> None:
     """It is listed so it can be explained, not so it can appear to work."""
     descriptions = await _describe([_device("bbb", "chuangmi.camera.ipc019")])
     assert _by_did(descriptions, "bbb").online is False
+
+
+async def test_one_device_with_an_odd_model_string_does_not_hide_the_cameras() -> None:
+    """Whatever else is on the account is not this add-on's to validate.
+
+    Every model seen so far reads `<vendor>.<class>.<variant>`, but the list
+    comes from the user's account, and one device that does not must not turn
+    `/api/cameras` into a 500 -- every camera would vanish at once, which
+    reads as the add-on being broken rather than as one odd device.
+    """
+    descriptions = await _describe(
+        [_device("aaa", "chuangmi.camera.81ac1"), _device("odd", "gateway")]
+    )
+    assert {d.did for d in descriptions} == {"aaa"}
+
+
+async def test_the_wire_format_carries_the_publishing_decision() -> None:
+    """`publishable` is one property for a reason -- see its docstring. A
+    payload that stated only `support` would hand the same question back to
+    the page, which is where the fourth support level would be forgotten."""
+    descriptions = await _describe(
+        [
+            _device("aaa", "chuangmi.camera.81ac1"),
+            _device("bbb", "chuangmi.camera.ipc019"),
+        ]
+    )
+    assert _by_did(descriptions, "aaa").as_dict()["publishable"] is True
+    assert _by_did(descriptions, "bbb").as_dict()["publishable"] is False
 
 
 async def test_a_refused_models_support_level_follows_the_go2rtc_protocol() -> None:

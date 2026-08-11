@@ -78,6 +78,21 @@ _GO2RTC_TUTK_RISKY_MODELS = frozenset(
 )
 
 
+def _device_class(model: str) -> str:
+    """The device class in a MIoT model string, or ``""`` if it has none.
+
+    Models read ``<vendor>.<class>.<variant>``, and every device the cloud has
+    returned so far does. But this list is whatever is on the user's account,
+    and one device with an unexpected model string must not be able to take
+    the whole camera list down with an ``IndexError`` -- ``/api/cameras``
+    would answer 500 and every camera would disappear at once, which reads as
+    the add-on being broken rather than as one odd device. An unrecognisable
+    model is simply not a camera as far as this is concerned.
+    """
+    parts = model.split(".")
+    return parts[1] if len(parts) > 1 else ""
+
+
 def _support_for_refused_model(model: str) -> str:
     """Support level for a camera model the vendor library refuses.
 
@@ -143,6 +158,13 @@ class CameraDescription:
             "powered_on": self.powered_on,
             "requires_pin": self.requires_pin,
             "support": self.support,
+            # Sent as its own field rather than left for the reader to derive
+            # from `support`. The property above exists so that one function
+            # answers "may this camera be published"; dropping it from the
+            # wire would hand the same question back to every consumer on the
+            # other side, and a fourth support level would then have to be
+            # remembered in each of them.
+            "publishable": self.publishable,
         }
 
 
@@ -245,7 +267,7 @@ class CameraRegistry:
             # model string). Devices of other classes -- lights, speakers,
             # whatever else shares the account -- do not belong on a camera
             # list even though they too were dropped by ``get_cameras_async``.
-            if info.model.split(".")[1] != "camera":
+            if _device_class(info.model) != "camera":
                 continue
             refused_count += 1
             descriptions.append(
