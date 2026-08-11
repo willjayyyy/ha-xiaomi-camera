@@ -184,6 +184,12 @@ class SettingsStore:
         Returns whether anything was written. Only runs when no file exists:
         after that the page owns these values and the add-on configuration is
         no longer consulted for them.
+
+        The values are named in the log line rather than merely counted. This
+        read happens exactly once per install and cannot be repeated, so it is
+        the only chance to see whether the user's own settings were adopted or
+        whether factory values were -- and a line that reads the same either
+        way is precisely the silent failure this project keeps meeting.
         """
         if self._path.exists():
             return False
@@ -193,7 +199,13 @@ class SettingsStore:
             transcode_quality=options.transcode_quality,
         )
         self._save()
-        _LOGGER.info("Adopted video settings from the add-on configuration")
+        _LOGGER.info(
+            "Adopted video settings from the add-on configuration: "
+            "quality=%s, audio=%s, transcode_quality=%s",
+            self._defaults.quality.value,
+            self._defaults.audio,
+            self._defaults.transcode_quality.value,
+        )
         return True
 
     def _load(self) -> None:
@@ -245,7 +257,13 @@ def _defaults_from(raw: dict) -> Defaults:
             audio=bool(raw["audio"]),
             transcode_quality=TranscodeQuality(raw["transcode_quality"]),
         )
-    except Exception:
+    except Exception as err:
+        # Same choice as `_load`'s handler -- carry on with factory values
+        # rather than refuse to start -- and it is said out loud for the same
+        # reason. A `defaults` section that no longer parses reverts every
+        # camera that follows the default to factory settings, which looks to
+        # the user like the add-on quietly changed its mind.
+        _LOGGER.warning("Unreadable default video settings, using factory: %s", err)
         return _FACTORY
 
 

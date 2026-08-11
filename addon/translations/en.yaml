@@ -26,6 +26,27 @@ configuration:
       Xiaomi account. Required when stream access is "lan", because that puts the
       page on your network. Optional otherwise — but if you set it, it is always
       asked for, in every deployment and through the Home Assistant panel as well.
+  video_quality:
+    name: Video quality (moved)
+    description: >-
+      Now set per camera on this add-on's own page, under Home Assistant's sidebar.
+      This entry is only here to carry your old value across the upgrade to 2.0:
+      it is read once, the first time 2.0 starts, and ignored after that —
+      changing it here later has no effect. A future release removes it.
+  transcode_quality:
+    name: Transcode quality (moved)
+    description: >-
+      Now set per camera on this add-on's own page, under Home Assistant's sidebar.
+      This entry is only here to carry your old value across the upgrade to 2.0:
+      it is read once, the first time 2.0 starts, and ignored after that —
+      changing it here later has no effect. A future release removes it.
+  enable_audio:
+    name: Include audio (moved)
+    description: >-
+      Now set per camera on this add-on's own page, under Home Assistant's sidebar.
+      This entry is only here to carry your old value across the upgrade to 2.0:
+      it is read once, the first time 2.0 starts, and ignored after that —
+      changing it here later has no effect. A future release removes it.
   log_level:
     name: Log level
     description: >-

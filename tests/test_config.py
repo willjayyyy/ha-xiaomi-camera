@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import ClassVar
 
 import pytest
 from bridge import config
@@ -318,18 +317,16 @@ class TestTheAddOnDeclaresEverySetting:
     unoffered it never appears. This project has shipped a setting that was
     threaded everywhere except the one place that assigned it.
 
-    `video_quality`, `enable_audio` and `transcode_quality` are the deliberate
-    exception: they moved to the add-on's own page and are no longer offered
-    on this form, but `_DEFAULTS` still carries them because `load_options`
-    still has to make sense of a 1.4.0 `options.json` long enough to seed the
-    new per-camera settings store from it.
+    `video_quality`, `enable_audio` and `transcode_quality` are edited on the
+    add-on's own page since 2.0, but they are still declared in all three
+    places, and that is what this asserts. Supervisor writes `options.json`
+    from `config.yaml`'s `options` block: a key absent from it may never be
+    written at all, and the one read that migrates a 1.4.0 value into the new
+    settings store happens once and can never be repeated. Dropping the
+    declaration early would reset those users to factory settings silently and
+    permanently -- so the declaration stays until every install has been
+    through 2.0.
     """
-
-    _RELOCATED: ClassVar[set[str]] = {
-        "video_quality",
-        "enable_audio",
-        "transcode_quality",
-    }
 
     @staticmethod
     def _addon() -> dict:
@@ -339,10 +336,10 @@ class TestTheAddOnDeclaresEverySetting:
         return yaml.safe_load(path.read_text(encoding="utf-8"))
 
     def test_every_setting_has_a_starting_value(self) -> None:
-        assert set(config._DEFAULTS) - self._RELOCATED == set(self._addon()["options"])
+        assert set(config._DEFAULTS) == set(self._addon()["options"])
 
     def test_every_setting_can_be_typed_into_the_form(self) -> None:
-        assert set(config._DEFAULTS) - self._RELOCATED == set(self._addon()["schema"])
+        assert set(config._DEFAULTS) == set(self._addon()["schema"])
 
 
 class TestSeedingFromPre2_0Options:

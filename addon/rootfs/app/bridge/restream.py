@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,7 +41,27 @@ from .settings import Resolved
 _LOGGER = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path("/data/go2rtc.yaml")
+
+#: go2rtc's own scratch file, and the reason there are two.
+#:
+#: `PUT` and `DELETE` on go2rtc's streams API do not only change memory: they
+#: persist through its config writer into whichever `-config` path it was
+#: given *first* -- measured, not assumed (see the go2rtc API findings). With
+#: a single `-config` that would be the file this module regenerates, so a
+#: delivery landing while `_write_config` is rewriting it could leave YAML
+#: neither side can parse, and the next restart would take every stream down
+#: with only a parse error to explain it.
+#:
+#: Passing this file first gives those writes somewhere of their own. It is
+#: read at startup and never written by us; ours is passed second, so where
+#: both name the same stream ours is the one that wins.
+_STATE_PATH = Path("/data/go2rtc-state.yaml")
+
 _BINARY = "/usr/local/bin/go2rtc"
+
+#: The generated configuration carries the RTSP credentials, so it is written
+#: no more readably than the credential file is.
+_OWNER_READ_WRITE = 0o600
 
 #: Restart delay if go2rtc exits unexpectedly. Long enough to avoid a hot loop,
 #: short enough that a transient failure self-heals before anyone notices.
@@ -257,9 +278,11 @@ def _encoder_templates() -> dict[str, str]:
     Quality is asked for, and bandwidth is only capped. A bitrate target
     spends its whole allowance on a still room at night and then runs out on
     the one second somebody walks through it, which is backwards: a viewer
-    perceives the picture, not the byte count. `-crf` asks for a quality and
-    spends what that costs; `-maxrate` is the valve that keeps an unusually
-    busy picture off the network's back.
+    perceives the picture, not the byte count -- and a camera pointed at a
+    room that rarely changes is the case this add-on exists for, so that
+    still room is the ordinary state, not the edge case. `-crf` asks for a
+    quality and spends what that costs; `-maxrate` is the valve that keeps an
+    unusually busy picture off the network's back.
 
     It also settles what no bitrate could. The full-size variants re-encode
     whatever resolution the camera happens to send, and that is not known when
@@ -288,8 +311,9 @@ def _encoder_templates() -> dict[str, str]:
                 # being stretched -- more bandwidth and more work for a softer
                 # picture than the source. Quoted because `min` takes a comma,
                 # which would otherwise read as the end of this filter; go2rtc
-                # leaves a token that does not begin with a quote alone, so
-                # ffmpeg receives this exactly as written.
+                # splits its templates on whitespace and leaves a token that
+                # does not begin with a quote alone, so ffmpeg receives this
+                # exactly as written.
                 template += f" -vf scale=-2:'min({spec.height},ih)'"
             templates[spec.template_for(quality)] = template
     return templates
@@ -373,6 +397,46 @@ def build_config(options: Options, cameras: Mapping[str, Resolved]) -> dict:
     return config
 
 
+def _write_config(config: dict) -> None:
+    """Write the generated configuration, all of it or none of it.
+
+    The same temp-then-replace idiom the credential store uses, for the same
+    reason and with the same permissions: a crash -- or a go2rtc restart
+    picking the file up -- part way through a plain write leaves a truncated
+    document, and truncated YAML is not a smaller configuration but an
+    unparseable one, which costs every stream rather than the changed ones.
+    Written owner-only from the start rather than chmod'ed afterwards, so the
+    RTSP password inside it is never briefly world-readable.
+    """
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = _CONFIG_PATH.with_suffix(".tmp")
+    descriptor = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, _OWNER_READ_WRITE
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+    temporary.replace(_CONFIG_PATH)
+
+
+def _ensure_state_file() -> None:
+    """Give go2rtc's own writes a file to land in before it starts.
+
+    go2rtc creates it on the first write regardless; creating it here means a
+    reader who finds an unfamiliar file in `/data` finds an explanation with
+    it, rather than a stream table that looks like a second configuration
+    someone forgot about.
+    """
+    if _STATE_PATH.exists():
+        return
+    _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _STATE_PATH.write_text(
+        "# Written by go2rtc itself when the add-on changes a stream without\n"
+        "# restarting it. Not the add-on's configuration -- that is\n"
+        f"# {_CONFIG_PATH}, which is loaded after this file and wins.\n",
+        encoding="utf-8",
+    )
+
+
 class Restreamer:
     """Runs go2rtc and keeps its configuration in sync with the camera list."""
 
@@ -381,6 +445,11 @@ class Restreamer:
         self._process: asyncio.subprocess.Process | None = None
         self._supervisor: asyncio.Task[None] | None = None
         self._cameras: dict[str, Resolved] = {}
+        #: The stream table as last written, which is also what the running
+        #: go2rtc was last told. Kept so a change can be delivered per stream:
+        #: a name whose source string is identical needs no call at all, and
+        #: most settings changes leave most names identical.
+        self._streams: dict[str, str] = {}
         self._api = Go2rtcApi()
 
     @property
@@ -487,20 +556,22 @@ class Restreamer:
         if cameras == self._cameras and self._process is not None:
             return
 
-        previous = self._cameras
         self._cameras = dict(cameras)
         config = build_config(self._options, self._cameras)
-        _CONFIG_PATH.write_text(
-            yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
-        )
+        previous_streams = self._streams
+        self._streams = dict(config["streams"])
+        _write_config(config)
 
         if self._process is None:
             _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._cameras))
             await self.async_restart()
             return
 
-        if await self._async_deliver(previous, config["streams"], explicit=explicit):
-            _LOGGER.info("Updated %d camera stream(s) in place", len(self._cameras))
+        delivered = await self._async_deliver(
+            previous_streams, self._streams, explicit=explicit
+        )
+        if delivered is not None:
+            _LOGGER.info("Updated %d go2rtc stream(s) in place", delivered)
             return
 
         _LOGGER.info("Could not update streams in place; restarting go2rtc")
@@ -508,18 +579,33 @@ class Restreamer:
 
     async def _async_deliver(
         self,
-        previous: Mapping[str, Resolved],
-        streams: dict[str, str],
+        previous: Mapping[str, str],
+        streams: Mapping[str, str],
         *,
         explicit: bool,
-    ) -> bool:
-        """Push the new stream table to the running go2rtc.
+    ) -> int | None:
+        """Bring the running go2rtc's streams up to date, one stream at a time.
 
-        All or nothing: a partial delivery would leave the process in a state
-        no file describes, which is exactly the divided truth this avoids.
-        Any failure along the way -- one removal, one update -- gives up on
-        the whole delivery and lets the caller restart, rather than leaving
-        some streams live and others not.
+        Returns how many streams were touched, or ``None`` if any call failed.
+
+        The comparison is per stream name, against the table last written,
+        because that is the granularity the cost is paid at: dropping a
+        stream drops its consumers -- a Home Assistant entity's live view, a
+        HomeKit session, an open preview on this page. A stream whose source
+        string is unchanged is left completely alone, so a settings change on
+        one camera reaches that camera's streams and no other's.
+
+        It also means a change go2rtc cannot see costs nothing. Picture size
+        and sound are negotiated with the camera when the peer-to-peer
+        session opens and appear nowhere in this configuration; only
+        `transcode_quality` reaches it, by naming a different encoder
+        template. Changing the other two rewrites a byte-identical stream
+        table, finds nothing to deliver, and leaves every viewer where they
+        were.
+
+        All or nothing on failure: one failed call abandons the delivery and
+        lets the caller restart, rather than leaving the process in a state no
+        file describes.
 
         Two kinds of change, delivered differently, because `PATCH` changes
         what a stream *will* dial and never moves a viewer already connected
@@ -534,26 +620,28 @@ class Restreamer:
         and waiting to see it, and a stream that keeps serving the old
         picture until they happen to reconnect reads as a setting that did
         nothing. Those streams are replaced, which drops their consumers so
-        they redial -- for that one camera only, which is the price the
-        design accepts for an explicit action and refuses for a background
-        one.
+        they redial.
         """
-        for did in previous:
-            if did in self._cameras:
+        changed = 0
+        for name in previous:
+            if name in streams:
                 continue
-            for spec in STREAM_SPECS:
-                if not await self._api.remove_stream(stream_name(did, spec.key)):
-                    return False
+            if not await self._api.remove_stream(name):
+                return None
+            changed += 1
         # Which kind of change this is comes from the caller, which knows:
         # a refresh of the camera list is background, a settings write is
-        # not. Deriving it here instead -- by remembering what each stream
-        # last pointed at and comparing -- would be a second record of
-        # something already known, kept in sync by hand.
+        # not. The table comparison answers *which* streams changed, never
+        # *why* -- an address drift and a quality change both read as a
+        # different source string here.
         deliver = self._api.replace_stream if explicit else self._api.set_stream
         for name, src in streams.items():
+            if previous.get(name) == src:
+                continue
             if not await deliver(name, src):
-                return False
-        return True
+                return None
+            changed += 1
+        return changed
 
     async def async_start(self) -> None:
         if self._supervisor is None:
@@ -577,9 +665,18 @@ class Restreamer:
                 # process running that nothing holds a handle to -- it would
                 # keep the RTSP port bound and make every later start fail with
                 # "address already in use".
+                _ensure_state_file()
                 self._process = await asyncio.shield(
                     asyncio.create_subprocess_exec(
                         _BINARY,
+                        # Order is load-bearing, not cosmetic: go2rtc writes
+                        # its API changes back into the first `-config` path
+                        # and reads both, later files winning. State first so
+                        # its writes stay out of the file this module
+                        # regenerates; ours second so it is the authority on
+                        # what should be published.
+                        "-config",
+                        str(_STATE_PATH),
                         "-config",
                         str(_CONFIG_PATH),
                         # Merged rather than captured separately: go2rtc

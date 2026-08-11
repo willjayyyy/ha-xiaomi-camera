@@ -13,6 +13,10 @@ automatically as its card scrolls into view.**
   add-on page, with a shared default. They used to be one setting for every
   camera, in the add-on's Supervisor configuration. Your existing values
   carry over automatically the first time the add-on starts after upgrading.
+- The three old entries are still on the add-on's configuration screen,
+  marked "(moved)". They exist only to carry your old values across this
+  upgrade; changing them there now does nothing, and a later release
+  removes them.
 - Changing a setting no longer interrupts the other cameras.
 - Previews on the add-on page now start only when you open them, and each
   can be enlarged — instead of starting and stopping on their own as their
@@ -31,6 +35,8 @@ automatically as its card scrolls into view.**
 - 画质、声音、转码画质改为每台摄像头单独设置，位置移到加载项页面，并带一个
   共用的默认值。以前是所有摄像头共用一个设置，填在加载项的 Supervisor
   配置里。升级后加载项第一次启动时，会自动把你原来的设置沿用过来。
+- 加载项配置界面上仍然保留着这三项，名字后面标了「已迁移」。它们只用来把你
+  升级前的旧值带过来；现在再改它们不会有任何效果，将来的版本会移除。
 - 改设置不再打断其他摄像头的画面。
 - 加载项页面的预览现在只在你打开时才启动，也能放大看——不再像以前那样随着
   卡片进出视野自动开关。

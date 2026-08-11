@@ -886,3 +886,89 @@ class TestApplyingWithoutRestarting:
             explicit=True,
         )
         assert set(used) == {"replace"}
+
+    @pytest.mark.asyncio
+    async def test_an_explicit_change_reaches_only_the_camera_it_was_made_on(
+        self, monkeypatch, tmp_path
+    ):
+        """Two cameras, one changed setting. An explicit change drops the
+        consumers of the streams it replaces, so delivering it to a camera
+        nobody touched would take down that camera's Home Assistant entity,
+        its HomeKit session and its preview for nothing. One camera is the
+        blast radius the design pays for; the rest is not."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        touched: list[str] = []
+
+        class _Api:
+            async def set_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def replace_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def remove_stream(self, name):
+                touched.append(name)
+                return True
+
+        restreamer._api = _Api()
+        standard = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+        await restreamer.async_apply({"aaa": standard, "bbb": standard})
+        touched.clear()
+
+        await restreamer.async_apply(
+            {
+                "aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP),
+                "bbb": standard,
+            },
+            explicit=True,
+        )
+
+        assert touched, "the changed camera's streams were never delivered"
+        assert not [name for name in touched if name.startswith("camera_bbb")]
+
+    @pytest.mark.asyncio
+    async def test_a_setting_go2rtc_cannot_see_touches_no_stream_at_all(
+        self, monkeypatch, tmp_path
+    ):
+        """Picture size and sound are settled with the camera when the
+        peer-to-peer session opens and appear nowhere in go2rtc's
+        configuration. Delivering them anyway would drop every viewer on
+        every camera to hand go2rtc a stream table it already had."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        touched: list[str] = []
+
+        class _Api:
+            async def set_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def replace_stream(self, name, src):
+                touched.append(name)
+                return True
+
+            async def remove_stream(self, name):
+                touched.append(name)
+                return True
+
+        restreamer._api = _Api()
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        )
+        touched.clear()
+
+        # A bigger picture from the camera, and sound switched on: both are
+        # real changes, and neither changes a single source string.
+        await restreamer.async_apply(
+            {"aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD)},
+            explicit=True,
+        )
+
+        assert touched == []
