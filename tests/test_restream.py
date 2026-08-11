@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ import pytest
 from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
 from bridge.const import (
     ALL_INTERFACES,
+    API_PORT,
     GO2RTC_API_PORT,
     LOOPBACK,
     RTSP_PORT,
@@ -31,8 +33,10 @@ from bridge.restream import (
     _audio_codecs,
     _encoder_templates,
     build_config,
+    source_for,
     stream_name,
 )
+from bridge.settings import Resolved
 
 _COMPONENT = (
     Path(__file__).resolve().parent.parent / "custom_components" / "xiaomi_camera"
@@ -65,10 +69,20 @@ def make_options(
     )
 
 
+def make_cameras(
+    dids: list[str],
+    transcode_quality: TranscodeQuality = TranscodeQuality.STANDARD,
+) -> dict[str, Resolved]:
+    """A mapping of resolved settings, as `build_config` and `async_apply`
+    now take, standing in for a real `SettingsStore` in tests that only care
+    about which cameras are published or at what quality they transcode."""
+    return {did: Resolved(VideoQuality.LOW, False, transcode_quality) for did in dids}
+
+
 class TestLocalMode:
     @pytest.fixture
     def config(self) -> dict:
-        return build_config(make_options(AccessMode.LOCAL), ["1", "2"])
+        return build_config(make_options(AccessMode.LOCAL), make_cameras(["1", "2"]))
 
     @pytest.mark.parametrize("module", ["api", "rtsp", "webrtc", "srtp"])
     def test_every_listener_is_loopback_only(self, config: dict, module: str) -> None:
@@ -90,7 +104,9 @@ class TestLocalMode:
 class TestLanMode:
     @pytest.fixture
     def config(self) -> dict:
-        return build_config(make_options(AccessMode.LAN, "user", "secret"), ["1"])
+        return build_config(
+            make_options(AccessMode.LAN, "user", "secret"), make_cameras(["1"])
+        )
 
     @pytest.mark.parametrize("module", ["rtsp", "webrtc"])
     def test_stream_listeners_are_published(self, config: dict, module: str) -> None:
@@ -113,7 +129,9 @@ class TestLanMode:
 class TestStreamSources:
     def test_the_source_is_pulled_from_loopback(self) -> None:
         """The bridge's own control plane is never reachable off-box."""
-        config = build_config(make_options(AccessMode.LAN, "u", "p"), ["42"])
+        config = build_config(
+            make_options(AccessMode.LAN, "u", "p"), make_cameras(["42"])
+        )
         assert config["streams"][stream_name("42")].startswith(f"http://{LOOPBACK}:")
 
     def test_the_root_runs_no_ffmpeg(self) -> None:
@@ -124,14 +142,16 @@ class TestStreamSources:
         to do a job go2rtc already does. Measured: 3.11s native against 7.24s
         through ffmpeg, where today's elementary stream took 4.20s.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         source = config["streams"][stream_name("42")]
         assert not source.startswith("ffmpeg:")
         assert "#video=" not in source
 
     def test_thirteen_streams_per_camera(self) -> None:
         """Six heights across both codecs, plus the root."""
-        config = build_config(make_options(AccessMode.LOCAL), ["1", "2", "3"])
+        config = build_config(
+            make_options(AccessMode.LOCAL), make_cameras(["1", "2", "3"])
+        )
         assert len(config["streams"]) == 39
 
     def test_the_heights_step_down_from_a_modern_sensor(self) -> None:
@@ -153,7 +173,7 @@ class TestStreamSources:
         connects, so an NVR that accepts either could record a re-encode of a
         stream it could have copied. Each URL says what it carries.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert config["streams"][stream_name("42", "h264")].endswith(
             "#video=h264/standard#audio=copy#audio=aac"
         )
@@ -165,13 +185,13 @@ class TestStreamSources:
         The image ships the GPL ffmpeg build, where libx264 is present and is
         the better encoder at a given bitrate.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert "libx264" in config["ffmpeg"]["h264/standard"]
         assert "libopenh264" not in config["ffmpeg"]["h264/standard"]
 
     def test_h265_is_encoded_with_the_standard_encoder(self) -> None:
         """libx265 rather than kvazaar, in the full-size and scaled forms."""
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert "libx265" in config["ffmpeg"]["h265/standard"]
         assert "kvazaar" not in config["ffmpeg"]["h265/standard"]
         assert "libx265" in config["ffmpeg"]["h265/360/standard"]
@@ -179,7 +199,7 @@ class TestStreamSources:
 
     def test_both_encoders_shorten_the_keyframe_interval(self) -> None:
         """go2rtc defaults to -g 50; HLS cannot start anywhere but a keyframe."""
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert "-g 25" in config["ffmpeg"]["h264/standard"]
         assert "-g 25" in config["ffmpeg"]["h265/standard"]
         assert "-g 25" in config["ffmpeg"]["h265/360/standard"]
@@ -198,9 +218,9 @@ class TestStreamSources:
         resolution is whatever the camera sends, and is unknown when this
         configuration is written. A quality target needs no such knowledge.
         """
-        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264/720/standard"
-        ]
+        template = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))[
+            "ffmpeg"
+        ]["h264/720/standard"]
         assert "-crf 23" in template
         assert "-b:v" not in template, "a target would defeat the point of -crf"
         assert "-maxrate 6M" in template
@@ -208,9 +228,9 @@ class TestStreamSources:
 
     def test_the_full_size_variant_is_sized_too(self) -> None:
         """The rung a bitrate could never size, because its height is unknown."""
-        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264/standard"
-        ]
+        template = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))[
+            "ffmpeg"
+        ]["h264/standard"]
         assert "-crf 23" in template
         assert "-maxrate 24M" in template
 
@@ -222,15 +242,15 @@ class TestStreamSources:
         came from. The preview reads the same way, and the two paths must not
         answer this differently.
         """
-        template = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"][
-            "h264/1440/standard"
-        ]
+        template = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))[
+            "ffmpeg"
+        ]["h264/1440/standard"]
         assert "scale=-2:'min(1440,ih)'" in template
 
     def test_the_compatibility_stream_reuses_the_original(self) -> None:
         # Naming the stream rather than repeating the URL keeps both on one
         # session against the camera.
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert config["streams"][stream_name("42", "h264")].startswith(
             f"ffmpeg:{stream_name('42')}#"
         )
@@ -253,14 +273,14 @@ class TestTranscodeQualityMovesOneKnob:
         quietly worse than its H.264 twin while the configuration read as if
         they matched.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert "-crf 23" in config["ffmpeg"]["h264/720/standard"]
         assert "-crf 28" in config["ffmpeg"]["h265/720/standard"]
 
     def test_asking_for_sharper_lowers_the_quality_number(self) -> None:
         config = build_config(
-            make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.SHARP),
-            ["42"],
+            make_options(AccessMode.LOCAL),
+            make_cameras(["42"], transcode_quality=TranscodeQuality.SHARP),
         )
         assert "-crf 20" in config["ffmpeg"]["h264/720/sharp"]
         assert "-crf 25" in config["ffmpeg"]["h265/720/sharp"]
@@ -271,10 +291,12 @@ class TestTranscodeQualityMovesOneKnob:
         Then the setting would buy nothing on exactly the busy pictures that
         motivated raising it.
         """
-        standard = build_config(make_options(AccessMode.LOCAL), ["42"])["ffmpeg"]
+        standard = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))[
+            "ffmpeg"
+        ]
         maximum = build_config(
-            make_options(AccessMode.LOCAL, transcode_quality=TranscodeQuality.MAXIMUM),
-            ["42"],
+            make_options(AccessMode.LOCAL),
+            make_cameras(["42"], transcode_quality=TranscodeQuality.MAXIMUM),
         )["ffmpeg"]
         assert "-maxrate 6M" in standard["h264/720/standard"]
         assert "-maxrate 24M" in maximum["h264/720/maximum"]
@@ -291,7 +313,9 @@ class TestAudioFollowsVideo:
 
     @pytest.fixture
     def sources(self) -> dict[str, str]:
-        return build_config(make_options(AccessMode.LOCAL), ["42"])["streams"]
+        return build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))[
+            "streams"
+        ]
 
     def test_every_derived_stream_offers_the_cameras_own_audio(
         self, sources: dict[str, str]
@@ -334,7 +358,7 @@ class TestStreamCatalogue:
     """Nine streams per camera: the root plus four heights across two codecs."""
 
     def test_every_camera_gets_thirteen_streams(self) -> None:
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         mine = [name for name in config["streams"] if name.startswith("camera_42")]
         assert len(mine) == 13, sorted(mine)
 
@@ -345,7 +369,7 @@ class TestStreamCatalogue:
         apart. The root is the camera's own encoding, so its name carries no
         codec at all -- it cannot lie about which one that is.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         root = stream_name("42")
         assert root == "camera_42"
         for name in config["streams"]:
@@ -359,14 +383,14 @@ class TestStreamCatalogue:
         Pointing a derived stream at the add-on's HTTP endpoint would open a
         second session on the camera.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         root = stream_name("42")
         for name, source in config["streams"].items():
             if name.startswith("camera_42") and name != root:
                 assert source.startswith(f"ffmpeg:{root}"), (name, source)
 
     def test_the_root_is_the_only_stream_reading_http(self) -> None:
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         readers = [n for n, s in config["streams"].items() if "http://" in s]
         assert readers == [stream_name("42")]
 
@@ -377,13 +401,13 @@ class TestStreamCatalogue:
         ones, so a bitrate passed through `#raw=` is overridden by the
         template's own. Naming a variant template is the only way to vary it.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert config["streams"][stream_name("42", "h264_360")].endswith(
             "#video=h264/360/standard#audio=copy#audio=aac"
         )
 
     def test_each_variant_template_sets_its_own_scale_and_ceiling(self) -> None:
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         template = config["ffmpeg"]["h264/360/standard"]
         assert "scale=-2:'min(360,ih)'" in template
         assert "-maxrate 2M" in template
@@ -398,13 +422,13 @@ class TestStreamCatalogue:
         `h264/360/standard` -- while a full-size one does not, so the segment
         count is what tells the two apart now that quality names every entry.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         for name, template in config["ffmpeg"].items():
             if name.count("/") == 2:
                 assert "scale=-2:" in template, name
 
     def test_the_source_resolution_streams_do_not_scale(self) -> None:
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         assert "scale" not in config["ffmpeg"]["h264/standard"]
         assert "scale" not in config["ffmpeg"]["h265/standard"]
         assert "scale" not in config["streams"][stream_name("42")]
@@ -418,7 +442,7 @@ class TestStreamCatalogue:
         the camera sends -- possibly 4K -- and a valve that binds in normal
         use would be a bitrate target wearing another name.
         """
-        config = build_config(make_options(AccessMode.LOCAL), ["42"])
+        config = build_config(make_options(AccessMode.LOCAL), make_cameras(["42"]))
         for codec in ("h264", "h265"):
             template = config["ffmpeg"][f"{codec}/standard"]
             assert "-crf" in template
@@ -624,3 +648,60 @@ def test_scaling_never_enlarges_a_smaller_source():
 def test_the_root_never_gets_a_template():
     templates = _encoder_templates()
     assert not any(key.startswith(ROOT_KEY) for key in templates)
+
+
+def test_source_for_reads_the_bridges_own_stream_endpoint():
+    settings = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+    assert source_for("42", settings) == f"http://{LOOPBACK}:{API_PORT}/api/stream/42"
+
+
+def test_source_for_is_the_only_producer_of_a_root_source_url():
+    """A second producer is a second source of truth, and it will drift.
+
+    This is the guard the whole design rests on: which path a camera's video
+    comes from is answered once. During the multi-stream work the same kind of
+    default was answered independently in four places, each correct alone, and
+    the disagreement destroyed and recreated entities with nothing logged.
+    """
+    root = (
+        Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app" / "bridge"
+    )
+    # Mentioning the path is legitimate and common: `api.py` registers the
+    # route that serves it, and a log line elsewhere prints a host and port.
+    # What no other module may do is *build* such a URL, so the pattern looked
+    # for is an interpolated string -- the act of composing one -- rather than
+    # the mere presence of the words, which would flag the route declaration
+    # and teach the next person to work around the check instead of the rule.
+    builder = re.compile(r"""f["'][^"']*(?:/api/stream/|xiaomi://)""")
+    offenders = sorted(
+        path.name
+        for path in root.glob("*.py")
+        if path.name != "restream.py"
+        and builder.search(path.read_text(encoding="utf-8"))
+    )
+    assert offenders == [], f"these build a root source URL themselves: {offenders}"
+
+
+def test_each_camera_gets_the_template_matching_its_own_transcode_quality():
+    cameras = {
+        "aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD),
+        "bbb": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM),
+    }
+    config = build_config(make_options(AccessMode.LOCAL), cameras)
+    assert "#video=h264/360/standard" in config["streams"]["camera_aaa_h264_360"]
+    assert "#video=h264/360/maximum" in config["streams"]["camera_bbb_h264_360"]
+
+
+def test_stream_names_do_not_depend_on_any_setting():
+    """Entity identity rides on these names.
+
+    A name that moved when a setting changed would give the integration a new
+    unique_id, destroying and recreating the entity: HomeKit unpairs, history
+    is orphaned, automations break, and nothing is logged.
+    """
+    plain = {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+    fancy = {"aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.MAXIMUM)}
+    options = make_options(AccessMode.LOCAL)
+    assert set(build_config(options, plain)["streams"]) == set(
+        build_config(options, fancy)["streams"]
+    )

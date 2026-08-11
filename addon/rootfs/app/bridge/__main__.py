@@ -32,6 +32,7 @@ from .discovery import async_announce, async_withdraw
 from .redact import install as install_redaction
 from .redact import safe_error
 from .restream import Restreamer
+from .settings import Resolved
 from .stills import Stills
 from .store import CredentialStore
 from .streaming import SessionManager
@@ -153,7 +154,20 @@ class Bridge:
             # device does not keep its native instance alive for the lifetime
             # of the process.
             await self._sessions.async_prune({c.did for c in cameras})
-        await self._restreamer.async_apply([c.did for c in cameras])
+        # Per-camera overrides are not wired in yet -- every camera resolves
+        # to the add-on's own global settings until the settings store is
+        # connected here. `async_apply` already takes a mapping so that
+        # connecting it changes nothing on this end but the values inside.
+        await self._restreamer.async_apply(
+            {
+                c.did: Resolved(
+                    self._options.video_quality,
+                    self._options.enable_audio,
+                    self._options.transcode_quality,
+                )
+                for c in cameras
+            }
+        )
         self._previews.drop({c.did for c in cameras})
 
     async def async_stop(self) -> None:
@@ -193,7 +207,7 @@ class Bridge:
         self._bound_client = client
 
         if client is None:
-            await self._restreamer.async_apply([])
+            await self._restreamer.async_apply({})
             return
 
         self._registry = CameraRegistry(client)

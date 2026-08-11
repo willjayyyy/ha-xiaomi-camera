@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -33,6 +34,7 @@ from .const import (
     WEBRTC_PORT,
 )
 from .redact import safe_error
+from .settings import Resolved
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -292,7 +294,23 @@ def _encoder_templates() -> dict[str, str]:
     return templates
 
 
-def build_config(options: Options, dids: list[str]) -> dict:
+def source_for(did: str, settings: Resolved) -> str:
+    """Where go2rtc reads this camera's video from.
+
+    The single place in the codebase that answers this. Every consumer
+    downstream -- the thirteen published variants, the camera and switch
+    entities, HomeKit, the preview -- reads the published stream by name and
+    never learns where it came from, so a second path can be added here
+    without any of them changing.
+
+    `settings` is taken even though today's only path ignores it: the
+    parameter is what lets a second path be added without touching a single
+    caller.
+    """
+    return f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
+
+
+def build_config(options: Options, cameras: Mapping[str, Resolved]) -> dict:
     """Render the go2rtc configuration.
 
     The root is read straight from this add-on's own endpoint, with no ffmpeg
@@ -311,13 +329,13 @@ def build_config(options: Options, dids: list[str]) -> dict:
     """
     bind = options.bind_address
     streams: dict[str, str] = {}
-    for did in dids:
+    for did, settings in cameras.items():
         root = stream_name(did)
         # No ffmpeg in front of it: go2rtc demuxes the MPEG-TS this endpoint
         # serves and passes both tracks through untouched. An ffmpeg hop here
         # would spend three seconds of cold start probing a container it did
         # not need to, to do a job go2rtc already does.
-        streams[root] = f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
+        streams[root] = source_for(did, settings)
         for spec in STREAM_SPECS:
             if spec.key == ROOT_KEY:
                 continue
@@ -325,8 +343,8 @@ def build_config(options: Options, dids: list[str]) -> dict:
             # Named after the root rather than repeating its URL, so all of
             # them share one session on the camera instead of opening several.
             streams[stream_name(did, spec.key)] = (
-                f"ffmpeg:{root}#video="
-                f"{spec.template_for(options.transcode_quality)}{audio}"
+                f"ffmpeg:{root}#video={spec.template_for(settings.transcode_quality)}"
+                f"{audio}"
             )
 
     config: dict = {
@@ -361,7 +379,7 @@ class Restreamer:
         self._options = options
         self._process: asyncio.subprocess.Process | None = None
         self._supervisor: asyncio.Task[None] | None = None
-        self._dids: list[str] = []
+        self._cameras: dict[str, Resolved] = {}
 
     @property
     def requires_credentials(self) -> bool:
@@ -435,19 +453,21 @@ class Restreamer:
         )
         return f"rtsp://{credentials}{LOOPBACK}:{RTSP_PORT}/{stream_name(did)}"
 
-    async def async_apply(self, dids: list[str]) -> None:
-        """Write the configuration and (re)start go2rtc if the set changed."""
-        # Compare as a set: the cloud does not guarantee a stable device order,
-        # and treating a reordering as a change would restart go2rtc -- dropping
-        # every live viewer -- on an unrelated refresh.
-        if set(dids) == set(self._dids) and self._process is not None:
+    async def async_apply(self, cameras: Mapping[str, Resolved]) -> None:
+        """Write the configuration and (re)start go2rtc if anything changed.
+
+        Compares the whole mapping, not just which cameras exist: a changed
+        transcode quality changes which template a stream names, and a
+        comparison on the camera set alone would leave the old one running.
+        """
+        if cameras == self._cameras and self._process is not None:
             return
-        self._dids = sorted(dids)
+        self._cameras = dict(cameras)
         _CONFIG_PATH.write_text(
-            yaml.safe_dump(build_config(self._options, self._dids), sort_keys=False),
+            yaml.safe_dump(build_config(self._options, self._cameras), sort_keys=False),
             encoding="utf-8",
         )
-        _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._dids))
+        _LOGGER.info("Publishing %d camera stream(s) over RTSP", len(self._cameras))
         await self.async_restart()
 
     async def async_start(self) -> None:
