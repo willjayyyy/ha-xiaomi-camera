@@ -14,15 +14,12 @@ import logging
 import signal
 import sys
 
-from miot.types import MIoTCameraVideoQuality
-
 from .account import AccountManager, NotLinkedError
 from .api import BridgeApi
 from .cameras import CameraRegistry
 from .config import (
     LOG_LEVELS,
     Options,
-    VideoQuality,
     build_ref,
     data_is_ephemeral,
     load_options,
@@ -42,12 +39,6 @@ _LOGGER = logging.getLogger("bridge")
 #: How often the camera list is re-read. Cameras are added and renamed rarely,
 #: and each refresh costs a cloud round trip, so this is deliberately slow.
 _REFRESH_INTERVAL_SECONDS = 300
-
-
-_QUALITY_MAP = {
-    VideoQuality.LOW: MIoTCameraVideoQuality.LOW,
-    VideoQuality.HIGH: MIoTCameraVideoQuality.HIGH,
-}
 
 
 class Bridge:
@@ -211,10 +202,18 @@ class Bridge:
             return
 
         self._registry = CameraRegistry(client)
+        # SettingsStore is not wired into the process yet -- that arrives in
+        # a later task -- so every camera resolves to the add-on's own
+        # global settings for now. The resolver shape already matches what
+        # the store will provide, so connecting it later changes nothing
+        # here but the values the lambda returns.
         self._sessions = SessionManager(
             client,
-            quality=_QUALITY_MAP[self._options.video_quality],
-            enable_audio=self._options.enable_audio,
+            resolver=lambda did: Resolved(
+                self._options.video_quality,
+                self._options.enable_audio,
+                self._options.transcode_quality,
+            ),
         )
 
     async def _refresh_loop(self) -> None:

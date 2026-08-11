@@ -13,7 +13,9 @@ import time
 
 import pytest
 from bridge import streaming
-from bridge.streaming import CameraOffError, CameraSession
+from bridge.config import TranscodeQuality, VideoQuality
+from bridge.settings import Resolved
+from bridge.streaming import CameraOffError, CameraSession, SessionManager
 from miot.types import MIoTCameraStatus, MIoTCameraVideoQuality
 
 _SC = b"\x00\x00\x00\x01"
@@ -28,6 +30,13 @@ _KEYFRAME = _SC + b"\x26\x01\x02\x03"
 class _FakeInfo:
     did = "1140981922"
     name = "Living room"
+
+
+def _info(did: str) -> _FakeInfo:
+    """A camera identified only by `did` -- all `SessionManager` cares about."""
+    info = _FakeInfo()
+    info.did = did
+    return info
 
 
 class _FakeInstance:
@@ -346,3 +355,35 @@ class TestTheLibraryIsNotAskedToDecode:
         assert client.instances
         assert not any(instance.decode_jpg_registered for instance in client.instances)
         await session.async_stop()
+
+
+class TestSessionManagerReadsPerCameraSettings:
+    """Picture size and audio are negotiated when a session opens, so each
+    camera must be resolved on its own -- not against one global pair shared
+    by the whole fleet.
+    """
+
+    async def test_each_camera_opens_its_session_with_its_own_settings(self) -> None:
+        settings = {
+            "aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD),
+            "bbb": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD),
+        }
+        manager = SessionManager(_FakeClient(), resolver=settings.__getitem__)
+        first = manager.session_for(_info("aaa"))
+        second = manager.session_for(_info("bbb"))
+        assert first._enable_audio is True
+        assert second._enable_audio is False
+
+    async def test_reloading_one_camera_leaves_the_others_running(self) -> None:
+        """Audio and picture size are session parameters, so changing them
+        reopens that camera's session -- and only that camera's."""
+        settings = {
+            did: Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+            for did in ("aaa", "bbb")
+        }
+        manager = SessionManager(_FakeClient(), resolver=settings.__getitem__)
+        manager.session_for(_info("aaa"))
+        kept = manager.session_for(_info("bbb"))
+        await manager.async_reload("aaa")
+        assert "aaa" not in manager._sessions
+        assert manager._sessions["bbb"] is kept
