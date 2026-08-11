@@ -113,6 +113,31 @@ class MIoTCameraCodec(int, enum.Enum):
     AUDIO_OPUS = 1032
 
 
+class MIoTCameraInfo:
+    """Stands in for ``miot.types.MIoTCameraInfo``.
+
+    ``bridge.cameras`` only names this type in annotations, and
+    ``from __future__ import annotations`` leaves those unevaluated at
+    runtime -- so nothing here needs to model the real dataclass's eleven
+    required fields, just exist as an importable name.
+    """
+
+
+class MIoTGetPropertyParam:
+    """Stands in for ``miot.types.MIoTGetPropertyParam``.
+
+    ``bridge.cameras`` builds these itself and hands them to a client the
+    tests supply, so a bare kwarg-storing shape is all a test needs.
+    """
+
+    def __init__(self, **kwargs: object) -> None:
+        self.__dict__.update(kwargs)
+
+
+class MIoTSetPropertyParam(MIoTGetPropertyParam):
+    """Stands in for ``miot.types.MIoTSetPropertyParam``; same shape as above."""
+
+
 class MIoTClient:
     """Stands in for ``miot.client.MIoTClient``.
 
@@ -159,6 +184,9 @@ _types = types.ModuleType("miot.types")
 _types.MIoTCameraStatus = MIoTCameraStatus
 _types.MIoTCameraVideoQuality = MIoTCameraVideoQuality
 _types.MIoTCameraCodec = MIoTCameraCodec
+_types.MIoTCameraInfo = MIoTCameraInfo
+_types.MIoTGetPropertyParam = MIoTGetPropertyParam
+_types.MIoTSetPropertyParam = MIoTSetPropertyParam
 _client = types.ModuleType("miot.client")
 _client.MIoTClient = MIoTClient
 _miot = types.ModuleType("miot")

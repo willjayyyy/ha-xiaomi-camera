@@ -8,9 +8,11 @@ reach.
 from __future__ import annotations
 
 import sys
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from bridge.cameras import CameraDescription, CameraRegistry
 
 pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 14),
@@ -375,3 +377,142 @@ async def test_entities_never_strip_the_device_prefix(hass) -> None:
     assert (
         hass.states.get(variant).attributes["friendly_name"] == "Living room H.264 360p"
     )
+
+
+# ----------------------------------------------------------------------
+# Cameras the vendor library refuses.
+#
+# Unlike everything above, `CameraRegistry.async_refresh` (`bridge.cameras`)
+# does not need Home Assistant at all -- only the `miot` stub `conftest.py`
+# already provides. These tests live in this file because that is where the
+# task that added them was pointed; the `pytestmark` skip above still applies
+# to them, since a module-level mark covers every test in the module, so they
+# only run on the same Python >= 3.14 interpreter as the rest of this file.
+# ----------------------------------------------------------------------
+
+#: The one model these tests need treated as denied. `get_cameras_async`
+#: applies the vendor SDK's own filtering server-side; `_FakeCameraClient`
+#: below stands in for that filtering, not for `CameraRegistry`'s own logic,
+#: so it is free to hard-code just enough of the real 53-model denylist
+#: (`xiaomi-miloco`'s `camera_extra_info.yaml`, read at the commit
+#: `addon/requirements.txt` pins) to exercise the refused-model path.
+_VENDOR_DENYLIST = {
+    "chuangmi.camera.ipc019",
+    "chuangmi.camera.v2",
+    "chuangmi.camera.021a04",
+    "chuangmi.camera.no-known-alternative",
+}
+
+
+def _device(did: str, model: str, *, online: bool = True) -> SimpleNamespace:
+    """A raw device as `MIoTClient.get_devices_async` returns it, unfiltered."""
+    return SimpleNamespace(
+        did=did,
+        name=did,
+        model=model,
+        manufacturer="Xiaomi",
+        online=online,
+        lan_online=True,
+        is_set_pincode=0,
+        channel_count=1,
+    )
+
+
+class _FakeCameraClient:
+    """Stands in for `MIoTClient`, for `CameraRegistry.async_refresh`.
+
+    Mimics the one distinction the refused-model path depends on:
+    `get_cameras_async` applies the vendor's own filtering (`_VENDOR_DENYLIST`
+    here), while `get_devices_async` -- confirmed unfiltered by reading the
+    real SDK source at the pinned commit, since only the native library
+    underneath it is closed -- returns every device regardless.
+    """
+
+    class _HttpClient:
+        async def get_props_async(self, params):
+            return [{"did": p.did, "code": 0, "value": True} for p in params]
+
+    def __init__(self, devices: list[SimpleNamespace]) -> None:
+        self._devices = {d.did: d for d in devices}
+        self._http_client = self._HttpClient()
+
+    async def get_devices_async(self) -> dict[str, SimpleNamespace]:
+        return dict(self._devices)
+
+    async def get_cameras_async(self) -> dict[str, SimpleNamespace]:
+        # Mirrors `is_camera_model`'s own two checks: an allowed device class
+        # first (real allow_classes is `camera`/`wifispeaker`/`controller`;
+        # only `camera` matters to these tests), then the denylist.
+        return {
+            did: d
+            for did, d in self._devices.items()
+            if d.model.split(".")[1] == "camera" and d.model not in _VENDOR_DENYLIST
+        }
+
+
+async def _describe(devices: list[SimpleNamespace]) -> list[CameraDescription]:
+    registry = CameraRegistry(_FakeCameraClient(devices))
+    return await registry.async_refresh()
+
+
+def _by_did(descriptions: list[CameraDescription], did: str) -> CameraDescription:
+    matches = [d for d in descriptions if d.did == did]
+    assert len(matches) == 1, f"expected exactly one description for {did!r}"
+    return matches[0]
+
+
+async def test_a_refused_model_is_listed_rather_than_silently_dropped() -> None:
+    """A camera missing from the list with no explanation reads as a broken
+    add-on. It is the vendor library refusing that model, and saying so is
+    also where the second path is discovered."""
+    descriptions = await _describe(
+        [
+            _device("aaa", "chuangmi.camera.81ac1"),
+            _device("bbb", "chuangmi.camera.ipc019"),
+        ]
+    )
+    assert {d.did for d in descriptions} == {"aaa", "bbb"}
+    assert _by_did(descriptions, "aaa").support == "full"
+    # `ipc019` is one of the 6 models go2rtc reaches reliably over `cs2`
+    # (design notes 1.4), so this add-on marks it "limited" -- not "full",
+    # which is reserved for a model it actually streams today, and not
+    # "unsupported", which would understate that a real path exists.
+    assert _by_did(descriptions, "bbb").support in {"limited", "unsupported"}
+
+
+async def test_a_refused_model_is_not_offered_a_working_stream() -> None:
+    """It is listed so it can be explained, not so it can appear to work."""
+    descriptions = await _describe([_device("bbb", "chuangmi.camera.ipc019")])
+    assert _by_did(descriptions, "bbb").online is False
+
+
+async def test_a_refused_models_support_level_follows_the_go2rtc_protocol() -> None:
+    """The two paths go2rtc offers refused models are not equally safe.
+
+    A model reachable over `cs2` gets "limited" -- go2rtc's own maintainer
+    calls that protocol reliable. A model reachable only over `tutk` --
+    called "the worst thing that's ever happened to the P2P world" by that
+    same maintainer -- is not distinguished from a model with no reported
+    alternative at all: both fall back to "unsupported", so this add-on never
+    steers a user toward handing over their account password for a path this
+    barely works.
+    """
+    descriptions = await _describe(
+        [
+            # cs2, reliable.
+            _device("cs2", "chuangmi.camera.021a04"),
+            # tutk, risky.
+            _device("tutk", "chuangmi.camera.v2"),
+            # On the vendor's denylist but not reported working by go2rtc at all.
+            _device("neither", "chuangmi.camera.no-known-alternative"),
+        ]
+    )
+    assert _by_did(descriptions, "cs2").support == "limited"
+    assert _by_did(descriptions, "tutk").support == "unsupported"
+    assert _by_did(descriptions, "neither").support == "unsupported"
+
+
+async def test_a_non_camera_device_on_the_deny_list_is_not_listed_as_a_camera() -> None:
+    """`is_camera_model` denies non-camera classes too; those never belong here."""
+    descriptions = await _describe([_device("light", "yeelink.light.col")])
+    assert descriptions == []

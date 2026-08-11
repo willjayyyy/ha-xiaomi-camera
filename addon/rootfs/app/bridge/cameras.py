@@ -20,6 +20,76 @@ from .const import POWER_PIID, POWER_SIID
 _LOGGER = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Support level for models the vendor library refuses.
+#
+# ``is_camera_model`` (in the vendor SDK's ``camera.py``) rejects 53 models
+# outright via a bundled deny list -- see the module docstring above. That
+# list is "the vendor confirmed these don't work", not "nothing else can be
+# done": go2rtc's native Xiaomi client (github.com/AlexxIT/go2rtc) implements
+# the camera's P2P protocol itself, independent of this vendor library, and
+# its users have reported success with some of those same refused models.
+# This add-on does not speak that protocol yet -- that is later work -- but a
+# user who owns one of these models deserves to be told an alternative exists
+# at all, rather than seeing an empty camera list with no explanation.
+#
+# The alternative is not equally trustworthy for every model, and that
+# difference matters enough to keep the two lists apart rather than folding
+# them into one "there's a workaround" bucket. go2rtc speaks two protocols to
+# reach these cameras: "cs2", which its maintainer treats as reliable, and
+# "tutk", which the same maintainer has called "the worst thing that's ever
+# happened to the P2P world". Recommending the tutk path to someone who would
+# have to hand their Xiaomi account password to a second piece of software to
+# try it is not a favour if it barely works -- so cs2 models are marked
+# "limited" (a real path exists, just not built into this add-on yet) and
+# tutk models fall back to "unsupported", the same bucket as every refused
+# model with no alternative reported at all.
+#
+# Source: github.com/AlexxIT/go2rtc issue #1982 (community-reported Xiaomi
+# camera compatibility), as compiled in
+# docs/superpowers/specs/2026-08-07-v2-design-notes.md section 1.4. Read
+# 2026-08-07. These lists go stale if that issue gains or loses reports, or
+# once a future release wires this add-on's own alternative path -- at which
+# point cs2 models stop being "limited" and become "full" for real.
+_GO2RTC_CS2_RELIABLE_MODELS = frozenset(
+    {
+        "chuangmi.camera.021a04",
+        "chuangmi.camera.026c02",
+        "chuangmi.camera.029a02",
+        "chuangmi.camera.ip029a",
+        "chuangmi.camera.ipc019",
+        "isa.camera.hlc6",
+    }
+)
+
+_GO2RTC_TUTK_RISKY_MODELS = frozenset(
+    {
+        "chuangmi.camera.ipc019e",
+        "chuangmi.camera.v2",
+        "chuangmi.camera.v6",
+        "chuangmi.camera.xiaobai",
+        "isa.camera.df3",
+        "isa.camera.isc5",
+        "isa.camera.isc5c1",
+        "lumi.camera.gwagl01",
+        "mijia.camera.v1",
+        "mijia.camera.v3",
+    }
+)
+
+
+def _support_for_refused_model(model: str) -> str:
+    """Support level for a camera model the vendor library refuses.
+
+    Never returns ``"full"`` -- that value is reserved for models this add-on
+    actually streams, which ``async_refresh`` derives separately and never
+    routes through here.
+    """
+    if model in _GO2RTC_CS2_RELIABLE_MODELS:
+        return "limited"
+    return "unsupported"
+
+
 @dataclass(frozen=True)
 class CameraDescription:
     """A camera as presented to Home Assistant."""
@@ -36,6 +106,10 @@ class CameraDescription:
     #: problem, while one that is off simply has nothing to send.
     powered_on: bool | None
     requires_pin: bool
+    #: ``"full"`` for a model this add-on actually streams; ``"limited"`` or
+    #: ``"unsupported"`` for one the vendor library refuses -- see
+    #: ``_support_for_refused_model`` for how the latter two are told apart.
+    support: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -48,6 +122,7 @@ class CameraDescription:
             "lan_online": self.lan_online,
             "powered_on": self.powered_on,
             "requires_pin": self.requires_pin,
+            "support": self.support,
         }
 
 
@@ -105,8 +180,22 @@ class CameraRegistry:
         return states.get(did)
 
     async def async_refresh(self) -> list[CameraDescription]:
-        """Re-read the camera list and their power state."""
+        """Re-read the camera list and their power state.
+
+        Also looks past the vendor library's own filtering. ``get_cameras_async``
+        silently drops any model on the 53-model deny list ``is_camera_model``
+        consults, which is indistinguishable, to a user who owns one, from the
+        add-on simply not working. ``get_devices_async`` returns every device
+        on the account with no such filtering -- confirmed by reading the SDK
+        source at the commit this add-on pins, since the SDK's Python layer is
+        open even though the P2P library underneath it is not. The refused
+        models are exactly the camera-class devices present in that unfiltered
+        list but absent from ``self._cameras``, and are reported alongside the
+        supported ones so this reads as "your camera is on a list" rather than
+        as a broken add-on.
+        """
         self._cameras = await self._client.get_cameras_async()
+        all_devices = await self._client.get_devices_async()
         power_states = await self._async_read_power_states(list(self._cameras))
         self._power_states = power_states
 
@@ -123,9 +212,47 @@ class CameraRegistry:
                     lan_online=bool(info.lan_online),
                     powered_on=power_states.get(did),
                     requires_pin=bool(getattr(info, "is_set_pincode", 0)),
+                    support="full",
                 )
             )
-        _LOGGER.info("Discovered %d supported camera(s)", len(descriptions))
+
+        refused_count = 0
+        for did, info in all_devices.items():
+            if did in self._cameras:
+                continue
+            # ``is_camera_model`` keys its allow/deny lookup on this same
+            # split (device class is the second dot-separated segment of the
+            # model string). Devices of other classes -- lights, speakers,
+            # whatever else shares the account -- do not belong on a camera
+            # list even though they too were dropped by ``get_cameras_async``.
+            if info.model.split(".")[1] != "camera":
+                continue
+            refused_count += 1
+            descriptions.append(
+                CameraDescription(
+                    did=did,
+                    name=info.name,
+                    model=info.model,
+                    manufacturer=info.manufacturer,
+                    channel_count=1,
+                    # Always False, never the cloud's own answer for this
+                    # device: there is no camera-control channel to a refused
+                    # model at all, so nothing here can ever open a stream for
+                    # it regardless of what the cloud reports about it being
+                    # reachable.
+                    online=False,
+                    lan_online=bool(getattr(info, "lan_online", False)),
+                    powered_on=None,
+                    requires_pin=False,
+                    support=_support_for_refused_model(info.model),
+                )
+            )
+
+        _LOGGER.info(
+            "Discovered %d supported camera(s), %d refused by the vendor library",
+            len(self._cameras),
+            refused_count,
+        )
         return descriptions
 
     async def async_set_power(self, did: str, value: bool) -> None:
