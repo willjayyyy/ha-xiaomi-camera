@@ -144,8 +144,18 @@ class Bridge:
             _LOGGER.error("Could not refresh the camera list: %s", err)
             return
 
-        offline = [c.name for c in cameras if not c.online]
-        powered_off = [c.name for c in cameras if c.powered_on is False]
+        # A refused camera is always reported `online=False` by construction
+        # (see `CameraRegistry.async_refresh`) -- not a real connectivity
+        # signal, so counting it here would flood this log with entries that
+        # look like a network problem for cameras that were never going to
+        # stream. Everything below this point -- the two logs, session and
+        # settings pruning, and what go2rtc is told to publish -- only ever
+        # looks at cameras this add-on can actually stream: see
+        # `CameraDescription.publishable`.
+        publishable = [c for c in cameras if c.publishable]
+
+        offline = [c.name for c in publishable if not c.online]
+        powered_off = [c.name for c in publishable if c.powered_on is False]
         if offline:
             _LOGGER.warning("Offline camera(s): %s", ", ".join(offline))
         if powered_off:
@@ -162,13 +172,13 @@ class Bridge:
             # Drop sessions for cameras that no longer exist, so a removed
             # device does not keep its native instance alive for the lifetime
             # of the process.
-            await self._sessions.async_prune({c.did for c in cameras})
-        self._settings.prune({c.did for c in cameras})
+            await self._sessions.async_prune({c.did for c in publishable})
+        self._settings.prune({c.did for c in publishable})
         await self._restreamer.async_apply(
-            {c.did: self._settings.resolved_for(c.did) for c in cameras},
+            {c.did: self._settings.resolved_for(c.did) for c in publishable},
             explicit=explicit,
         )
-        self._previews.drop({c.did for c in cameras})
+        self._previews.drop({c.did for c in publishable})
 
     async def async_stop(self) -> None:
         if self._refresh_task is not None:

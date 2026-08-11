@@ -101,10 +101,22 @@ def test_the_control_plane_is_not_reachable_through_the_page() -> None:
 
 
 class _Camera:
-    """Stands in for `CameraDescription` -- only what `_cameras` reads."""
+    """Stands in for `CameraDescription` -- only what `_cameras` reads.
 
-    def __init__(self, did: str) -> None:
+    `support` defaults to `"full"`, matching every existing test's
+    assumption of a working camera; `publishable` is derived from it exactly
+    as the real `CameraDescription.publishable` is, so a double built with
+    `support="unsupported"` behaves like a refused camera on both the
+    filtering path and the JSON body.
+    """
+
+    def __init__(self, did: str, support: str = "full") -> None:
         self.did = did
+        self.support = support
+
+    @property
+    def publishable(self) -> bool:
+        return self.support == "full"
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -117,16 +129,21 @@ class _Camera:
             "lan_online": True,
             "powered_on": True,
             "requires_pin": False,
+            "support": self.support,
         }
 
 
 class _Registry:
     """One known camera, `aaa`. Just enough of `CameraRegistry` to answer
     `/api/cameras` and the power-state questions the settings handlers ask.
+
+    `extra` lets a test add cameras -- typically a refused one -- without
+    disturbing every other test built on this fixture, which assumes `aaa`
+    is the only, and first, camera in the list.
     """
 
-    def __init__(self) -> None:
-        self._cameras = {"aaa": _Camera("aaa")}
+    def __init__(self, extra: list[_Camera] | None = None) -> None:
+        self._cameras = {"aaa": _Camera("aaa"), **{c.did: c for c in extra or []}}
 
     async def async_refresh(self) -> list[_Camera]:
         return list(self._cameras.values())
@@ -173,15 +190,19 @@ class _Restreamer:
         return []
 
 
-@pytest.fixture
-def bridge(tmp_path: Path) -> BridgeApi:
-    """A `BridgeApi` wired to one camera (`aaa`) and its own settings file.
+def _build_bridge(tmp_path: Path, extra: list[_Camera] | None = None) -> BridgeApi:
+    """A `BridgeApi` wired to camera `aaa` (plus `extra`) and its own settings
+    file.
 
     `access_mode=local` and `supervised=False` together mean the ingress
     guards let every request through unauthenticated -- the same combination
     `test_webauth.py` uses for "a loopback page needs no password". What is
     under test here is the settings endpoints, not the guards in front of
     them.
+
+    Factored out from the `bridge` fixture so a test that needs a second,
+    refused camera can build its own instance without changing what every
+    other test in this file sees.
     """
     options = Options(
         access_mode=AccessMode.LOCAL,
@@ -195,7 +216,7 @@ def bridge(tmp_path: Path) -> BridgeApi:
         supervised=False,
     )
     settings_store = SettingsStore(tmp_path / "settings.json")
-    registry = _Registry()
+    registry = _Registry(extra)
     sessions = _Sessions()
 
     async def refresh_callback(*, explicit: bool = False) -> None:
@@ -211,6 +232,11 @@ def bridge(tmp_path: Path) -> BridgeApi:
         previews=None,
         settings_store=settings_store,
     )
+
+
+@pytest.fixture
+def bridge(tmp_path: Path) -> BridgeApi:
+    return _build_bridge(tmp_path)
 
 
 @pytest.fixture
@@ -324,3 +350,61 @@ async def test_the_settings_endpoints_are_not_on_the_control_plane(bridge):
         route.resource.canonical for route in bridge.build_control_app().router.routes()
     }
     assert "/api/settings" not in paths
+
+
+# ----------------------------------------------------------------------
+# A refused camera on `/api/cameras`.
+#
+# The two listeners answer different questions and must keep disagreeing:
+# an older integration has never heard of `support` and cannot be expected to
+# filter a refused camera out itself, so the control plane's answer is
+# already filtered when it arrives -- see `CameraDescription.publishable`
+# and `BridgeApi._cameras_for_control`. The page asks "what is on this
+# account" and needs the refused camera, with `support`, to explain it.
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+async def _refused_camera_apps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Both listeners of one bridge that knows about a refused camera `bbb`,
+    driven directly through `TestClient` rather than through the shared
+    `bridge`/`client` fixtures, which assume `aaa` is the only camera.
+    """
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
+    app = _build_bridge(tmp_path, extra=[_Camera("bbb", support="unsupported")])
+
+    control = TestClient(TestServer(app.build_control_app()))
+    page = TestClient(TestServer(app.build_ingress_app()))
+    await control.start_server()
+    await page.start_server()
+    try:
+        yield control, page
+    finally:
+        await control.close()
+        await page.close()
+
+
+@pytest.mark.asyncio
+async def test_a_refused_camera_never_reaches_the_control_plane(_refused_camera_apps):
+    """The one thing this bug did: an integration that cannot read `support`
+    would otherwise build an entity for `bbb` that can never show a picture.
+    """
+    control, _ = _refused_camera_apps
+    body = await (await control.get("/api/cameras")).json()
+    dids = {c["did"] for c in body["cameras"]}
+    assert dids == {"aaa"}
+
+
+@pytest.mark.asyncio
+async def test_a_refused_camera_reaches_the_page_with_its_support_level(
+    _refused_camera_apps,
+):
+    """The page is where a refused camera's `support` has a reader at all."""
+    _, page = _refused_camera_apps
+    body = await (await page.get("/api/cameras")).json()
+    dids = {c["did"] for c in body["cameras"]}
+    assert dids == {"aaa", "bbb"}
+    refused = next(c for c in body["cameras"] if c["did"] == "bbb")
+    assert refused["support"] == "unsupported"

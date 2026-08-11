@@ -691,7 +691,12 @@ class TestCamerasEndpointReachability:
             settings_store=SettingsStore(tmp_path / "settings.json"),
         )
         app = web.Application()
-        app.router.add_get("/api/cameras", api._cameras)
+        # `_cameras_for_page`: this test's fake description carries no
+        # `publishable` attribute, and this test is about the reachability
+        # field itself, not about which listener's filtering runs -- the
+        # unfiltered handler is the closer match to what this used to drive
+        # directly.
+        app.router.add_get("/api/cameras", api._cameras_for_page)
         client = TestClient(TestServer(app))
         await client.start_server()
         try:

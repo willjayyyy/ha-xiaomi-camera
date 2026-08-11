@@ -147,7 +147,7 @@ class BridgeApi:
         app.add_routes(
             [
                 web.get("/api/health", self._health),
-                web.get("/api/cameras", self._cameras),
+                web.get("/api/cameras", self._cameras_for_control),
                 web.post("/api/cameras/refresh", self._refresh),
                 web.get("/api/snapshot/{did}", self._snapshot),
                 web.get("/api/stream/{did}", self._stream),
@@ -168,7 +168,7 @@ class BridgeApi:
         app.add_routes(
             [
                 web.get("/api/health", self._health),
-                web.get("/api/cameras", self._cameras),
+                web.get("/api/cameras", self._cameras_for_page),
                 web.post("/api/link/begin", self._link_begin),
                 web.post("/api/link/complete", self._link_complete),
                 web.post("/api/unlink", self._unlink),
@@ -233,7 +233,30 @@ class BridgeApi:
             }
         )
 
-    async def _cameras(self, request: web.Request) -> web.Response:
+    async def _cameras_for_control(self, request: web.Request) -> web.Response:
+        """The integration's answer: only cameras this add-on can stream.
+
+        A refused camera is real account data, not a bug, but an integration
+        -- including one released before this field existed -- has no way to
+        act on ``support`` and would otherwise build a `camera` entity for a
+        device that can never show a picture, with nothing telling the user
+        why. Filtering happens here, once, rather than trusting every caller
+        of this route to check ``CameraDescription.publishable`` itself.
+        """
+        return await self._cameras(request, publishable_only=True)
+
+    async def _cameras_for_page(self, request: web.Request) -> web.Response:
+        """The page's answer: every camera on the account, refused or not.
+
+        The page is where a refused camera's ``support`` value has somewhere
+        to be read and explained; unlike the control plane it is not asking
+        "which of these can I build an entity for".
+        """
+        return await self._cameras(request, publishable_only=False)
+
+    async def _cameras(
+        self, request: web.Request, *, publishable_only: bool
+    ) -> web.Response:
         registry: CameraRegistry | None = self._registry_provider()
         if registry is None:
             return web.json_response(
@@ -241,6 +264,8 @@ class BridgeApi:
                 status=503,
             )
         descriptions = await registry.async_refresh()
+        if publishable_only:
+            descriptions = [d for d in descriptions if d.publishable]
         sessions: SessionManager | None = self._sessions_provider()
         stats = sessions.stats() if sessions else {}
         return web.json_response(

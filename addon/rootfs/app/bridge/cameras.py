@@ -111,6 +111,26 @@ class CameraDescription:
     #: ``_support_for_refused_model`` for how the latter two are told apart.
     support: str
 
+    @property
+    def publishable(self) -> bool:
+        """Whether this camera may be published, streamed, or offered as an
+        entity at all.
+
+        The one predicate every consumer that touches a camera's stream must
+        ask -- go2rtc's stream table, the session manager, the control
+        plane's camera list -- rather than each re-deriving "does this camera
+        work" from :attr:`support` on its own. A refused camera was once
+        simply absent from this list; now that it is present so it can be
+        explained, every one of those consumers would otherwise have to learn
+        that fact independently, and independent answers to the same
+        question are exactly what has drifted apart on this project before
+        (see the multi-stream default-selection incident in CLAUDE.md).
+        Routing every check through this property instead means a fourth
+        support level, if one is ever added, cannot silently become
+        publishable by accident -- it has to be added here, once.
+        """
+        return self.support == "full"
+
     def as_dict(self) -> dict[str, object]:
         return {
             "did": self.did,
