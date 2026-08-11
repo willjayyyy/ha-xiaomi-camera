@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from bridge import config
@@ -20,6 +21,7 @@ from bridge.config import (
     VideoQuality,
     load_options,
 )
+from bridge.settings import SettingsStore
 
 
 def write_options(tmp_path: Path, **overrides: object) -> Path:
@@ -315,7 +317,19 @@ class TestTheAddOnDeclaresEverySetting:
     quietly: unschema'd it cannot be typed, undefaulted it is dropped on read,
     unoffered it never appears. This project has shipped a setting that was
     threaded everywhere except the one place that assigned it.
+
+    `video_quality`, `enable_audio` and `transcode_quality` are the deliberate
+    exception: they moved to the add-on's own page and are no longer offered
+    on this form, but `_DEFAULTS` still carries them because `load_options`
+    still has to make sense of a 1.4.0 `options.json` long enough to seed the
+    new per-camera settings store from it.
     """
+
+    _RELOCATED: ClassVar[set[str]] = {
+        "video_quality",
+        "enable_audio",
+        "transcode_quality",
+    }
 
     @staticmethod
     def _addon() -> dict:
@@ -325,7 +339,40 @@ class TestTheAddOnDeclaresEverySetting:
         return yaml.safe_load(path.read_text(encoding="utf-8"))
 
     def test_every_setting_has_a_starting_value(self) -> None:
-        assert set(config._DEFAULTS) == set(self._addon()["options"])
+        assert set(config._DEFAULTS) - self._RELOCATED == set(self._addon()["options"])
 
     def test_every_setting_can_be_typed_into_the_form(self) -> None:
-        assert set(config._DEFAULTS) == set(self._addon()["schema"])
+        assert set(config._DEFAULTS) - self._RELOCATED == set(self._addon()["schema"])
+
+
+class TestSeedingFromPre2_0Options:
+    """The settings store adopts 1.4.0's global values exactly once.
+
+    After that the add-on page owns picture size, audio and transcode
+    quality, and the add-on configuration is no longer consulted for them --
+    seeding must not clobber a choice the user has since made on the page.
+    """
+
+    def test_a_1_4_0_options_file_seeds_the_new_defaults(self, tmp_path: Path) -> None:
+        options_file = write_options(
+            tmp_path,
+            video_quality="high",
+            enable_audio=True,
+            transcode_quality="sharp",
+        )
+        options = load_options(options_file, supervised=False)
+        store = SettingsStore(tmp_path / "settings.json")
+        assert store.seed_from_options(options) is True
+        assert store.defaults.quality is VideoQuality.HIGH
+        assert store.defaults.audio is True
+        assert store.defaults.transcode_quality is TranscodeQuality.SHARP
+
+    def test_seeding_runs_once_and_never_overwrites_a_users_later_choice(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "settings.json"
+        store = SettingsStore(path)
+        store.set_defaults(quality=VideoQuality.LOW)
+        options = load_options(tmp_path / "absent.json", supervised=False)
+        assert store.seed_from_options(options) is False
+        assert SettingsStore(path).defaults.quality is VideoQuality.LOW

@@ -26,33 +26,6 @@ configuration:
       Xiaomi account. Required when stream access is "lan", because that puts the
       page on your network. Optional otherwise — but if you set it, it is always
       asked for, in every deployment and through the Home Assistant panel as well.
-  video_quality:
-    name: Video quality
-    description: >-
-      What to ask the camera itself for, which changes the stream everything reads —
-      recordings included — not just the picture on this add-on's page. "low" is
-      enough for a dashboard tile and the lightest on your network and this machine;
-      "high" gives more detail for more bandwidth and more decoding work.
-  transcode_quality:
-    name: Transcode quality
-    description: >-
-      How finely the add-on re-encodes the picture for the streams it publishes at
-      other sizes. Separate from "Video quality" above, which decides what the
-      camera sends in the first place — you can ask the camera for its sharpest
-      picture and still re-encode it coarsely, or the other way round. Each stream
-      spends only what its scene needs, so a still room costs little and a busy one
-      costs more; raising this asks for more detail everywhere and costs CPU and
-      bandwidth to match. The camera's own stream is passed through untouched and
-      is unaffected.
-  enable_audio:
-    name: Include audio
-    description: >-
-      Carry the camera's microphone on the published streams. Off by default:
-      a microphone recording a room is your decision to make, not an upgrade's.
-      Where you can hear it depends on what is playing the stream — Home
-      Assistant's camera card can when it uses WebRTC, HomeKit can once you
-      turn its own audio support on, and an NVR reading the stream directly
-      can. Cameras without a microphone are unaffected either way.
   log_level:
     name: Log level
     description: >-

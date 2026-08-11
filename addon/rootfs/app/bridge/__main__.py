@@ -63,6 +63,11 @@ class Bridge:
         # Three separate stores would each answer "what does this camera get"
         # independently, and independent answers are exactly what drifts.
         self._settings = SettingsStore(SETTINGS_FILE)
+        # Runs once, before anything else touches this store: a 1.4.0 install
+        # still carries these values in options.json, and this is the only
+        # chance to adopt them before the page starts treating the store as
+        # the sole source of truth.
+        self._settings.seed_from_options(self._options)
         self._api = BridgeApi(
             account=self._account,
             registry_provider=lambda: self._registry,
