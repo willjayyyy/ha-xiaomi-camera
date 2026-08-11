@@ -344,6 +344,15 @@
     display: flex; flex-direction: column; overflow: hidden;
     opacity: 0; transform: translateY(10px); transition: opacity .18s ease, transform .18s ease;
   }
+  /* Focused programmatically on open (see `openOverlay`), never by Tab --
+     `tabindex="-1"` takes it out of the normal tab order entirely, so a
+     keyboard user can never land here by navigating. That focus move is
+     still right: it is what puts a screen reader and the keyboard inside
+     the dialog instead of behind it. But the ring answers "where does the
+     next keystroke go", and nobody keyed their way here to ask -- so it is
+     suppressed on the panel itself only. Every focusable control inside the
+     panel keeps its own `:focus-visible` outline untouched below. */
+  .overlay-panel:focus { outline: none; }
   /* The class a frame after `hidden` is cleared -- see the comment on
      `openOverlay` in the script for why the two are separate steps. */
   #overlay.open .overlay-backdrop { opacity: 1; }
