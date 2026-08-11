@@ -35,8 +35,11 @@ _APP = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app"
 _API = (_APP / "bridge" / "api.py").read_text(encoding="utf-8")
 _PAGE = (_APP / "web" / "index.html").read_text(encoding="utf-8")
 
-#: `web.get("/api/health", ...)` and friends, per listener.
-_ROUTE = re.compile(r'web\.(get|post)\(\s*"(?P<path>[^"]+)"')
+#: `web.get("/api/health", ...)` and friends, per listener. `put` joined the
+#: settings endpoints in a later task; missing it here would make this file
+#: blind to exactly the mismatch it exists to catch, for any route that
+#: happens to use that method.
+_ROUTE = re.compile(r'web\.(get|post|put)\(\s*"(?P<path>[^"]+)"')
 
 #: Every address the page names, whether through `api("/api/…")` or as an
 #: element's source. Both forms have shipped pointing at a route that did not

@@ -45,7 +45,7 @@ from .streaming import StreamError
 from .webauth import SESSION_COOKIE, build_guards, session_token
 
 if TYPE_CHECKING:
-    from .cameras import CameraRegistry
+    from .cameras import CameraDescription, CameraRegistry
     from .restream import Restreamer
     from .streaming import SessionManager
 
@@ -285,33 +285,7 @@ class BridgeApi:
                         "stream_audio": (
                             stats.get(description.did, {}).get("audio_codec")
                         ),
-                        # Credential-free by construction: a URL carrying
-                        # user:password@ would be copied into Home Assistant
-                        # config state, diagnostics and the UI.
-                        "rtsp_url": self._restreamer.rtsp_url(description.did),
-                        # The same pictures, re-encoded on demand for anything
-                        # that cannot decode H.265 -- browsers and HomeKit,
-                        # mostly. Nothing pays for it until something opens it.
-                        "rtsp_url_h264": self._restreamer.rtsp_url_h264(
-                            description.did
-                        ),
-                        # Read by the integration in place of the two fixed
-                        # fields above, which stay for an integration older
-                        # than this add-on.
-                        "streams": self._restreamer.stream_descriptions(
-                            description.did
-                        ),
-                        "rtsp_requires_credentials": (
-                            self._restreamer.requires_credentials
-                        ),
-                        # Whether the address above is reachable from anything
-                        # other than this host -- distinct from whether a
-                        # password is required. The page needs this to decide
-                        # whether rewriting the loopback hostname it was sent
-                        # would produce a working address or a dead one.
-                        "rtsp_reachable_off_host": (
-                            self._restreamer.rtsp_reachable_off_host
-                        ),
+                        **self._stream_fields(description),
                         # Resolved is what the camera actually gets right now
                         # -- its own override where it has one, the shared
                         # default otherwise. Override is only what this
@@ -328,6 +302,42 @@ class BridgeApi:
                 ]
             }
         )
+
+    def _stream_fields(self, description: CameraDescription) -> dict[str, object]:
+        """RTSP addresses for a camera, or nothing for one that cannot stream.
+
+        A refused camera's ``publishable`` is ``False`` -- go2rtc never builds
+        a stream table entry for it, so any address handed out here would name
+        a connection that can never succeed. Relying on the page to remember
+        not to render it is weaker than not sending it: any consumer of this
+        JSON, now or later, may reasonably show or dial a URL it was given.
+        Gated on the same ``publishable`` property everything else that
+        touches a camera's stream uses, rather than re-deriving it from
+        ``support`` here -- see the property's own docstring for why that
+        matters on this project specifically.
+        """
+        if not description.publishable:
+            return {}
+        return {
+            # Credential-free by construction: a URL carrying user:password@
+            # would be copied into Home Assistant config state, diagnostics
+            # and the UI.
+            "rtsp_url": self._restreamer.rtsp_url(description.did),
+            # The same pictures, re-encoded on demand for anything that cannot
+            # decode H.265 -- browsers and HomeKit, mostly. Nothing pays for
+            # it until something opens it.
+            "rtsp_url_h264": self._restreamer.rtsp_url_h264(description.did),
+            # Read by the integration in place of the two fixed fields above,
+            # which stay for an integration older than this add-on.
+            "streams": self._restreamer.stream_descriptions(description.did),
+            "rtsp_requires_credentials": self._restreamer.requires_credentials,
+            # Whether the address above is reachable from anything other than
+            # this host -- distinct from whether a password is required. The
+            # page needs this to decide whether rewriting the loopback
+            # hostname it was sent would produce a working address or a dead
+            # one.
+            "rtsp_reachable_off_host": self._restreamer.rtsp_reachable_off_host,
+        }
 
     async def _refresh(self, request: web.Request) -> web.Response:
         await self._refresh_callback()

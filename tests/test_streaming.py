@@ -655,6 +655,12 @@ class TestCamerasEndpointReachability:
         """
         description = SimpleNamespace(
             did="42",
+            # `_stream_fields` (which builds the addresses this test reads)
+            # checks `publishable` regardless of which listener called it --
+            # a refused camera gets no address on either. This fake is a
+            # streamable camera, so it says so explicitly rather than relying
+            # on the real `CameraDescription.publishable` derivation.
+            publishable=True,
             as_dict=lambda: {
                 "did": "42",
                 "name": "Cam",
@@ -691,11 +697,9 @@ class TestCamerasEndpointReachability:
             settings_store=SettingsStore(tmp_path / "settings.json"),
         )
         app = web.Application()
-        # `_cameras_for_page`: this test's fake description carries no
-        # `publishable` attribute, and this test is about the reachability
-        # field itself, not about which listener's filtering runs -- the
-        # unfiltered handler is the closer match to what this used to drive
-        # directly.
+        # `_cameras_for_page`: this test is about the reachability field
+        # itself, not about which listener's filtering runs -- the unfiltered
+        # handler is the closer match to what this used to drive directly.
         app.router.add_get("/api/cameras", api._cameras_for_page)
         client = TestClient(TestServer(app))
         await client.start_server()
