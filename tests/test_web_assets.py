@@ -79,6 +79,7 @@ _SCALE = {
     "600px",  # the sheet-becomes-a-drawer breakpoint
     "1080px",  # page container max-width
     "1100px",  # enlarged preview max-width
+    "200px",  # preview-preference panel's own min-width, not a spacing step
 }
 
 
@@ -371,3 +372,33 @@ def test_switching_connection_confirms_inside_the_sheet():
     assert "pathSwitchWarning" in js
     assert 'confirm(t("pathSwitchWarning"))' not in js
     assert 'window.confirm(t("pathSwitchWarning"))' not in js
+
+
+def test_the_chip_is_not_on_a_card_that_cannot_play():
+    """The preview-preference chip only makes sense over a picture that can
+    actually play -- a blocked card has no picture for it to change."""
+    js = JS.read_text()
+    idle = js.split("function previewIdleHtml", 1)[1].split("\n}", 1)[0]
+    blocked, playable = idle.split('return `<div class="placeholder"', 1)
+    assert "prefChipHtml" not in blocked
+    assert "prefChipHtml" in playable
+
+
+def test_the_preview_chip_changes_only_this_viewers_own_picture():
+    """Frame rate and detail are stored in `localStorage`, never sent to the
+    add-on -- they are what this browser is being sent, not a camera
+    setting."""
+    js = JS.read_text()
+    chip = _function_body(js, "prefChipHtml")
+    assert "localStorage" not in chip
+    assert "prefsFor" in chip
+    assert "api(" not in chip
+
+
+def test_changing_a_preview_pref_restarts_a_running_preview_only():
+    """The point of a preview preference is to see the change in the
+    picture -- but only if one is actually playing."""
+    js = JS.read_text()
+    apply = _function_body(js, "applyPreviewPref")
+    assert "startPreview" in apply
+    assert "_preview" in apply

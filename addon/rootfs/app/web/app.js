@@ -78,7 +78,6 @@ const I18N = {
     on: "On", off: "Off",
     transcodeStandard: "Standard", transcodeSharp: "Sharp", transcodeMaximum: "Maximum",
     followDefault: "Follow default",
-    previewGroup: "This viewer only",
     addressGroup: "Address",
     settingsSaveFailed: "Could not save that setting.",
     pathSwitchWarning: "Changing the connection rebuilds this camera's stream -- anything watching it now, including this preview, HomeKit and a recorder, reconnects.",
@@ -155,7 +154,6 @@ const I18N = {
     on: "开启", off: "关闭",
     transcodeStandard: "标准", transcodeSharp: "锐利", transcodeMaximum: "最高",
     followDefault: "跟随默认",
-    previewGroup: "仅本设备生效",
     addressGroup: "地址",
     settingsSaveFailed: "设置未能保存。",
     pathSwitchWarning: "切换连接方式会重建这台摄像头的流，正在观看的一切都会重连，包括这个预览、HomeKit 和录像。",
@@ -1264,13 +1262,34 @@ function blocker(c) {
 }
 
 /**
- * This viewer's own preview preferences, floating on the picture -- a chip
- * with an expandable panel. Left as an empty stub here: Task D5 builds it,
- * this task only needs the call site so `previewIdleHtml` never shows it on
- * a card that cannot play (see the split above).
+ * This viewer's own preview preferences, floating on the picture they
+ * change.
+ *
+ * Kept off the settings sheet on purpose: everything in that sheet changes
+ * the camera for every consumer, and these two change nothing but the
+ * pictures this browser is being sent. Putting them on the picture makes
+ * that difference visible without a sentence explaining it.
  */
-function prefChipHtml(_camera) {
-  return "";
+function prefChipHtml(camera) {
+  const prefs = prefsFor(camera.did);
+  const fpsField = previewFpsField(camera);
+  const detailField = previewDetailField();
+  return `<div class="chip-wrap">
+    <button type="button" class="chip" data-chip aria-expanded="false">${escapeHtml(fpsLabel(prefs))}</button>
+    <div class="chip-panel" data-chip-panel hidden>
+      <span class="chip-label">${escapeHtml(t(fpsField.labelKey))}</span>
+      ${segment("fps", fpsField.choices(), String(prefs.fps))}
+      <span class="chip-label">${escapeHtml(t(detailField.labelKey))}</span>
+      ${segment("detail", detailField.choices(), prefs.detail)}
+    </div>
+  </div>`;
+}
+
+//: The chip's collapsed label: the concrete rate, or "camera's rate" when
+//: unthrottled (`fps: 0`) -- the one thing this control is opened to learn,
+//: readable without opening it.
+function fpsLabel(prefs) {
+  return prefs.fps ? `${prefs.fps} fps` : t("fpsCamera");
 }
 
 //: Opens compatibility mode's sign-in flow for a camera that has no usable
@@ -1307,6 +1326,43 @@ function wireCameraGrid(container) {
 
     const compatSigninBtn = event.target.closest("[data-compat-signin]");
     if (compatSigninBtn) { openCompatSignIn(compatSigninBtn.closest(".cam").dataset.did); return; }
+
+    const chipToggle = event.target.closest("[data-chip]");
+    if (chipToggle) {
+      const panel = chipToggle.closest(".chip-wrap").querySelector("[data-chip-panel]");
+      const opening = panel.hidden;
+      closeChipPanels(container);
+      panel.hidden = !opening;
+      chipToggle.setAttribute("aria-expanded", String(opening));
+      return;
+    }
+
+    const chipChoice = event.target.closest("[data-chip-panel] .seg button");
+    if (chipChoice) {
+      const cam = chipChoice.closest(".cam");
+      const kind = chipChoice.closest("[data-seg]").dataset.seg;
+      const value = kind === "fps" ? Number(chipChoice.dataset.value) : chipChoice.dataset.value;
+      for (const sibling of chipChoice.parentElement.children) {
+        sibling.setAttribute("aria-pressed", String(sibling === chipChoice));
+      }
+      applyPreviewPref(cam.dataset.did, kind, value);
+      // Queried fresh rather than kept from `chipChoice` above: if a preview
+      // was actually running, `applyPreviewPref` just restarted it, which
+      // replaces this card's whole picture area (see `startPreview`) and
+      // takes the chip out with it -- so there may be nothing left to label.
+      const chipBtn = cam.querySelector("[data-chip]");
+      if (chipBtn) chipBtn.textContent = fpsLabel(prefsFor(cam.dataset.did));
+      return;
+    }
+  });
+}
+
+//: Closes every open preference panel inside `container` -- called before
+//: opening one, so at most one is ever expanded at a time.
+function closeChipPanels(container) {
+  container.querySelectorAll("[data-chip-panel]").forEach((panel) => {
+    panel.hidden = true;
+    panel.closest(".chip-wrap")?.querySelector("[data-chip]")?.setAttribute("aria-expanded", "false");
   });
 }
 
