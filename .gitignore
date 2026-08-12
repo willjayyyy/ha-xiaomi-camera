@@ -5,6 +5,9 @@
 
 # Node (the add-on web UI's Svelte build)
 node_modules/
+# The web UI is built into the image from `addon/web/src`, so the committed
+# output directory is empty.
+addon/rootfs/app/web/
 
 # Python
 __pycache__/

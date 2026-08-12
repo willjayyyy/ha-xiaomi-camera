@@ -14,12 +14,27 @@ a change that looked local.
 import pathlib
 import re
 
+import pytest
+
 SOURCE = pathlib.Path("addon/web/src")
+#: The design tokens and component styles live in one source stylesheet; the
+#: built `app.css` is this file carried through Vite (unminified), so the
+#: token-scale and media-query rules are checked here -- where they run
+#: without the output being built.
+SRC_CSS = SOURCE / "global.css"
 WEB = pathlib.Path("addon/rootfs/app/web")
-CSS = WEB / "app.css"
 JS = WEB / "app.js"
 HTML = WEB / "index.html"
 I18N = SOURCE / "lib/i18n.svelte.js"
+
+
+def _require_built_output():
+    """The output-level checks need the web UI built (the image build does it
+    in Docker, CI's test job before pytest). Skipped otherwise, so a local
+    `python -m pytest` runs the source checks without a build."""
+    if not JS.exists():
+        pytest.skip("web UI not built; run `cd addon/web && npm run build`")
+
 
 #: Every source file under `addon/web/src`, for whole-page rules like the
 #: retired vocabulary.
@@ -252,7 +267,9 @@ def test_changing_a_preview_pref_restarts_a_running_preview_only():
 
 
 def test_the_page_is_split_into_three_files():
-    assert CSS.exists() and JS.exists()
+    _require_built_output()
+    app_css = WEB / "app.css"
+    assert app_css.exists() and JS.exists()
     html = HTML.read_text()
     assert 'href="./app.css"' in html or 'href="app.css"' in html
     assert 'src="./app.js"' in html or 'src="app.js"' in html
@@ -265,7 +282,8 @@ def test_no_external_requests():
     The Svelte runtime's own error-hint URLs and the XML namespace constants
     are string literals in the bundle that are never fetched -- ignored along
     with the loopback placeholder."""
-    for source in (HTML, CSS, JS):
+    _require_built_output()
+    for source in (HTML, WEB / "app.css", JS):
         text = source.read_text()
         for literal in (
             "http://127.0.0.1",
@@ -281,7 +299,7 @@ def test_no_external_requests():
 
 
 def test_lengths_come_from_the_scale():
-    body = CSS.read_text().split("/* end tokens */", 1)[1]
+    body = SRC_CSS.read_text().split("/* end tokens */", 1)[1]
     offenders = sorted(
         {
             length
@@ -293,38 +311,38 @@ def test_lengths_come_from_the_scale():
 
 
 def test_every_transition_has_a_reduced_motion_answer():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     assert "@media (prefers-reduced-motion: reduce)" in css
     reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
     assert "transition" in reduced
 
 
 def test_settings_row_is_a_touch_target():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     assert re.search(r"\.setting-row-btn\s*{[^}]*min-height:\s*56px", css, re.S)
 
 
 def test_separator_starts_at_the_label():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     assert re.search(r"\.setting-row\s*\+\s*\.setting-row[^}]*margin-left", css, re.S)
 
 
 def test_focus_is_visible_and_only_for_keyboards():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     assert ":focus-visible" in css
     assert re.search(r":focus-visible\s*{[^}]*outline:\s*2px", css, re.S)
     assert not re.search(r"[^-]:focus\s*{", css)
 
 
 def test_the_sheet_becomes_a_bottom_drawer_on_small_screens():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     assert "@media (max-width: 600px)" in css
     small = css.split("@media (max-width: 600px)", 1)[1]
     assert "border-radius: var(--r-sheet) var(--r-sheet) 0 0" in small
 
 
 def test_dark_mode_redefines_every_colour_token():
-    css = CSS.read_text()
+    css = SRC_CSS.read_text()
     token = (
         r"(--(?:ground|surface|sunken|ink-\d|hairline|accent[\w-]*|ok|warn|err|lift)):"
     )

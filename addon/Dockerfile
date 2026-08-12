@@ -121,7 +121,26 @@ RUN set -eux; \
     rm -f /tmp/encoders.txt
 
 # ---------------------------------------------------------------------------
-# Stage 3: the running image
+# Stage 3: build the add-on's web UI
+# ---------------------------------------------------------------------------
+# The page is Svelte, compiled here from the source in `web/` -- the image is
+# always built from the current source, never from a committed bundle, so a
+# change that forgets to rebuild can never reach the image stale. The build
+# context is `addon/`, so `web/` is the Svelte project; its Vite output lands
+# in `rootfs/app/web` (the bridge's `_STATIC_DIR`), which the final stage
+# copies over the uncommitted directory (see `.gitignore`).
+FROM node:22-bookworm-slim AS web
+
+WORKDIR /build/web
+# Dependencies first, so a change that only touches the source reuses the
+# `npm ci` layer.
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+# ---------------------------------------------------------------------------
+# Stage 4: the running image
 # ---------------------------------------------------------------------------
 FROM ${BUILD_FROM}
 
@@ -178,6 +197,9 @@ RUN set -eux; \
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY rootfs /
+# The web UI built in the `web` stage above replaces the (empty) committed
+# `app/web` -- the bridge serves these files.
+COPY --from=web /build/rootfs/app/web /app/web
 
 # The bridge itself runs unprivileged -- it opens only unprivileged ports and
 # writes only to /data. That limits the blast radius of a memory-safety bug in

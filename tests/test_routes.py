@@ -37,11 +37,16 @@ if importlib.util.find_spec("pytest_socket") is not None:
 
 _APP = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app"
 _API = (_APP / "bridge" / "api.py").read_text(encoding="utf-8")
-# The markup and the behaviour that requests things live in separate files
-# since the page was split; a request address can drift in either one.
-_PAGE = (_APP / "web" / "index.html").read_text(encoding="utf-8") + (
-    _APP / "web" / "app.js"
-).read_text(encoding="utf-8")
+# The markup and the behaviour that requests things live in the Svelte
+# source, not in a built bundle (the web UI is built into the image, never
+# committed); a request address can drift in either a component or the lib,
+# so the whole source tree is read.
+_WEB_SRC = Path(__file__).resolve().parent.parent / "addon" / "web" / "src"
+_PAGE = "".join(
+    p.read_text(encoding="utf-8")
+    for p in sorted(_WEB_SRC.rglob("*"))
+    if p.suffix in {".svelte", ".js"}
+)
 
 #: `web.get("/api/health", ...)` and friends, per listener. Every method the
 #: listeners actually register, and it has twice fallen behind: `put` arrived
@@ -279,6 +284,18 @@ def bridge(tmp_path: Path) -> BridgeApi:
     return _build_bridge(tmp_path)
 
 
+@pytest.fixture(autouse=True)
+def _static_dir_standin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """`build_ingress_app` mounts `/app/web` as static files, which the web
+    UI is built into and which is therefore not present in a source checkout.
+    Point `_STATIC_DIR` at a scratch directory so the app builds -- nothing
+    in this file exercises the static route, so the directory only needs to
+    exist."""
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_STATIC_DIR", str(tmp_path))
+
+
 @pytest.fixture
 async def client(bridge: BridgeApi, monkeypatch: pytest.MonkeyPatch):
     """The ingress listener, driven over a real socket.
@@ -287,13 +304,6 @@ async def client(bridge: BridgeApi, monkeypatch: pytest.MonkeyPatch):
     fixture built from `build_control_app` would make every test below pass
     for the wrong reason.
     """
-    import bridge.api as api_module
-
-    # `build_ingress_app` also mounts `/app/web` as static files, which only
-    # exists inside the container image. Pointed at the real source directory
-    # so the app builds at all outside one -- nothing here exercises the
-    # static route itself.
-    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
     test_client = TestClient(TestServer(bridge.build_ingress_app()))
     await test_client.start_server()
     try:
@@ -459,9 +469,7 @@ async def _refused_camera_apps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     driven directly through `TestClient` rather than through the shared
     `bridge`/`client` fixtures, which assume `aaa` is the only camera.
     """
-    import bridge.api as api_module
 
-    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
     app = _build_bridge(tmp_path, extra=[_Camera("bbb", support="unsupported")])
 
     control = TestClient(TestServer(app.build_control_app()))
@@ -528,9 +536,7 @@ async def locked_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The ingress listener behind a configured password, with no session
     cookie supplied -- the same "not signed in" state a fresh browser is in.
     """
-    import bridge.api as api_module
 
-    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
     bridge_api = _build_bridge(tmp_path, web_password="correct-horse-battery")
     test_client = TestClient(TestServer(bridge_api.build_ingress_app()))
     await test_client.start_server()
@@ -557,9 +563,7 @@ def test_only_the_two_compat_routes_exist(
 ) -> None:
     """Nothing generic. go2rtc's wider API exposes `exec` and stream
     management, and a passthrough would put both behind our password."""
-    import bridge.api as api_module
 
-    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
     paths = {
         route.resource.canonical for route in bridge.build_ingress_app().router.routes()
     }
@@ -700,9 +704,7 @@ def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
 async def bridge_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The ingress listener behind a configured password, used to exercise
     `/api/login` itself rather than what it guards."""
-    import bridge.api as api_module
 
-    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
     bridge_api = _build_bridge(tmp_path, web_password="right")
     test_client = TestClient(TestServer(bridge_api.build_ingress_app()))
     await test_client.start_server()
