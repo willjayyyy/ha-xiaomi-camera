@@ -52,6 +52,10 @@ _ROUTE = re.compile(r'web\.(get|post|put)\(\s*"(?P<path>[^"]+)"')
 #: Every address the page names, whether through `api("/api/…")` or as an
 #: element's source. Both forms have shipped pointing at a route that did not
 #: exist, so both are checked.
+#:
+#: Matches paths in backticks or quotes anywhere in the page source,
+#: including comments. Do not backtick-quote an endpoint path in a comment
+#: -- it reads as a request and this test will reject it.
 _REQUEST = re.compile(r'[`"]\.?(?P<path>/api/[^`"?\s]*)')
 
 

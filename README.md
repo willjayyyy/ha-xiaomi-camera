@@ -220,12 +220,25 @@ to the internet, that is a risk regardless of anything set here.
 ## Which cameras work
 
 Support follows Xiaomi's own list, which leaves out most models released before
-2022. Unsupported cameras are simply not shown, rather than appearing as
-something that never works.
+2022. A camera on that list still appears, marked, and can connect a second
+way — see [Compatibility mode](#compatibility-mode) below.
 
-This reflects a real limitation rather than caution: a camera on Xiaomi's
-exclusion list was tested and could not be connected to at all. A camera that
-does not appear is almost certainly on that list.
+This reflects a real limitation rather than caution: a camera Xiaomi's own
+library refuses was tested and could not be connected to through it at all.
+
+## Compatibility mode
+
+Some Xiaomi models are refused by Xiaomi's own streaming library. Those
+cameras now appear in the list instead of being left out, and offer a second
+way to connect, built on the open-source project
+[go2rtc](https://github.com/AlexxIT/go2rtc).
+
+Turn it on from the settings of the camera that needs it, not from a
+settings page. It asks for your Xiaomi account password — separate from the
+sign-in you already completed — and stores a long-lived credential.
+
+That credential cannot be removed from within the add-on. It stays until you
+uninstall the add-on, which clears it along with the add-on's other data.
 
 ## Known limits
 
