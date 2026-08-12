@@ -11,8 +11,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
+
+import aiohttp
 
 from .account import AccountManager, NotLinkedError
 from .api import BridgeApi
@@ -41,10 +44,43 @@ _LOGGER = logging.getLogger("bridge")
 _REFRESH_INTERVAL_SECONDS = 300
 
 
+async def _read_own_slug(token: str | None) -> str | None:
+    """The add-on's real slug, once, at start-up.
+
+    Home Assistant prefixes an add-on's slug with the repository it came
+    from, so the bare slug in ``config.yaml`` is never the one that appears
+    in a ``/hassio/addon/<slug>/config`` URL -- confirmed on real hardware,
+    where the running container is ``app_fd1fda3d_xiaomi_camera_bridge`` and
+    the real slug is ``fd1fda3d_xiaomi_camera_bridge``.
+
+    ``None`` when there is no Supervisor: standalone deployments have no such
+    page, and a link to one that cannot exist is worse than no link. Never
+    raises -- a failure to read it degrades to ``None`` and a warning, the
+    same choice `discovery.py` makes for the same reason.
+    """
+    if not token:
+        return None
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session,
+            session.get(
+                "http://supervisor/addons/self/info",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response,
+        ):
+            if response.status != 200:
+                return None
+            body = await response.json()
+            return body.get("data", {}).get("slug")
+    except Exception as err:
+        _LOGGER.warning("Could not read this add-on's slug: %s", safe_error(err))
+        return None
+
+
 class Bridge:
     """Owns every long-lived component."""
 
-    def __init__(self, options: Options) -> None:
+    def __init__(self, options: Options, *, slug: str | None = None) -> None:
         self._options = options
         #: The client the current registry and sessions were built against.
         #: Compared by identity so an unlink/relink cycle rebuilds them.
@@ -77,6 +113,7 @@ class Bridge:
             options=options,
             previews=self._previews,
             settings_store=self._settings,
+            slug=slug,
         )
         self._discovery_uuid: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -296,7 +333,11 @@ async def async_main() -> int:
 
     pathlib.Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
-    bridge = Bridge(options)
+    # Only readable by a process started through `#!/usr/bin/with-contenv
+    # bash` -- `run.sh` already is one. Read once, up front: it is a fact
+    # about this process, not about any one request.
+    slug = await _read_own_slug(os.environ.get("SUPERVISOR_TOKEN"))
+    bridge = Bridge(options, slug=slug)
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

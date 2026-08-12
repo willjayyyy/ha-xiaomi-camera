@@ -194,7 +194,12 @@ class _Restreamer:
         return []
 
 
-def _build_bridge(tmp_path: Path, extra: list[_Camera] | None = None) -> BridgeApi:
+def _build_bridge(
+    tmp_path: Path,
+    extra: list[_Camera] | None = None,
+    *,
+    slug: str | None = None,
+) -> BridgeApi:
     """A `BridgeApi` wired to camera `aaa` (plus `extra`) and its own settings
     file.
 
@@ -235,6 +240,7 @@ def _build_bridge(tmp_path: Path, extra: list[_Camera] | None = None) -> BridgeA
         options=options,
         previews=None,
         settings_store=settings_store,
+        slug=slug,
     )
 
 
@@ -267,61 +273,40 @@ async def client(bridge: BridgeApi, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_settings_endpoint_reports_defaults_and_the_read_only_mirror(client):
+async def test_settings_endpoint_reports_only_the_video_defaults(client):
+    """The add-on-info half that used to live here moved to `/api/info`.
+
+    One endpoint changes when a camera does, the other only when the add-on
+    restarts -- see `_info`'s docstring for the split.
+    """
     response = await client.get("/api/settings")
     assert response.status == 200
     body = await response.json()
     assert body["defaults"]["quality"] == "low"
-    # Mirrored, never editable here: these guard access, and one of them is the
-    # lock on this very page.
-    assert body["addon"]["access_mode"] == "local"
-    assert "web_password_set" in body["addon"]
+    assert "addon" not in body
 
 
 @pytest.mark.asyncio
-async def test_the_settings_mirror_never_carries_the_actual_password(
-    tmp_path: Path,
-) -> None:
-    """What the mirror must never do, checked against a real secret.
+async def test_info_reports_the_configured_slug(tmp_path: Path) -> None:
+    api = _build_bridge(tmp_path, slug="a1b2c3d4_xiaomi_camera_bridge")
+    body = json.loads((await api._info(None)).body)
+    assert body["slug"] == "a1b2c3d4_xiaomi_camera_bridge"
 
-    The brief's version of this test asserted `"web_password" not in
-    json.dumps(body)` against the `bridge` fixture, whose password is empty.
-    That assertion can never pass regardless of what leaks: the mirror's own
-    key is named `web_password_set`, which contains the substring being
-    searched for, so the check fails on the key name before it ever gets to
-    look for a value. Asserted here instead is what the key name only *looks*
-    like it might be testing -- that the password's actual value is absent --
-    against a fixture where that value is non-empty, so there is something
-    real for a leak to be caught by.
-    """
-    options = Options(
-        access_mode=AccessMode.LOCAL,
-        rtsp_username="",
-        rtsp_password="",
-        video_quality=VideoQuality.LOW,
-        enable_audio=False,
-        log_level="info",
-        web_password="hunter2-example-secret",
-        transcode_quality=TranscodeQuality.STANDARD,
-        supervised=False,
-    )
-    api = BridgeApi(
-        account=None,
-        registry_provider=lambda: None,
-        sessions_provider=lambda: None,
-        restreamer=None,
-        refresh_callback=None,
-        options=options,
-        previews=None,
-        settings_store=SettingsStore(tmp_path / "settings.json"),
-    )
-    # `_settings` never reads its `request` argument, so this drives the
-    # handler directly rather than through a guarded HTTP round trip -- a
-    # real password would otherwise need a guard fixture just to get past.
-    response = await api._settings(None)
-    body = json.loads(response.body)
-    assert options.web_password not in json.dumps(body)
-    assert body["addon"]["web_password_set"] is True
+
+@pytest.mark.asyncio
+async def test_info_has_no_slug_when_none_was_configured(client) -> None:
+    """Standalone deployments have no Supervisor to ask for a slug, and a
+    link to a config page that cannot exist is worse than no link."""
+    body = await (await client.get("/api/info")).json()
+    assert body["slug"] is None
+
+
+@pytest.mark.asyncio
+async def test_info_reports_compat_ready(client) -> None:
+    body = await (await client.get("/api/info")).json()
+    # Hardcoded on the production path until compatibility mode's account
+    # state is wired in -- see `BridgeApi._compat_ready`.
+    assert body["compat_ready"] is False
 
 
 @pytest.mark.asyncio
@@ -329,6 +314,18 @@ async def test_setting_a_default_takes_effect_for_cameras_that_did_not_override(
     await client.put("/api/settings", json={"transcode_quality": "sharp"})
     cameras = await (await client.get("/api/cameras")).json()
     assert cameras["cameras"][0]["settings"]["transcode_quality"] == "sharp"
+
+
+@pytest.mark.asyncio
+async def test_a_camera_carries_both_paths_and_why_each_is_unavailable(client):
+    """The page needs this to disable the path it cannot offer, and say why.
+
+    `aaa` is `support="full"` with no compatibility-mode credential, so the
+    official path is usable and the compat path names its reason.
+    """
+    body = await (await client.get("/api/cameras")).json()
+    row = next(c for c in body["cameras"] if c["did"] == "aaa")
+    assert row["paths"] == {"official": None, "compat": "pathCompatNoAuth"}
 
 
 @pytest.mark.asyncio

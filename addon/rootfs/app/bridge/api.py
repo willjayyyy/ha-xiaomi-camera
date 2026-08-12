@@ -38,6 +38,7 @@ from .config import Options, TranscodeQuality, VideoQuality
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
 from .framing import MediaKind
 from .mux import StreamMuxer
+from .paths import available_paths
 from .redact import safe_error
 from .settings import Defaults, Resolved, SettingsStore
 from .stills import QUALITIES, Stills, StillsError
@@ -122,9 +123,15 @@ class BridgeApi:
         options: Options,
         previews: Stills,
         settings_store: SettingsStore | None = None,
+        slug: str | None = None,
     ) -> None:
         self._previews = previews
         self._options = options
+        # Read once at start-up by `__main__.py` and handed in here, rather
+        # than read on every `/api/info` request: it does not change while
+        # the add-on runs, and a Supervisor round trip per page load would be
+        # a cost with no matching benefit.
+        self._slug = slug
         # Optional only so the many tests that build a `BridgeApi` to exercise
         # one unrelated handler (streaming, previews, linking) do not each
         # need a store of their own. Every handler that actually reads or
@@ -181,6 +188,9 @@ class BridgeApi:
                 web.get("/api/settings", self._settings),
                 web.put("/api/settings", self._set_defaults),
                 web.put("/api/cameras/{did}/settings", self._set_camera_settings),
+                # Facts about the add-on itself, not any one camera: changes
+                # only when the add-on restarts, unlike `/api/cameras`.
+                web.get("/api/info", self._info),
                 web.get("/", self._index),
                 web.static("/static", _STATIC_DIR, show_index=False),
             ]
@@ -291,21 +301,28 @@ class BridgeApi:
                         # default otherwise. Override is only what this
                         # camera says for itself, so the page can show which
                         # fields are following the default versus set here.
-                        # `compat_ready` is hardcoded until compatibility
-                        # mode's account state is wired in (a later task);
-                        # `support` already tells `resolved_for` everything
-                        # it needs for the vendor-supported path this add-on
-                        # currently publishes.
                         "settings": _settings_dict(
                             self._settings_store.resolved_for(
                                 description.did,
                                 support=description.support,
-                                compat_ready=False,
+                                compat_ready=self._compat_ready(),
                             )
                         ),
                         "override": self._settings_store.override_for(
                             description.did
                         ).as_dict(),
+                        # Sent rather than derived on the page: which path is
+                        # usable depends on the account's compatibility-mode
+                        # state, which only this process holds. A copy in
+                        # JavaScript would be the second source `paths.py`'s
+                        # own docstring exists to avoid.
+                        "paths": {
+                            path.value: reason
+                            for path, reason in available_paths(
+                                description.support,
+                                compat_ready=self._compat_ready(),
+                            ).items()
+                        },
                     }
                     for description in descriptions
                 ]
@@ -534,25 +551,36 @@ class BridgeApi:
         return web.json_response({"status": "ok"})
 
     async def _settings(self, request: web.Request) -> web.Response:
-        """Video settings this page owns, plus a read-only view of the rest.
+        """The global video defaults every camera falls back to.
 
-        The mirror exists so the page can show every setting in one place
-        without becoming a second place to change the ones it does not own.
-        Passwords are not mirrored at all: showing them would put credentials
-        in a response, and there is nothing useful to show about them anyway.
+        Add-on-level facts used to be mirrored alongside these -- see
+        `_info` for why they moved out.
         """
         defaults = self._settings_store.defaults
+        return web.json_response({"defaults": _settings_dict(defaults)})
+
+    async def _info(self, request: web.Request) -> web.Response:
+        """What the page needs about the add-on itself, not any one camera.
+
+        Split from `/api/settings` (which used to carry an `addon` block
+        alongside the video defaults) because the two change on different
+        schedules: this one only when the add-on restarts, `/api/cameras`
+        whenever a camera does. Folding them together would mean re-sending
+        facts that never changed every time one that does is polled.
+        """
         return web.json_response(
             {
-                "defaults": _settings_dict(defaults),
-                "addon": {
-                    "access_mode": self._options.access_mode.value,
-                    "log_level": self._options.log_level,
-                    "rtsp_credentials_set": bool(self._options.rtsp_password),
-                    "web_password_set": bool(self._options.web_password),
-                },
+                "slug": self._slug,
+                "compat_ready": self._compat_ready(),
             }
         )
+
+    def _compat_ready(self) -> bool:
+        # No compatibility-mode credential exists yet. Hardcoded here for
+        # the same reason it is hardcoded at the other call sites
+        # (`__main__.py`, `cameras.py`): a later task wires the real account
+        # state into all of them at once.
+        return False
 
     async def _set_defaults(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
