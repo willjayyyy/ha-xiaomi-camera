@@ -195,7 +195,7 @@ def _function_body(js: str, name: str) -> str:
     closing brace -- identified as the first line that is exactly `}` at
     column 0, which every top-level function in this file ends on (inner
     blocks close indented, never at column 0)."""
-    match = re.search(rf"^function {name}\(.*?\n(.*?)^}}\n", js, re.M | re.S)
+    match = re.search(rf"^(?:async )?function {name}\(.*?\n(.*?)^}}\n", js, re.M | re.S)
     assert match, f"no top-level function {name} found"
     return match.group(1)
 
@@ -393,6 +393,82 @@ def test_the_preview_chip_changes_only_this_viewers_own_picture():
     assert "localStorage" not in chip
     assert "prefsFor" in chip
     assert "api(" not in chip
+
+
+def test_the_only_prose_is_the_credential_line():
+    """Copy is labels, not explanations -- with one deliberate exception,
+    because hiding a real security trade-off behind comfortable wording is
+    not an option and explaining it at length is not either."""
+    js = JS.read_text()
+    long_strings = re.findall(r'^\s{4}(\w+): "([^"]{80,})"', js, re.M)
+    # `noCode`/`credentialsHint` are M2's pre-existing onboarding copy --
+    # out of scope for this rule, same as `test_only_compat_mode_screens_
+    # carry_explanatory_prose` already carves out for that flow.
+    assert {k for k, _ in long_strings} <= {
+        "compatWhy",
+        "pathSwitchWarning",
+        "step2",
+        "privacyNote",
+        "signInHint",
+        "noCode",
+        "credentialsHint",
+    }
+
+
+def test_the_manage_screen_has_no_sign_in_form():
+    """Enabling from the settings page is the choice with no basis behind
+    it -- the whole point is that it starts from a camera that needs it."""
+    js = JS.read_text()
+    manage = js.split("function openCompatManage", 1)[1].split("\n}", 1)[0]
+    assert "password" not in manage
+
+
+def test_blocker_has_a_third_case_for_an_unbuildable_stream():
+    """A camera can have a resolved path and still have no picture -- the
+    add-on's own `stream_error`, not a translation key, is what this case
+    shows, and it only offers a way back to Xiaomi official when that model
+    actually supports it."""
+    js = JS.read_text()
+    body = _function_body(js, "blocker")
+    assert "stream_error" in body
+    assert "paths.official === null" in body
+
+
+def test_the_stream_error_case_is_not_looked_up_as_a_translation_key():
+    js = JS.read_text()
+    idle = _function_body(js, "previewIdleHtml")
+    assert "blocked.text" in idle
+
+
+def test_no_delete_request_is_ever_sent_to_compat():
+    """Removing the credential always answers 501 -- the page must never
+    call it, not even from a button, because there is no way for it to
+    succeed."""
+    js = JS.read_text()
+    assert 'method: "DELETE"' not in js and "method: 'DELETE'" not in js
+    assert '"/api/compat"' not in js and "'/api/compat'" not in js
+
+
+def test_the_manage_screen_lists_cameras_using_compat_mode():
+    js = JS.read_text()
+    manage = _function_body(js, "openCompatManage")
+    assert 'c.settings?.path === "compat"' in manage
+    assert "compatCannotRemove" in manage
+
+
+def test_compat_signin_posts_the_step_the_401_names():
+    js = JS.read_text()
+    step = _function_body(js, "submitCompatStep")
+    assert "/api/compat/signin" in step
+    assert "409" in step and "compatSignInBusy" in step
+    assert '"captcha"' in step or "captcha" in step
+    assert "verify_phone" in step and "verify_email" in step
+
+
+def test_a_successful_signin_switches_the_camera_that_asked_for_it():
+    js = JS.read_text()
+    signed_in = _function_body(js, "onCompatSignedIn")
+    assert '"compat"' in signed_in
 
 
 def test_changing_a_preview_pref_restarts_a_running_preview_only():

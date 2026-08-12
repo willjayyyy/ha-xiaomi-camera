@@ -35,6 +35,7 @@ const I18N = {
     pathOfficialUnsupported: "Xiaomi doesn't support this model",
     pathCompatNoAuth: "Compatibility mode not signed in",
     pathCompatRisky: "This model may not connect",
+    switchToOfficial: "Switch to Xiaomi official",
     qualityLow: "Standard", qualityHigh: "High",
     compatTitle: "Compatibility mode",
     compatEnabled: "Enabled", compatNotEnabled: "Not enabled",
@@ -43,6 +44,13 @@ const I18N = {
     compatCredit: "Compatibility mode is built on the open-source project go2rtc",
     compatConnect: "Connect with compatibility mode",
     compatRemove: "Remove credential",
+    compatCannotRemove: "Cannot be removed here.",
+    compatNoCameras: "No cameras yet.",
+    compatSignInBusy: "Another sign-in is already running. Try again shortly.",
+    compatCaptchaLabel: "Captcha",
+    compatCodeLabel: "Verification code",
+    compatCodeSentTo: "Code sent to",
+    account: "Account", password: "Password",
     openConfig: "Open configuration",
     reloading: "Reconnecting",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
@@ -111,6 +119,7 @@ const I18N = {
     pathOfficialUnsupported: "小米不支持这个型号",
     pathCompatNoAuth: "兼容模式未登录",
     pathCompatRisky: "这个型号可能连不上",
+    switchToOfficial: "改用小米官方",
     qualityLow: "标清", qualityHigh: "高清",
     compatTitle: "兼容模式",
     compatEnabled: "已启用", compatNotEnabled: "未启用",
@@ -119,6 +128,13 @@ const I18N = {
     compatCredit: "兼容模式基于开源项目 go2rtc",
     compatConnect: "用兼容模式连接",
     compatRemove: "删除凭据",
+    compatCannotRemove: "无法在此删除。",
+    compatNoCameras: "暂无摄像头。",
+    compatSignInBusy: "已有一个登录正在进行，请稍后再试。",
+    compatCaptchaLabel: "图形验证码",
+    compatCodeLabel: "验证码",
+    compatCodeSentTo: "验证码已发送至",
+    account: "账号", password: "密码",
     openConfig: "打开配置",
     reloading: "正在重连",
     connect: "连接小米账号", disconnect: "断开连接",
@@ -911,20 +927,48 @@ async function unlinkAccount() {
 
 /**
  * M6: manage compatibility mode, opened from M1's compatibility-mode row.
- * Only the not-enabled half -- the explanation, and where to actually turn
- * it on. No sign-in form here: enabling it from a settings screen is the
- * unanchored choice this design moved away from. The credential is only
- * ever entered from a specific camera that cannot be reached without it, so
- * that is the only place it is asked for -- a later task adds this sheet's
- * enabled half (the camera list and the credential's own removal).
+ *
+ * Not-enabled half: the explanation, and where to actually turn it on. No
+ * sign-in form here: enabling it from a settings screen is the unanchored
+ * choice this design moved away from. The credential is only ever entered
+ * from a specific camera that cannot be reached without it, so that is the
+ * only place it is asked for -- see `openCompatSignIn`.
+ *
+ * Enabled half: which cameras are using it, and the one honest fact about
+ * the credential itself. The service compatibility mode is built on has
+ * sign-in and list only -- no sign-out -- so `DELETE /api/compat` answers
+ * `501 not_supported`, and this screen offers no button that would fail; it
+ * states the limitation instead.
  */
 function openCompatManage() {
   sheetKind = "compat";
   openOverlay(t("compatTitle"), "", (body) => {
-    body.innerHTML = `
-      <p class="hint">${escapeHtml(t("compatWhy"))}</p>
-      <p class="hint">${escapeHtml(t("compatEnableHint"))}</p>`;
+    const using = cameras.filter((c) => c.settings?.path === "compat");
+    body.innerHTML = addonInfo?.compat_ready
+      ? `
+        <span class="setting-group-label">${escapeHtml(t("compatTitle"))}</span>
+        <div class="row">
+          <span class="status ok"><span class="dot"></span>${escapeHtml(t("compatEnabled"))}</span>
+        </div>
+        <p class="hint">${escapeHtml(t("compatCannotRemove"))}</p>
+        <span class="setting-group-label">${escapeHtml(t("camerasHeading"))}</span>
+        <div class="settings-list">${using.length ? using.map(nameRowHtml).join("") : emptyRowHtml("compatNoCameras")}</div>`
+      : `
+        <p class="hint">${escapeHtml(t("compatWhy"))}</p>
+        <p class="hint">${escapeHtml(t("compatEnableHint"))}</p>`;
   }, () => { sheetKind = null; });
+}
+
+//: One read-only row naming a camera, for M6's list of cameras currently
+//: using compatibility mode. Nothing to click -- this screen manages the
+//: credential, not the cameras; a camera's own path lives in its own
+//: settings sheet.
+function nameRowHtml(c) {
+  return `<div class="setting-row"><span class="setting-label">${escapeHtml(c.name)}</span></div>`;
+}
+
+function emptyRowHtml(key) {
+  return `<p class="hint">${escapeHtml(t(key))}</p>`;
 }
 
 /**
@@ -1239,9 +1283,13 @@ function cameraRowHtml(c) {
 function previewIdleHtml(c) {
   const blocked = blocker(c);
   if (blocked) {
+    // The third case's reason is the add-on's own `stream_error` text, not
+    // a translation key -- there is nothing to look up, it is already the
+    // words to show.
+    const why = blocked.text ?? t(blocked.reason);
     return `<div class="blocked">
       <span class="blocked-icon" aria-hidden="true">${ICONS.warn}</span>
-      <span class="blocked-why">${escapeHtml(t(blocked.reason))}</span>
+      <span class="blocked-why">${escapeHtml(why)}</span>
       ${blocked.action ? `<button type="button" class="blocked-action" data-${blocked.action}>${escapeHtml(t(blocked.label))}</button>` : ""}
     </div>`;
   }
@@ -1256,10 +1304,30 @@ function previewIdleHtml(c) {
  * Three cases, told apart by the resolved path and the credential rather
  * than by the model -- a camera the user put on compatibility mode and then
  * removed the credential from lands here too, and it is not "an unsupported
- * model".
+ * model":
+ *
+ * 1. Has a resolved path, but the add-on could not build a stream for it
+ *    anyway (`stream_error`, redacted server-side) -- most often
+ *    compatibility mode unable to find this camera's address. Offers a way
+ *    back to Xiaomi official only when that model actually supports it
+ *    (`paths.official === null`); a model Xiaomi refuses has nothing to
+ *    offer back to.
+ * 2. No resolved path, and compatibility mode is already signed in
+ *    (`paths.compat === null`, i.e. no reason blocks it) -- this camera
+ *    just has not been switched to it yet, so there is nothing to sign in
+ *    to.
+ * 3. No resolved path, and compatibility mode is not signed in -- the only
+ *    case that opens M4.
  */
 function blocker(c) {
-  if (c.settings) return null;
+  if (c.settings) {
+    if (!c.stream_error) return null;
+    return {
+      text: c.stream_error,
+      action: c.paths.official === null ? "path-official" : null,
+      label: "switchToOfficial",
+    };
+  }
   if (c.paths.compat === null) {
     return { reason: "pathOfficialUnsupported", action: "path-compat", label: "compatConnect" };
   }
@@ -1297,14 +1365,156 @@ function fpsLabel(prefs) {
   return prefs.fps ? `${prefs.fps} fps` : t("fpsCamera");
 }
 
-//: Opens compatibility mode's sign-in flow for a camera that has no usable
-//: path yet. No-op stub -- Task E4 builds M4, the sign-in panel this opens,
-//: alongside `openCompatSignIn` below.
-function openPathCompatConnect(_did) {}
+/**
+ * Opens compatibility mode's sign-in flow for a camera that has no usable
+ * path yet. Reached only from `blocker()`'s second case: compatibility mode
+ * is already signed in (`paths.compat === null`, no reason blocks it), this
+ * camera just has not been switched to it. There is nothing to sign in to,
+ * so this switches the camera directly -- the same outcome `openCompatSignIn`
+ * reaches after a successful sign-in.
+ */
+async function openPathCompatConnect(did) {
+  await switchCameraPath(did, "compat");
+}
 
-//: Opens the compatibility-mode sign-in sheet for this camera. No-op stub
-//: -- Task E4 builds M4, the sign-in panel this opens.
-function openCompatSignIn(_did) {}
+/**
+ * PUT this camera's connection path from outside its settings sheet (a
+ * blocked card's own action button), then reload the whole camera list so
+ * its card picks up whatever became true -- a resolved `settings`, a fresh
+ * `stream_error`, or still blocked for a different reason. A full reload
+ * rather than patching `cameras` in place: this camera had no resolved
+ * `settings` at all going in, so there is nothing local worth patching.
+ */
+async function switchCameraPath(did, path) {
+  try {
+    const response = await api(`/api/cameras/${encodeURIComponent(did)}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+  } catch {
+    showMessage(t("settingsSaveFailed"), "error");
+  }
+  await loadCameras();
+}
+
+/**
+ * M4: compatibility mode's sign-in panel, entered only from a blocked
+ * camera's action button -- there is no other way in, see the module
+ * comment on `openCompatManage` below. `did` is the camera that sent the
+ * viewer here; on success that camera is put on compatibility mode
+ * immediately (`onCompatSignedIn`), because agreeing to sign in for a
+ * specific camera and then having to go and switch it too is a step nobody
+ * would understand the purpose of.
+ */
+function openCompatSignIn(did) {
+  openOverlay(t("compatTitle"), "", (body) => renderCompatSignInStep(body, did, "password"));
+}
+
+//: One field set per sign-in step. Which step comes next is read from the
+//: 401 body in `submitCompatStep`, never guessed here -- the sign-in
+//: service owns that protocol and this only renders whichever step it
+//: names.
+function compatStepFieldsHtml(step, extra) {
+  if (step === "captcha") {
+    return `
+      ${extra.captcha ? `<img alt="${escapeHtml(t("compatCaptchaLabel"))}" style="max-width:100%" src="data:image/png;base64,${extra.captcha}">` : ""}
+      <label>${escapeHtml(t("compatCaptchaLabel"))}<input name="captcha" autocomplete="off" required></label>`;
+  }
+  if (step === "verify") {
+    return `
+      <p class="hint">${escapeHtml(t("compatCodeSentTo"))} ${escapeHtml(extra.verifyTarget || "")}</p>
+      <label>${escapeHtml(t("compatCodeLabel"))}<input name="verify" inputmode="numeric" autocomplete="one-time-code" required></label>`;
+  }
+  return `
+    <label>${escapeHtml(t("account"))}<input name="username" autocomplete="username" required></label>
+    <label>${escapeHtml(t("password"))}<input name="password" type="password" autocomplete="current-password" required></label>`;
+}
+
+/**
+ * Render one step of the sign-in form and wire its submit forward.
+ * `compatWhy` and the credit line are the only explanatory prose this whole
+ * interface permits -- see the module docstring on `openCompatManage`.
+ */
+function renderCompatSignInStep(body, did, step, extra = {}) {
+  body.innerHTML = `
+    <p class="hint">${escapeHtml(t("compatWhy"))}</p>
+    <form data-compat-form>
+      ${compatStepFieldsHtml(step, extra)}
+      <p class="signin-error" data-error hidden></p>
+      <div class="row">
+        <button type="button" class="ghost" data-cancel>${escapeHtml(t("cancel"))}</button>
+        <button type="submit" class="primary">${escapeHtml(t("signIn"))}</button>
+      </div>
+    </form>
+    <p class="hint">${escapeHtml(t("compatCredit"))}</p>`;
+  body.querySelector("[data-cancel]").addEventListener("click", closeOverlay);
+  body.querySelector("[data-compat-form]").addEventListener("submit", (event) => {
+    event.preventDefault();
+    submitCompatStep(body, did, step, new FormData(event.target));
+  });
+}
+
+/**
+ * Carry one step of the sign-in conversation to `/api/compat/signin`, and
+ * act on whatever comes back:
+ *
+ * - `200`: done -- put this camera on compatibility mode (`onCompatSignedIn`).
+ * - `401` naming a captcha or a verification target: re-render this same
+ *   panel on the next step was asked for.
+ * - `409 sign_in_busy`: another sign-in is already running -- a
+ *   half-finished one is held in a single shared slot, so a second at the
+ *   same time would corrupt both. Its own named message, not folded into
+ *   the generic failure below.
+ * - anything else: the generic failure message.
+ */
+async function submitCompatStep(body, did, step, formData) {
+  const form = body.querySelector("[data-compat-form]");
+  const submitBtn = form.querySelector("button[type=submit]");
+  const errorEl = body.querySelector("[data-error]");
+  errorEl.hidden = true;
+  submitBtn.disabled = true;
+  try {
+    const response = await api("/api/compat/signin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step, ...Object.fromEntries(formData) }),
+    });
+    if (response.status === 409) {
+      errorEl.textContent = t("compatSignInBusy");
+      errorEl.hidden = false;
+      return;
+    }
+    if (response.ok) {
+      await onCompatSignedIn(did);
+      return;
+    }
+    const text = await response.text();
+    if (response.status === 401) {
+      let next = {};
+      try { next = JSON.parse(text); } catch { /* unreadable -- falls through below */ }
+      if (next.captcha) { renderCompatSignInStep(body, did, "captcha", { captcha: next.captcha }); return; }
+      const verifyTarget = next.verify_phone || next.verify_email;
+      if (verifyTarget) { renderCompatSignInStep(body, did, "verify", { verifyTarget }); return; }
+    }
+    throw new Error(text);
+  } catch (err) {
+    errorEl.textContent = t("signInFailed") + (err.message || "");
+    errorEl.hidden = false;
+  } finally {
+    submitBtn.disabled = false;
+  }
+}
+
+/**
+ * Sign-in finished: close the panel and put the camera that sent the viewer
+ * here onto compatibility mode, then reload so its card starts publishing.
+ */
+async function onCompatSignedIn(did) {
+  closeOverlay();
+  await switchCameraPath(did, "compat");
+}
 
 /**
  * Every click a camera card answers, delegated from the grid rather than
@@ -1331,6 +1541,9 @@ function wireCameraGrid(container) {
 
     const compatSigninBtn = event.target.closest("[data-compat-signin]");
     if (compatSigninBtn) { openCompatSignIn(compatSigninBtn.closest(".cam").dataset.did); return; }
+
+    const pathOfficialBtn = event.target.closest("[data-path-official]");
+    if (pathOfficialBtn) { switchCameraPath(pathOfficialBtn.closest(".cam").dataset.did, "official"); return; }
 
     const chipToggle = event.target.closest("[data-chip]");
     if (chipToggle) {
