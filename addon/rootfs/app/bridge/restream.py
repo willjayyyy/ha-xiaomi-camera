@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 import yaml
 
-from .config import Options, TranscodeQuality
+from .config import Options, TranscodeQuality, VideoQuality
 from .const import (
     API_PORT,
     GO2RTC_API_PORT,
@@ -35,8 +35,30 @@ from .const import (
     WEBRTC_PORT,
 )
 from .go2rtc_api import Go2rtcApi
+from .paths import VideoPath
 from .redact import safe_error
 from .settings import Resolved
+
+
+class SourceUnavailable(RuntimeError):
+    """Compatibility mode has no go2rtc-supplied address for this camera.
+
+    Raised rather than silently producing no stream: the caller can catch
+    this, skip the camera, and -- this is the whole point of raising rather
+    than returning `None` -- record *why*, so the page can report it on the
+    camera's row instead of a stream that simply never appears with nothing
+    to explain it.
+    """
+
+
+#: `subtype` is the one thing appended to a compatibility-mode source, and it
+#: only ever names one of go2rtc's two accepted values. Upstream warns the
+#: numeric levels mean different things on different camera models and break
+#: the codec outright on some older ones -- named values only, ever.
+_COMPAT_SUBTYPE: Final[dict[VideoQuality, str]] = {
+    VideoQuality.LOW: "sd",
+    VideoQuality.HIGH: "hd",
+}
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -241,7 +263,7 @@ def _audio_codecs(spec: StreamSpec) -> tuple[str, ...]:
     return ("copy", "aac") if spec.codec == "h264" else ("copy",)
 
 
-def stream_name(did: str, key: str = ROOT_KEY) -> str:
+def stream_name(did: str, key: str = ROOT_KEY, *, lens: int = 1) -> str:
     """Stable go2rtc stream name for one variant of a camera.
 
     `camera_<did>` for the root -- the camera's own encoding, which has no
@@ -250,10 +272,20 @@ def stream_name(did: str, key: str = ROOT_KEY) -> str:
     omitted from a derived name: a name that depends on which codec happens
     to be the default is a rule with an exception, and the exception is
     exactly what makes two 360p streams indistinguishable.
+
+    This never depends on which path serves the camera, and must not start:
+    the go2rtc stream name is also the integration's unique_id suffix, so a
+    name that moved when a camera switched path would destroy and recreate
+    its entity -- unpairing HomeKit and orphaning history, the exact failure
+    this project has already shipped once (see `paths.py`'s own docstring).
+
+    `lens` names a camera's second video channel, which compatibility mode
+    addresses with go2rtc's own `channel=2` parameter (see `source_for`) --
+    the official path has no equivalent yet. Defaulted to 1 so every existing
+    caller keeps naming exactly the stream it always has.
     """
-    if key == ROOT_KEY:
-        return f"camera_{did}"
-    return f"camera_{did}_{key}"
+    base = f"camera_{did}" if key == ROOT_KEY else f"camera_{did}_{key}"
+    return base if lens == 1 else f"{base}_{lens}"
 
 
 def _bits(rate: str) -> int:
@@ -321,28 +353,63 @@ def _encoder_templates() -> dict[str, str]:
     return templates
 
 
-def source_for(did: str, settings: Resolved) -> str:
-    """Where go2rtc reads this camera's video from.
+def source_for(
+    did: str, settings: Resolved, compat_urls: Mapping[str, str] | None = None
+) -> str:
+    """Where go2rtc reads this camera's root stream from.
 
     The single place in the codebase that answers this. Every consumer
     downstream -- the thirteen published variants, the camera and switch
     entities, HomeKit, the preview -- reads the published stream by name and
-    never learns where it came from, so a second path can be added here
-    without any of them changing.
+    never learns where it came from.
 
-    `settings` is taken even though today's only path ignores it: the
-    parameter is what lets a second path be added without touching a single
-    caller.
+    Which branch runs is decided by `settings.path` alone, never by asking
+    `go2rtc_xiaomi.compat_ready()` -- that flag degrades to `False` on any
+    transient go2rtc error, and a stream generator that consulted it directly
+    could erase a working compatibility stream from the config over a single
+    hiccup. `settings.path` already carries the right answer: `path_for`
+    (see `paths.py`) ignores `compat_ready` whenever a stored override
+    exists, precisely so a camera the user put on compatibility mode keeps
+    that path -- and therefore keeps its entity -- when the credential goes
+    missing.
+
+    Compatibility mode's URL is never composed here. go2rtc has already
+    filled in the camera's LAN address, account id and region when it built
+    `compat_urls` (see `go2rtc_xiaomi.all_device_urls`); rebuilding any of
+    that from scratch would put it in a second place that drifts the first
+    time any of it moves -- the same mistake the multi-stream default did.
+    Only the picture quality is added, as go2rtc's own `subtype` parameter:
+    `low` maps to `sd` and `high` to `hd`, the two named values go2rtc itself
+    accepts. Never the numeric levels: upstream warns those mean different
+    things on different camera models and break the codec outright on some
+    older ones.
     """
-    return f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
+    if settings.path is VideoPath.OFFICIAL:
+        return f"http://{LOOPBACK}:{API_PORT}/api/stream/{did}"
+    base = (compat_urls or {}).get(did)
+    if base is None:
+        raise SourceUnavailable(
+            f"no compatibility-mode address for {did} -- "
+            "not signed in, or the camera is unreachable from any signed-in account"
+        )
+    return f"{base}&subtype={_COMPAT_SUBTYPE[settings.quality]}"
 
 
-def build_config(options: Options, cameras: Mapping[str, Resolved]) -> dict:
+def build_config(
+    options: Options,
+    cameras: Mapping[str, Resolved | None],
+    *,
+    channel_counts: Mapping[str, int] | None = None,
+    compat_urls: Mapping[str, str] | None = None,
+    errors: dict[str, str] | None = None,
+) -> dict:
     """Render the go2rtc configuration.
 
-    The root is read straight from this add-on's own endpoint, with no ffmpeg
-    in between: it serves MPEG-TS, which go2rtc demuxes itself. Both of the
-    camera's tracks reach RTSP exactly as the camera encoded them.
+    The root is read straight from this add-on's own endpoint on the official
+    path, with no ffmpeg in between: it serves MPEG-TS, which go2rtc demuxes
+    itself. On compatibility mode the root is go2rtc's own Xiaomi source
+    instead (see `source_for`). Either way both of the camera's tracks reach
+    RTSP exactly as the camera encoded them.
 
     Derived variants do re-encode the picture, which is what they are for.
     Clients that cannot decode H.265 take one of those rather than forcing a
@@ -353,16 +420,48 @@ def build_config(options: Options, cameras: Mapping[str, Resolved]) -> dict:
     for a picture the vendor SDK was already decoding to JPEG on its own. The
     page now reads those frames directly and go2rtc is left to the job it is
     good at.
+
+    A camera's settings may resolve to `None` -- `SettingsStore.resolved_for`
+    returns that when the camera has no usable path at all -- and such a
+    camera is simply left out, exactly as if it were absent from `cameras`.
+
+    `errors`, if given, is filled in as a side effect with one entry per
+    camera whose root source could not be built (`SourceUnavailable`): a
+    resolvable path that still cannot produce a stream, most often a
+    compatibility-mode camera go2rtc cannot currently reach. Populating this
+    is what lets the page report the failure on that camera's row instead of
+    it simply having no working stream with nothing to explain why.
     """
+    channel_counts = channel_counts or {}
+    compat_urls = compat_urls or {}
     bind = options.bind_address
     streams: dict[str, str] = {}
     for did, settings in cameras.items():
+        if settings is None:
+            _LOGGER.warning(
+                "%s has no resolved video settings; publishing nothing for it", did
+            )
+            continue
         root = stream_name(did)
+        try:
+            root_source = source_for(did, settings, compat_urls)
+        except SourceUnavailable as err:
+            if errors is not None:
+                errors[did] = safe_error(err)
+            _LOGGER.warning("skipping %s: %s", did, safe_error(err))
+            continue
         # No ffmpeg in front of it: go2rtc demuxes the MPEG-TS this endpoint
         # serves and passes both tracks through untouched. An ffmpeg hop here
         # would spend three seconds of cold start probing a container it did
         # not need to, to do a job go2rtc already does.
-        streams[root] = source_for(did, settings)
+        streams[root] = root_source
+        if channel_counts.get(did, 1) > 1 and settings.path is VideoPath.COMPAT:
+            # go2rtc addresses a dual-lens camera's second lens with its own
+            # `channel=2` parameter. The official path has no equivalent
+            # today, so this only ever fires on compatibility mode -- a
+            # camera that switches to it must not lose the second lens it
+            # had on the vendor path.
+            streams[stream_name(did, lens=2)] = f"{root_source}&channel=2"
         for spec in STREAM_SPECS:
             if spec.key == ROOT_KEY:
                 continue
@@ -447,12 +546,31 @@ class Restreamer:
         self._process: asyncio.subprocess.Process | None = None
         self._supervisor: asyncio.Task[None] | None = None
         self._cameras: dict[str, Resolved] = {}
+        #: What `async_apply` was last called with, alongside `_cameras`,
+        #: purely so a later call can tell whether anything actually changed
+        #: -- see the comparison in `async_apply`. Neither ever reaches
+        #: `_cameras`'s own shape: existing callers and tests read that
+        #: attribute as a plain `dict[str, Resolved]`.
+        self._channel_counts: dict[str, int] = {}
+        self._compat_urls: dict[str, str] = {}
         #: The stream table as last written, which is also what the running
         #: go2rtc was last told. Kept so a change can be delivered per stream:
         #: a name whose source string is identical needs no call at all, and
         #: most settings changes leave most names identical.
         self._streams: dict[str, str] = {}
+        #: Which cameras' root source could not be built on the last apply,
+        #: and why -- see `build_config`'s `errors` parameter. Read by the
+        #: control plane so a camera with a resolvable path but no working
+        #: stream reports that on its own row instead of silently having no
+        #: stream at all.
+        self._stream_errors: dict[str, str] = {}
         self._api = Go2rtcApi()
+
+    def stream_error(self, did: str) -> str | None:
+        """Why this camera's root stream could not be built, as of the last
+        `async_apply` -- or `None` if it was built, or nothing was ever
+        applied for it."""
+        return self._stream_errors.get(did)
 
     @property
     def requires_credentials(self) -> bool:
@@ -527,7 +645,12 @@ class Restreamer:
         return f"rtsp://{credentials}{LOOPBACK}:{RTSP_PORT}/{stream_name(did)}"
 
     async def async_apply(
-        self, cameras: Mapping[str, Resolved], *, explicit: bool = False
+        self,
+        cameras: Mapping[str, Resolved | None],
+        *,
+        channel_counts: Mapping[str, int] | None = None,
+        compat_urls: Mapping[str, str] | None = None,
+        explicit: bool = False,
     ) -> None:
         """Make the running configuration match `cameras`.
 
@@ -537,7 +660,15 @@ class Restreamer:
         Equality on a dict ignores key order, which matters because the cloud
         does not guarantee a stable device order -- treating a reordering as
         a change would restart go2rtc, dropping every live viewer, on an
-        unrelated refresh.
+        unrelated refresh. `channel_counts` and `compat_urls` are compared
+        alongside it for the same reason: a compatibility-mode camera's
+        address can change in the background with its `Resolved` untouched,
+        and missing that would leave go2rtc dialing a stale address until
+        some unrelated setting happened to change too.
+
+        A camera may map to `None` -- `SettingsStore.resolved_for` returns
+        that for one with no usable path -- and is simply published as
+        nothing, the same as if it were absent; see `build_config`.
 
         The file is rewritten first and always: it is what a restart rebuilds
         from, so a change delivered only to the running process would be
@@ -555,11 +686,28 @@ class Restreamer:
         camera's address changing, a periodic re-read of the device list --
         whose viewers are left on their existing connection.
         """
-        if cameras == self._cameras and self._process is not None:
+        channel_counts = dict(channel_counts or {})
+        compat_urls = dict(compat_urls or {})
+        if (
+            cameras == self._cameras
+            and channel_counts == self._channel_counts
+            and compat_urls == self._compat_urls
+            and self._process is not None
+        ):
             return
 
         self._cameras = dict(cameras)
-        config = build_config(self._options, self._cameras)
+        self._channel_counts = channel_counts
+        self._compat_urls = compat_urls
+        errors: dict[str, str] = {}
+        config = build_config(
+            self._options,
+            self._cameras,
+            channel_counts=self._channel_counts,
+            compat_urls=self._compat_urls,
+            errors=errors,
+        )
+        self._stream_errors = errors
         previous_streams = self._streams
         self._streams = dict(config["streams"])
         _write_config(config)

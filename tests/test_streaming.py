@@ -685,6 +685,7 @@ class TestCamerasEndpointReachability:
             stream_descriptions=lambda did: [],
             requires_credentials=False,
             rtsp_reachable_off_host=True,
+            stream_error=lambda did: None,
         )
 
         api = BridgeApi(

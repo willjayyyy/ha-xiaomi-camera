@@ -200,6 +200,9 @@ class _Restreamer:
     def stream_descriptions(self, did: str) -> list[dict[str, object]]:
         return []
 
+    def stream_error(self, did: str) -> str | None:
+        return None
+
 
 def _build_bridge(
     tmp_path: Path,

@@ -24,6 +24,7 @@ from types import SimpleNamespace
 
 from bridge.__main__ import Bridge
 from bridge.cameras import CameraDescription
+from bridge.paths import VideoPath
 
 
 def _description(did: str, support: str) -> CameraDescription:
@@ -38,6 +39,7 @@ def _description(did: str, support: str) -> CameraDescription:
         powered_on=True if support == "full" else None,
         requires_pin=False,
         support=support,
+        path=VideoPath.OFFICIAL if support == "full" else None,
     )
 
 
@@ -54,7 +56,9 @@ class _FakeRestreamer:
     def __init__(self) -> None:
         self.applied: dict[str, object] | None = None
 
-    async def async_apply(self, cameras, *, explicit: bool = False) -> None:
+    async def async_apply(
+        self, cameras, *, channel_counts=None, compat_urls=None, explicit: bool = False
+    ) -> None:
         self.applied = dict(cameras)
 
 
@@ -69,9 +73,12 @@ class _FakeSettings:
     def prune(self, dids: set[str]) -> None:
         self.pruned = set(dids)
 
-    def resolved_for(self, did: str, *, support: str, compat_ready: bool) -> str:
+    def resolved_for(self, did: str, *, support: str, compat_ready: bool):
         self.compat_ready_seen.append(compat_ready)
-        return f"resolved-{did}"
+        # A minimal stand-in for `Resolved`: `Bridge.async_refresh` only
+        # reads `.path` off this now, to decide whether it needs to ask
+        # go2rtc for compatibility-mode addresses.
+        return SimpleNamespace(path=VideoPath.OFFICIAL)
 
 
 def _bridge_with(registry, restreamer, settings) -> Bridge:
@@ -118,3 +125,80 @@ async def test_a_refused_camera_is_not_kept_alive_by_settings_pruning() -> None:
     await bridge.async_refresh()
 
     assert settings.pruned == {"aaa"}
+
+
+async def test_channel_counts_reach_the_restreamer() -> None:
+    """Obligation E3: a dual-lens camera's `channel_count` has to reach
+    `Restreamer.async_apply` for a compatibility-mode second lens to be
+    built at all -- `Resolved` itself carries no such field."""
+
+    class _DualLensRegistry:
+        async def async_refresh(self) -> list[CameraDescription]:
+            description = _description("aaa", "full")
+            return [
+                CameraDescription(
+                    **{**description.__dict__, "channel_count": 2},
+                )
+            ]
+
+    restreamer = _FakeRestreamer()
+    captured: dict[str, object] = {}
+    original = restreamer.async_apply
+
+    async def _capture(cameras, *, channel_counts=None, compat_urls=None, **kwargs):
+        captured["channel_counts"] = dict(channel_counts or {})
+        await original(
+            cameras, channel_counts=channel_counts, compat_urls=compat_urls, **kwargs
+        )
+
+    restreamer.async_apply = _capture
+    bridge = _bridge_with(_DualLensRegistry(), restreamer, _FakeSettings())
+
+    await bridge.async_refresh()
+
+    assert captured["channel_counts"] == {"aaa": 2}
+
+
+async def test_compat_urls_are_fetched_only_when_a_camera_needs_them(
+    monkeypatch,
+) -> None:
+    """Obligation D: fetching go2rtc's device list has a real cost, so it is
+    skipped entirely when nothing resolved to compatibility mode -- and it
+    reads the region from the OAuth side's own cloud-server setting rather
+    than a second option (R3)."""
+    from bridge import go2rtc_xiaomi
+
+    calls: list[str] = []
+
+    async def _fake_all_device_urls(region: str) -> dict[str, str]:
+        calls.append(region)
+        return {"aaa": "xiaomi://1:cn@1.2.3.4?did=aaa&model=m"}
+
+    monkeypatch.setattr(go2rtc_xiaomi, "all_device_urls", _fake_all_device_urls)
+
+    class _AllOfficial(_FakeSettings):
+        def resolved_for(self, did, *, support, compat_ready):
+            self.compat_ready_seen.append(compat_ready)
+            return SimpleNamespace(path=VideoPath.OFFICIAL)
+
+    restreamer = _FakeRestreamer()
+    bridge = _bridge_with(_FakeRegistry(), restreamer, _AllOfficial())
+    bridge._account.cloud_server = "cn"
+
+    await bridge.async_refresh()
+
+    assert calls == []
+
+    class _OneCompat(_FakeSettings):
+        def resolved_for(self, did, *, support, compat_ready):
+            self.compat_ready_seen.append(compat_ready)
+            path = VideoPath.COMPAT if did == "aaa" else VideoPath.OFFICIAL
+            return SimpleNamespace(path=path)
+
+    restreamer2 = _FakeRestreamer()
+    bridge2 = _bridge_with(_FakeRegistry(), restreamer2, _OneCompat())
+    bridge2._account.cloud_server = "cn"
+
+    await bridge2.async_refresh()
+
+    assert calls == ["cn"]

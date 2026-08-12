@@ -53,6 +53,28 @@ def test_available_paths_names_why_each_is_unavailable(
     assert reasons[VideoPath.COMPAT] == compat_reason
 
 
+def test_publishable_only_ever_widens():
+    """Obligation A (E3): `CameraDescription.publishable` moves from
+    `support == "full"` to `path_for(...) is not None`. Every combination
+    that was publishable under the old rule must still be publishable under
+    the new one -- a camera dropping out of the control plane's list makes
+    Home Assistant delete its entities (`wanted_unique_ids` in
+    `custom_components/xiaomi_camera/streams.py` iterates `for did in
+    available`), so narrowing this set is never safe.
+    """
+    import itertools
+
+    supports = ("full", "limited", "unsupported")
+    overrides = (None, VideoPath.OFFICIAL, VideoPath.COMPAT)
+    for support, override, compat_ready in itertools.product(
+        supports, overrides, (True, False)
+    ):
+        old = support == "full"
+        new = path_for(support, override, compat_ready=compat_ready) is not None
+        if old:
+            assert new, (support, override, compat_ready)
+
+
 def test_no_other_module_answers_these_two_questions():
     """The guard the four-way drift taught us to write."""
     import pathlib

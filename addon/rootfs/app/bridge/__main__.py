@@ -30,6 +30,7 @@ from .config import (
 )
 from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER, SETTINGS_FILE
 from .discovery import async_announce, async_withdraw
+from .paths import VideoPath
 from .redact import install as install_redaction
 from .redact import safe_error
 from .restream import Restreamer
@@ -225,13 +226,34 @@ class Bridge:
         # cache this reads -- see `CameraRegistry.async_refresh`'s
         # docstring -- so this is a plain read, not a second network call.
         compat_ready = go2rtc_xiaomi.compat_ready()
+        resolved = {
+            c.did: self._settings.resolved_for(
+                c.did, support=c.support, compat_ready=compat_ready
+            )
+            for c in publishable
+        }
+        # Fetched only when something actually needs it: every camera's
+        # compatibility-mode address, merged across every signed-in go2rtc
+        # account (see `all_device_urls`'s own docstring for why there is no
+        # single "the" account to ask). Which source a camera actually uses
+        # is decided once, in `restream.source_for`, from its own resolved
+        # `path` -- never from `compat_ready` here, so a transient go2rtc
+        # error on this call cannot erase a working compatibility stream; a
+        # camera whose address this fetch could not find simply reports its
+        # own `stream_error` (see `BridgeApi._cameras`).
+        needs_compat = any(
+            settings is not None and settings.path is VideoPath.COMPAT
+            for settings in resolved.values()
+        )
+        compat_urls = (
+            await go2rtc_xiaomi.all_device_urls(self._account.cloud_server)
+            if needs_compat
+            else {}
+        )
         await self._restreamer.async_apply(
-            {
-                c.did: self._settings.resolved_for(
-                    c.did, support=c.support, compat_ready=compat_ready
-                )
-                for c in publishable
-            },
+            resolved,
+            channel_counts={c.did: c.channel_count for c in publishable},
+            compat_urls=compat_urls,
             explicit=explicit,
         )
         self._previews.drop({c.did for c in publishable})

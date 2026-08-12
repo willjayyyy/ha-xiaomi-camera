@@ -32,6 +32,7 @@ from bridge.restream import (
     ROOT_KEY,
     STREAM_SPECS,
     Restreamer,
+    SourceUnavailable,
     StreamSpec,
     _audio_codecs,
     _encoder_templates,
@@ -799,6 +800,169 @@ def test_stream_names_do_not_depend_on_any_setting():
     )
 
 
+class TestCompatibilitySource:
+    """`source_for`'s second branch, and the dual-lens case that rides on it.
+
+    Xiaomi's own two levels map one-to-one onto go2rtc's `subtype`: `low` is
+    `sd`, `high` is `hd`. Named values only -- upstream warns the numeric
+    levels mean different things on different cameras and break the codec
+    outright on some older ones.
+    """
+
+    def test_compat_source_is_taken_from_go2rtc_not_composed(self) -> None:
+        """The LAN address, the account id and the region all have exactly
+        one source, and it is not this file."""
+        settings = Resolved(
+            VideoQuality.HIGH, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+        )
+        url = source_for(
+            "99",
+            settings,
+            compat_urls={"99": "xiaomi://1:cn@192.168.1.9?did=99&model=m"},
+        )
+        assert url.startswith("xiaomi://1:cn@192.168.1.9?did=99&model=m")
+
+    def test_quality_maps_low_to_sd_and_high_to_hd(self) -> None:
+        compat_urls = {"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"}
+        low = Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+        )
+        high = Resolved(
+            VideoQuality.HIGH, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+        )
+        assert source_for("99", low, compat_urls).endswith("&subtype=sd")
+        assert source_for("99", high, compat_urls).endswith("&subtype=hd")
+
+    def test_a_missing_address_raises_rather_than_composing_one(self) -> None:
+        """No fallback URL is ever built here -- see the module docstring on
+        why compatibility mode's source is never assembled in this file."""
+        settings = Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+        )
+        with pytest.raises(SourceUnavailable):
+            source_for("99", settings, compat_urls={})
+
+    def test_source_for_never_asks_about_compat_ready(self) -> None:
+        """Obligation D: only `settings.path` decides which branch runs.
+
+        `refresh_compat_ready()` degrades to `False` on any transient go2rtc
+        error; if this function consulted that flag directly, one hiccup
+        would erase a working compatibility stream from the generated
+        config. There is no parameter here for it to read.
+        """
+        import inspect
+
+        assert "compat_ready" not in inspect.signature(source_for).parameters
+
+    def test_a_second_lens_gets_channel_two(self) -> None:
+        cameras = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+            )
+        }
+        config = build_config(
+            make_options(AccessMode.LOCAL),
+            cameras,
+            channel_counts={"99": 2},
+            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
+        )
+        assert "&channel=2" in config["streams"][stream_name("99", lens=2)]
+
+    def test_a_single_lens_camera_gets_no_second_stream(self) -> None:
+        cameras = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+            )
+        }
+        config = build_config(
+            make_options(AccessMode.LOCAL),
+            cameras,
+            channel_counts={"99": 1},
+            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
+        )
+        assert stream_name("99", lens=2) not in config["streams"]
+
+    def test_the_official_path_never_gets_a_second_lens_stream(self) -> None:
+        """Only compatibility mode addresses a second lens with `channel=2`
+        today; the official path has no equivalent yet, so a dual-lens
+        camera on it must not spuriously gain a stream nothing serves."""
+        cameras = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            )
+        }
+        config = build_config(
+            make_options(AccessMode.LOCAL), cameras, channel_counts={"99": 2}
+        )
+        assert stream_name("99", lens=2) not in config["streams"]
+
+    def test_switching_path_changes_no_stream_name(self) -> None:
+        """The hard constraint. Breaking it unpairs HomeKit and orphans
+        history with nothing logged -- this project has shipped that once
+        already."""
+        official = build_config(
+            make_options(AccessMode.LOCAL),
+            {
+                "99": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            },
+        )
+        compat = build_config(
+            make_options(AccessMode.LOCAL),
+            {
+                "99": Resolved(
+                    VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+                )
+            },
+            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
+        )
+        assert set(official["streams"]) == set(compat["streams"])
+
+    def test_a_camera_with_no_resolved_settings_is_skipped(self) -> None:
+        """Obligation B: `cameras` may now map a did to `None`."""
+        config = build_config(make_options(AccessMode.LOCAL), {"99": None})
+        assert not any(name.startswith("camera_99") for name in config["streams"])
+
+    def test_a_source_error_is_reported_and_the_camera_is_skipped(self) -> None:
+        """Obligation C: the failure is not swallowed -- it is handed back so
+        the page can put it on that camera's row."""
+        errors: dict[str, str] = {}
+        cameras = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+            )
+        }
+        config = build_config(make_options(AccessMode.LOCAL), cameras, errors=errors)
+        assert "99" in errors
+        assert not any(name.startswith("camera_99") for name in config["streams"])
+
+
+def test_stream_name_names_the_second_lens() -> None:
+    assert stream_name("99", lens=2) == "camera_99_2"
+    assert stream_name("99") == stream_name("99", lens=1)
+
+
+def test_no_other_module_composes_a_xiaomi_url() -> None:
+    """Obligation D's structural half: compatibility mode's URL has exactly
+    one producer, `go2rtc_xiaomi.py`, and exactly one consumer that appends
+    to it, `restream.py`. No other module in the bridge may even mention the
+    scheme -- mentioning it is how a second producer starts."""
+    root = (
+        Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app" / "bridge"
+    )
+    offenders = sorted(
+        path.name
+        for path in root.glob("*.py")
+        if path.name not in {"restream.py", "go2rtc_xiaomi.py"}
+        and "xiaomi://" in path.read_text(encoding="utf-8")
+    )
+    assert offenders == [], offenders
+
+
 class TestApplyingWithoutRestarting:
     """`async_apply` reuses the running go2rtc instead of restarting it,
     whenever the change can be delivered through its API -- see the module
@@ -1160,3 +1324,100 @@ class TestApplyingWithoutRestarting:
         assert removed, "the departed camera's streams were never removed"
         assert all(name.startswith("camera_aaa") for name in removed)
         assert not touched, "the remaining camera's streams were touched for nothing"
+
+
+class _RecordingApi:
+    """Accepts every delivery, recording nothing but what was asked."""
+
+    async def set_stream(self, name, src):
+        return True
+
+    async def replace_stream(self, name, src):
+        return True
+
+    async def remove_stream(self, name):
+        return True
+
+
+class TestCompatApplyIntegration:
+    """`async_apply`'s honest handling of the two new failure shapes:
+    Obligation B (a camera that resolved to nothing) and Obligation C (a
+    camera whose source could not be built at all).
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_camera_with_no_resolved_settings_is_simply_not_published(
+        self, monkeypatch, tmp_path
+    ):
+        """`resolved_for` can return `None` once `publishable` widens past
+        `support == 'full'` (Obligation A). `async_apply` must treat that as
+        nothing to publish for this camera rather than crashing on
+        `None.quality`."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        restreamer._api = _RecordingApi()
+
+        await restreamer.async_apply({"99": None})
+
+        assert not any(name.startswith("camera_99") for name in restreamer._streams)
+
+    @pytest.mark.asyncio
+    async def test_stream_error_is_reported_then_cleared_once_the_address_arrives(
+        self, monkeypatch, tmp_path
+    ):
+        """Obligation C: a compatibility-mode camera go2rtc cannot currently
+        reach reports why on `stream_error`, and stops reporting it the
+        moment a later refresh finds its address."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        restreamer._api = _RecordingApi()
+        settings = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+            )
+        }
+
+        await restreamer.async_apply(settings)
+        assert restreamer.stream_error("99") is not None
+        assert not any(name.startswith("camera_99") for name in restreamer._streams)
+
+        await restreamer.async_apply(
+            settings,
+            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
+        )
+        assert restreamer.stream_error("99") is None
+        assert stream_name("99") in restreamer._streams
+
+    @pytest.mark.asyncio
+    async def test_a_background_address_change_is_not_ignored(
+        self, monkeypatch, tmp_path
+    ):
+        """`compat_urls` changing on its own, with `cameras` untouched, is
+        still a real change: the camera's `Resolved` never carries its
+        address, only `compat_urls` does."""
+        monkeypatch.setattr("bridge.restream._CONFIG_PATH", tmp_path / "go2rtc.yaml")
+        restreamer = Restreamer(make_options(AccessMode.LOCAL))
+        monkeypatch.setattr(restreamer, "async_restart", lambda: None)
+        monkeypatch.setattr(restreamer, "_process", object())
+        restreamer._api = _RecordingApi()
+        settings = {
+            "99": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
+            )
+        }
+
+        await restreamer.async_apply(
+            settings, compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"}
+        )
+        first = restreamer._streams[stream_name("99")]
+
+        await restreamer.async_apply(
+            settings, compat_urls={"99": "xiaomi://1:cn@5.6.7.8?did=99&model=m"}
+        )
+        second = restreamer._streams[stream_name("99")]
+
+        assert first != second

@@ -588,11 +588,14 @@ async def test_a_refused_camera_on_compat_reports_its_real_state(tmp_path) -> No
     described = _by_did(descriptions, "bbb")
     assert described.online is True
     assert described.powered_on is True
-    # This task only fixes state reporting. Whether a compat-mode camera
-    # actually streams -- and therefore whether it is `publishable` -- is
-    # unrelated and must not move as a side effect of reading real state.
     assert described.support == "unsupported"
-    assert described.as_dict()["publishable"] is False
+    # E3: `publishable` now asks `path_for`, which honors a stored override
+    # regardless of `support` -- a user who has deliberately pointed this
+    # camera at compatibility mode keeps it publishable, which is what keeps
+    # its entity alive if go2rtc later loses the credential (see
+    # `path_for`'s own docstring). This is an intentional widening, not the
+    # side effect the comment this replaced was warning against.
+    assert described.as_dict()["publishable"] is True
 
 
 async def test_a_refused_camera_with_no_path_is_still_reported_as_unreachable(

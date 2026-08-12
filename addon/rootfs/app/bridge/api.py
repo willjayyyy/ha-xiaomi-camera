@@ -306,6 +306,14 @@ class BridgeApi:
                             stats.get(description.did, {}).get("audio_codec")
                         ),
                         **self._stream_fields(description),
+                        # A publishable camera whose root stream still could
+                        # not be built -- most often compatibility mode
+                        # unable to find this camera's address. `None` covers
+                        # both "not publishable" and "built fine": neither
+                        # has anything to report here. See
+                        # `Restreamer.stream_error` and `restream.source_for`
+                        # for who raises this.
+                        "stream_error": self._restreamer.stream_error(description.did),
                         # Resolved is what the camera actually gets right now
                         # -- its own override where it has one, the shared
                         # default otherwise. Override is only what this
@@ -350,9 +358,16 @@ class BridgeApi:
         Gated on the same ``publishable`` property everything else that
         touches a camera's stream uses, rather than re-deriving it from
         ``support`` here -- see the property's own docstring for why that
-        matters on this project specifically.
+        matters on this project specifically. Also gated on
+        ``Restreamer.stream_error``: a publishable camera whose root source
+        could not be built (see ``restream.source_for``) has no go2rtc stream
+        behind these names either, and handing out a URL that can never
+        connect is worse than not sending one -- see ``stream_error`` in
+        ``_cameras`` for where that failure is reported instead.
         """
-        if not description.publishable:
+        if not description.publishable or self._restreamer.stream_error(
+            description.did
+        ):
             return {}
         return {
             # Credential-free by construction: a URL carrying user:password@

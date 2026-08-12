@@ -17,7 +17,7 @@ from miot.types import MIoTCameraInfo, MIoTGetPropertyParam
 
 from . import go2rtc_xiaomi
 from .const import POWER_PIID, POWER_SIID
-from .paths import VideoPath, is_full_support, path_for
+from .paths import VideoPath, path_for
 from .settings import SettingsStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -128,6 +128,13 @@ class CameraDescription:
     #: ``"unsupported"`` for one the vendor library refuses -- see
     #: ``_support_for_refused_model`` for how the latter two are told apart.
     support: str
+    #: This camera's resolved video path, or ``None`` if it has none. Stored
+    #: rather than re-derived from :attr:`support` alone: which path a camera
+    #: gets also depends on its own settings override and on whether
+    #: compatibility mode has a credential, neither of which this dataclass
+    #: otherwise carries. Computed by ``CameraRegistry._path_for``, the one
+    #: place that calls ``paths.path_for`` for a camera description.
+    path: VideoPath | None
 
     @property
     def publishable(self) -> bool:
@@ -137,17 +144,23 @@ class CameraDescription:
         The one predicate every consumer that touches a camera's stream must
         ask -- go2rtc's stream table, the session manager, the control
         plane's camera list -- rather than each re-deriving "does this camera
-        work" from :attr:`support` on its own. A refused camera was once
-        simply absent from this list; now that it is present so it can be
-        explained, every one of those consumers would otherwise have to learn
-        that fact independently, and independent answers to the same
-        question are exactly what has drifted apart on this project before
-        (see the multi-stream default-selection incident in CLAUDE.md).
-        Routing every check through this property instead means a fourth
-        support level, if one is ever added, cannot silently become
-        publishable by accident -- it has to be added here, once.
+        work" on its own. A refused camera was once simply absent from this
+        list; now that it is present so it can be explained, every one of
+        those consumers would otherwise have to learn that fact
+        independently, and independent answers to the same question are
+        exactly what has drifted apart on this project before (see the
+        multi-stream default-selection incident in CLAUDE.md).
+
+        This asks :attr:`path` -- "does this camera have a resolvable video
+        path" -- rather than whether :attr:`support` names the fully
+        supported level. The two agreed for as long as compatibility mode did
+        not exist; now a camera parked on compatibility mode is publishable
+        too, and the Home Assistant integration deletes a camera's entities
+        the moment it drops out of this list (`wanted_unique_ids` in
+        `custom_components/xiaomi_camera/streams.py`), so widening this set
+        is safe and narrowing it never is.
         """
-        return is_full_support(self.support)
+        return self.path is not None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -302,6 +315,7 @@ class CameraRegistry:
                     powered_on=power_states.get(did),
                     requires_pin=bool(getattr(info, "is_set_pincode", 0)),
                     support="full",
+                    path=self._path_for(did),
                 )
             )
 
@@ -317,7 +331,8 @@ class CameraRegistry:
             if _device_class(info.model) != "camera":
                 continue
             refused_count += 1
-            has_path = self._path_for(did) is not None
+            path = self._path_for(did)
+            has_path = path is not None
             descriptions.append(
                 CameraDescription(
                     did=did,
@@ -334,6 +349,7 @@ class CameraRegistry:
                     powered_on=power_states.get(did) if has_path else None,
                     requires_pin=False,
                     support=_support_for_refused_model(info.model),
+                    path=path,
                 )
             )
 
