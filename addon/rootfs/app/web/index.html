@@ -805,9 +805,13 @@ async function loadSettings() {
     if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
     defaults = data.defaults;
+    // `/api/settings` no longer carries an `addon` block (it moved to
+    // `/api/info`, which has no `access_mode`/`log_level`), so `addonInfo`
+    // stays `undefined` and this card stays hidden until the task that
+    // rewrites this page wires it up to that endpoint.
     addonInfo = data.addon;
     renderDefaultsRows();
-    renderAddonCard();
+    if (addonInfo) renderAddonCard();
   } catch {
     // Left hidden. Nothing more can be usefully said here that the camera
     // list's own error state has not already said.

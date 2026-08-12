@@ -43,6 +43,10 @@ _LOGGER = logging.getLogger("bridge")
 #: and each refresh costs a cloud round trip, so this is deliberately slow.
 _REFRESH_INTERVAL_SECONDS = 300
 
+#: Module-level so a test can point it at a fake server instead of the real
+#: Supervisor -- the same seam `discovery.py` leaves for the same reason.
+_SUPERVISOR_URL = "http://supervisor"
+
 
 async def _read_own_slug(token: str | None) -> str | None:
     """The add-on's real slug, once, at start-up.
@@ -64,7 +68,7 @@ async def _read_own_slug(token: str | None) -> str | None:
         async with (
             aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session,
             session.get(
-                "http://supervisor/addons/self/info",
+                f"{_SUPERVISOR_URL}/addons/self/info",
                 headers={"Authorization": f"Bearer {token}"},
             ) as response,
         ):
