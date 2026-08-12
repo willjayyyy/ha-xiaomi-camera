@@ -82,16 +82,18 @@ class Defaults:
 class Resolved:
     """One camera's effective settings. Derived, never stored.
 
-    ``path`` defaults to :attr:`VideoPath.OFFICIAL` purely for callers
-    outside this module that construct a ``Resolved`` directly (mostly
-    tests written before the path field existed) -- ``resolve`` itself always
-    passes it explicitly and never relies on the default.
+    No field here has a default, ``path`` included: a derived record that
+    let a caller omit a fact would let a future caller silently get "Xiaomi
+    official" for a camera that was never on that path, which is exactly the
+    shape of bug this project has already shipped once (see the multi-stream
+    default-selection incident in ``CLAUDE.md``). ``resolve`` always supplies
+    every field explicitly.
     """
 
     quality: VideoQuality
     audio: bool
     transcode_quality: TranscodeQuality
-    path: VideoPath = VideoPath.OFFICIAL
+    path: VideoPath
 
 
 def resolve(

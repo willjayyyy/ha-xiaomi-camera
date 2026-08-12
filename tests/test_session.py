@@ -14,6 +14,7 @@ import time
 import pytest
 from bridge import streaming
 from bridge.config import TranscodeQuality, VideoQuality
+from bridge.paths import VideoPath
 from bridge.settings import Resolved
 from bridge.streaming import CameraOffError, CameraSession, SessionManager
 from miot.types import MIoTCameraStatus, MIoTCameraVideoQuality
@@ -365,8 +366,12 @@ class TestSessionManagerReadsPerCameraSettings:
 
     async def test_each_camera_opens_its_session_with_its_own_settings(self) -> None:
         settings = {
-            "aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD),
-            "bbb": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD),
+            "aaa": Resolved(
+                VideoQuality.HIGH, True, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            ),
+            "bbb": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            ),
         }
         manager = SessionManager(_FakeClient(), resolver=settings.__getitem__)
         first = manager.session_for(_info("aaa"))
@@ -378,7 +383,9 @@ class TestSessionManagerReadsPerCameraSettings:
         """Audio and picture size are session parameters, so changing them
         reopens that camera's session -- and only that camera's."""
         settings = {
-            did: Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+            did: Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            )
             for did in ("aaa", "bbb")
         }
         manager = SessionManager(_FakeClient(), resolver=settings.__getitem__)

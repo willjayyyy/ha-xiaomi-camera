@@ -27,6 +27,7 @@ from bridge.const import (
     SRTP_PORT,
     WEBRTC_PORT,
 )
+from bridge.paths import VideoPath
 from bridge.restream import (
     ROOT_KEY,
     STREAM_SPECS,
@@ -78,7 +79,10 @@ def make_cameras(
     """A mapping of resolved settings, as `build_config` and `async_apply`
     now take, standing in for a real `SettingsStore` in tests that only care
     about which cameras are published or at what quality they transcode."""
-    return {did: Resolved(VideoQuality.LOW, False, transcode_quality) for did in dids}
+    return {
+        did: Resolved(VideoQuality.LOW, False, transcode_quality, VideoPath.OFFICIAL)
+        for did in dids
+    }
 
 
 class TestLocalMode:
@@ -723,7 +727,9 @@ def test_source_for_points_at_a_route_the_control_plane_actually_serves():
     routes = {resource.canonical for resource in app.router.resources()}
     assert "/api/stream/{did}" in routes
 
-    settings = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+    settings = Resolved(
+        VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+    )
     parsed = urlsplit(source_for("42", settings))
     assert parsed.port == API_PORT
     assert parsed.path == "/api/stream/{did}".replace("{did}", "42")
@@ -758,8 +764,12 @@ def test_source_for_is_the_only_producer_of_a_root_source_url():
 
 def test_each_camera_gets_the_template_matching_its_own_transcode_quality():
     cameras = {
-        "aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD),
-        "bbb": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM),
+        "aaa": Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+        ),
+        "bbb": Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.MAXIMUM, VideoPath.OFFICIAL
+        ),
     }
     config = build_config(make_options(AccessMode.LOCAL), cameras)
     assert "#video=h264/360/standard" in config["streams"]["camera_aaa_h264_360"]
@@ -773,8 +783,16 @@ def test_stream_names_do_not_depend_on_any_setting():
     unique_id, destroying and recreating the entity: HomeKit unpairs, history
     is orphaned, automations break, and nothing is logged.
     """
-    plain = {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
-    fancy = {"aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.MAXIMUM)}
+    plain = {
+        "aaa": Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+        )
+    }
+    fancy = {
+        "aaa": Resolved(
+            VideoQuality.HIGH, True, TranscodeQuality.MAXIMUM, VideoPath.OFFICIAL
+        )
+    }
     options = make_options(AccessMode.LOCAL)
     assert set(build_config(options, plain)["streams"]) == set(
         build_config(options, fancy)["streams"]
@@ -812,12 +830,23 @@ class TestApplyingWithoutRestarting:
         restreamer._api = _Api()
 
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            }
         )
         restarts.clear()
         delivered.clear()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW, False, TranscodeQuality.SHARP, VideoPath.OFFICIAL
+                )
+            }
         )
 
         assert restarts == []
@@ -846,11 +875,22 @@ class TestApplyingWithoutRestarting:
 
         restreamer._api = _Api()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            }
         )
         restarts.clear()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW, False, TranscodeQuality.SHARP, VideoPath.OFFICIAL
+                )
+            }
         )
         assert restarts == [1]
 
@@ -876,10 +916,24 @@ class TestApplyingWithoutRestarting:
         restreamer._api = _Api()
 
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            }
         )
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.MAXIMUM,
+                    VideoPath.OFFICIAL,
+                )
+            }
         )
 
         # Read back what a restart would rebuild from, not what the mock API
@@ -923,16 +977,31 @@ class TestApplyingWithoutRestarting:
                 return True
 
         restreamer._api = _Api()
-        settings = {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+        settings = {
+            "aaa": Resolved(
+                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            )
+        }
         await restreamer.async_apply(settings)
         used.clear()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW, False, TranscodeQuality.SHARP, VideoPath.OFFICIAL
+                )
+            }
         )
         assert set(used) == {"patch"}
         used.clear()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.MAXIMUM)},
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.MAXIMUM,
+                    VideoPath.OFFICIAL,
+                )
+            },
             explicit=True,
         )
         assert set(used) == {"replace"}
@@ -966,13 +1035,17 @@ class TestApplyingWithoutRestarting:
                 return True
 
         restreamer._api = _Api()
-        standard = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+        standard = Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+        )
         await restreamer.async_apply({"aaa": standard, "bbb": standard})
         touched.clear()
 
         await restreamer.async_apply(
             {
-                "aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.SHARP),
+                "aaa": Resolved(
+                    VideoQuality.LOW, False, TranscodeQuality.SHARP, VideoPath.OFFICIAL
+                ),
                 "bbb": standard,
             },
             explicit=True,
@@ -1010,14 +1083,28 @@ class TestApplyingWithoutRestarting:
 
         restreamer._api = _Api()
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)}
+            {
+                "aaa": Resolved(
+                    VideoQuality.LOW,
+                    False,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            }
         )
         touched.clear()
 
         # A bigger picture from the camera, and sound switched on: both are
         # real changes, and neither changes a single source string.
         await restreamer.async_apply(
-            {"aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD)},
+            {
+                "aaa": Resolved(
+                    VideoQuality.HIGH,
+                    True,
+                    TranscodeQuality.STANDARD,
+                    VideoPath.OFFICIAL,
+                )
+            },
             explicit=True,
         )
 
@@ -1026,7 +1113,9 @@ class TestApplyingWithoutRestarting:
         # at all": `async_apply` must still have processed the change and
         # stored the new mapping, not short-circuited before comparing it.
         assert restreamer._cameras == {
-            "aaa": Resolved(VideoQuality.HIGH, True, TranscodeQuality.STANDARD)
+            "aaa": Resolved(
+                VideoQuality.HIGH, True, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+            )
         }
 
     @pytest.mark.asyncio
@@ -1059,7 +1148,9 @@ class TestApplyingWithoutRestarting:
                 return True
 
         restreamer._api = _Api()
-        standard = Resolved(VideoQuality.LOW, False, TranscodeQuality.STANDARD)
+        standard = Resolved(
+            VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
+        )
         await restreamer.async_apply({"aaa": standard, "bbb": standard})
         removed.clear()
         touched.clear()
