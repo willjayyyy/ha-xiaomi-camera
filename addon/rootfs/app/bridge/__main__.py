@@ -214,9 +214,21 @@ class Bridge:
         if self._sessions is not None:
             # Drop sessions for cameras that no longer exist, so a removed
             # device does not keep its native instance alive for the lifetime
-            # of the process.
+            # of the process. Deliberately keyed on `publishable` rather than
+            # on the full list, unlike the settings prune below: a session is
+            # only ever built for the official path, so a camera that has
+            # left that path has nothing here worth keeping, and one that
+            # returns to it gets a fresh session on the next reader. Losing a
+            # session costs a reconnect; the two questions are not the same
+            # question and must not be made symmetrical.
             await self._sessions.async_prune({c.did for c in publishable})
-        self._settings.prune({c.did for c in publishable})
+        # Every camera on the account, not just the publishable ones. This
+        # deletes stored overrides, and `path` is one of them: for a model
+        # the vendor library refuses, that stored `path` is the only reason
+        # the camera is publishable at all, so pruning by publishability
+        # would delete the row that makes the row survive -- permanently, and
+        # taking the camera's Home Assistant entities with it.
+        self._settings.prune({c.did for c in cameras})
         # `self._registry.async_refresh()` above already refreshed the
         # cache this reads -- see `CameraRegistry.async_refresh`'s
         # docstring -- so this is a plain read, not a second network call.

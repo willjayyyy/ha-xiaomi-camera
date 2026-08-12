@@ -212,7 +212,15 @@ class SettingsStore:
         self._save()
 
     def prune(self, known_dids: set[str]) -> None:
-        """Forget cameras that are no longer on the account."""
+        """Forget cameras that are no longer on the account.
+
+        ``known_dids`` is every camera the account reports, refused models
+        included -- never some narrower "working right now" set. A row here
+        carries ``path``, and for a refused model that stored path is the
+        only thing that makes the camera publishable; dropping it because the
+        camera happened not to be publishable this cycle would erase the
+        override that would have brought it back, with no way to notice.
+        """
         removed = [did for did in self._cameras if did not in known_dids]
         if not removed:
             return

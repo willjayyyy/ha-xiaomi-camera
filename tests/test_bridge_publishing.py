@@ -113,50 +113,42 @@ async def test_a_refused_camera_never_reaches_the_restreamer() -> None:
     assert set(restreamer.applied) == {"aaa"}
 
 
-async def test_a_refused_camera_is_not_kept_alive_by_settings_pruning() -> None:
-    """`prune` is told which cameras exist so it can drop the rest. A refused
-    camera was never given settings to prune in the first place -- passing its
-    did through here would keep that predicate answered in two places instead
-    of one.
+async def test_settings_pruning_is_told_every_camera_on_the_account() -> None:
+    """`prune` deletes stored overrides, so it must be asked "is this camera
+    still on the account", never "is it publishable right now".
+
+    A refused model's stored `path: compat` is the only reason it is
+    publishable at all. Pruning by publishability makes the two questions
+    circular: one cycle in which the camera is not publishable deletes the
+    override that would have made it publishable again, and it never comes
+    back -- taking its Home Assistant entities with it, since the integration
+    deletes entities for any camera missing from the control plane's list.
     """
     settings = _FakeSettings()
     bridge = _bridge_with(_FakeRegistry(), _FakeRestreamer(), settings)
 
     await bridge.async_refresh()
 
-    assert settings.pruned == {"aaa"}
+    assert settings.pruned == {"aaa", "bbb"}
 
 
-async def test_channel_counts_reach_the_restreamer() -> None:
-    """Obligation E3: a dual-lens camera's `channel_count` has to reach
-    `Restreamer.async_apply` for a compatibility-mode second lens to be
-    built at all -- `Resolved` itself carries no such field."""
+async def test_a_camera_that_is_not_publishable_keeps_its_override(tmp_path) -> None:
+    """The end-to-end shape of the same rule, against the real store: a
+    refused camera whose path could not be resolved this cycle still has its
+    override row afterwards."""
+    from bridge.settings import SettingsStore
 
-    class _DualLensRegistry:
+    class _NoPathRegistry:
         async def async_refresh(self) -> list[CameraDescription]:
-            description = _description("aaa", "full")
-            return [
-                CameraDescription(
-                    **{**description.__dict__, "channel_count": 2},
-                )
-            ]
+            return [_description("bbb", "unsupported")]
 
-    restreamer = _FakeRestreamer()
-    captured: dict[str, object] = {}
-    original = restreamer.async_apply
-
-    async def _capture(cameras, *, channel_counts=None, compat_urls=None, **kwargs):
-        captured["channel_counts"] = dict(channel_counts or {})
-        await original(
-            cameras, channel_counts=channel_counts, compat_urls=compat_urls, **kwargs
-        )
-
-    restreamer.async_apply = _capture
-    bridge = _bridge_with(_DualLensRegistry(), restreamer, _FakeSettings())
+    store = SettingsStore(tmp_path / "settings.json")
+    store.set_override("bbb", path=VideoPath.COMPAT)
+    bridge = _bridge_with(_NoPathRegistry(), _FakeRestreamer(), store)
 
     await bridge.async_refresh()
 
-    assert captured["channel_counts"] == {"aaa": 2}
+    assert store.override_for("bbb").path is VideoPath.COMPAT
 
 
 async def test_compat_urls_are_fetched_only_when_a_camera_needs_them(
@@ -202,3 +194,4 @@ async def test_compat_urls_are_fetched_only_when_a_camera_needs_them(
     await bridge2.async_refresh()
 
     assert calls == ["cn"]
+
