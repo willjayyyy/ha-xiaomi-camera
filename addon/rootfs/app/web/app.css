@@ -72,7 +72,7 @@
 
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 32px 20px 48px; background: var(--ground); color: var(--ink-1);
+    margin: 0; padding: var(--s7) 20px 48px; background: var(--ground); color: var(--ink-1);
     font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
           "PingFang SC", "Microsoft YaHei", sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -97,7 +97,7 @@
     background: var(--accent-wash); color: var(--accent);
     display: flex; align-items: center; justify-content: center;
   }
-  .signin-mark svg { width: 32px; height: 32px; fill: currentColor; }
+  .signin-mark svg { width: var(--s7); height: var(--s7); fill: currentColor; }
   .signin-card h1 { font-size: 1.32rem; margin: 0 0 10px; }
   .signin-card .sub { margin: 0 0 28px; font-size: .9rem; line-height: 1.6; }
   /* The field and the button carry the same weight: matching height, radius
