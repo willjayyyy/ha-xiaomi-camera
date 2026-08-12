@@ -220,8 +220,8 @@ to the internet, that is a risk regardless of anything set here.
 ## Which cameras work
 
 Support follows Xiaomi's own list, which leaves out most models released before
-2022. A camera on that list still appears, marked, and can connect a second
-way — see [Compatibility mode](#compatibility-mode) below.
+2022. A camera not on that list still appears, marked, and can connect a
+second way — see [Compatibility mode](#compatibility-mode) below.
 
 This reflects a real limitation rather than caution: a camera Xiaomi's own
 library refuses was tested and could not be connected to through it at all.
