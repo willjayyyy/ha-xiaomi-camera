@@ -43,7 +43,10 @@ _SCALE = {
     "20px",
     "24px",
     "32px",
-    "6px",  # .lang button padding/radius -- not part of C2's component list
+    # .lang button padding/radius (not part of C2's component list), and the
+    # invisible touch-target inset on `.ctl-btn`/`.overlay-close` (44 - 32,
+    # halved -- a computed offset, not a spacing step of its own).
+    "6px",
     # One-off spacing carried over from the pre-split page (sign-in heading
     # margin, overlay sheet's own entry transform, hint/group label
     # margins) -- not touched by this task.
@@ -58,7 +61,11 @@ _SCALE = {
     "28px",  # sign-in subtitle margin, header margin-bottom
     "36px",  # settings-button diameter, sign-in card bottom padding
     "40px",  # overlay width offset, empty-state padding
-    "44px",  # sign-in card top padding
+    # Sign-in card top padding, and the segmented control's min-height (the
+    # 44px touch-target floor lives on `.seg` itself, not per button --
+    # adjacent buttons can't each carry an invisible inset without stealing
+    # a neighbour's clicks).
+    "44px",
     # Body bottom padding, and the play control's own diameter (Mi Home's
     # size for that control, not a spacing step).
     "48px",

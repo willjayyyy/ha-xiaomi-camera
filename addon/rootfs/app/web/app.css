@@ -314,7 +314,7 @@
     .preview[data-playing] { cursor: zoom-in; }
   }
   .ctl-btn {
-    width: 32px; height: 32px; border: 0; border-radius: var(--r-pill);
+    width: var(--s7); height: var(--s7); border: 0; border-radius: var(--r-pill);
     background: rgba(255,255,255,.22); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
     color: #fff; padding: 0; cursor: pointer; position: relative;
     display: grid; place-items: center;
@@ -361,12 +361,17 @@
      Two to four options: a segmented control. Every option is visible and
      one tap away, and it cannot be styled inconsistently across the
      browsers Home Assistant is opened in. */
+  /* The track itself carries the 44px touch-target floor rather than each
+     button: segmented buttons sit adjacent, so the invisible-inset trick
+     used elsewhere on this page would have neighbours stealing each other's
+     clicks. `align-self: stretch` (the flex default here, stated for
+     clarity) is what lets each button fill that height instead. */
   .seg {
-    display: flex; flex-wrap: wrap; gap: var(--s1);
+    display: flex; flex-wrap: wrap; gap: var(--s1); min-height: 44px;
     background: var(--sunken); border-radius: var(--r-ctl); padding: var(--s1);
   }
   .seg button {
-    flex: 1; min-height: 32px; font: inherit; font-size: .82rem; color: var(--ink-2);
+    flex: 1; align-self: stretch; font: inherit; font-size: .82rem; color: var(--ink-2);
     background: none; border: 1px solid transparent;
     border-radius: var(--s2); padding: var(--s2) var(--s3); cursor: pointer;
     transition: border-color .15s ease, background .15s ease, color .15s ease;
@@ -424,10 +429,13 @@
   .overlay-title { font-size: 1rem; font-weight: 600; flex: 1; min-width: 0; }
   .overlay-close {
     flex: none; width: var(--s7); height: var(--s7); border-radius: var(--r-pill); border: 0; padding: 0;
-    background: var(--sunken); color: var(--ink-2); cursor: pointer;
+    background: var(--sunken); color: var(--ink-2); cursor: pointer; position: relative;
     display: flex; align-items: center; justify-content: center;
     transition: background .15s ease, color .15s ease;
   }
+  /* Visual size 32, touch target 44 -- isolated (nothing sits beside it), so
+     the invisible-inset trick applies cleanly here, same as `.ctl-btn`. */
+  .overlay-close::after { content: ""; position: absolute; inset: -6px; }
   .overlay-close svg { width: 15px; height: 15px; fill: currentColor; }
   .overlay-close:hover { background: var(--ground); color: var(--ink-1); }
   .overlay-body { padding: 4px 18px 18px; overflow-y: auto; }
