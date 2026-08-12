@@ -31,76 +31,25 @@
       <h1 data-i18n="title">Xiaomi Camera Bridge</h1>
       <p class="sub" data-i18n="subtitle">Publishes your Xiaomi cameras as standard RTSP streams.</p>
     </div>
-    <span class="lang">
-      <button type="button" data-lang="en">English</button>
-      <button type="button" data-lang="zh">中文</button>
+    <span class="head-actions">
+      <span class="lang">
+        <button type="button" data-lang="en">English</button>
+        <button type="button" data-lang="zh">中文</button>
+      </span>
+      <button type="button" id="account-btn" class="icon-btn" data-i18n-label="accountTitle">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+      </button>
+      <button type="button" id="settings-btn" class="icon-btn" data-i18n-label="settingsTitle">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.4 7.4 0 0 0 0-2l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.4.96a7.5 7.5 0 0 0-1.73-1l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.5 7.5 0 0 0-1.73 1l-2.4-.96a.5.5 0 0 0-.6.22L2.4 8.78a.5.5 0 0 0 .12.64L4.55 11a7.4 7.4 0 0 0 0 2L2.52 14.6a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.4-.96a7.5 7.5 0 0 0 1.73 1l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7.5 7.5 0 0 0 1.73-1l2.4.96c.22.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>
+      </button>
     </span>
   </header>
 
   <div id="message" class="msg"></div>
 
-  <section class="card">
-    <h2 data-i18n="accountHeading">Account</h2>
-    <div class="row">
-      <span id="link-status" class="status warn"><span class="dot"></span></span>
-      <span style="flex:1"></span>
-      <button id="link-btn" class="primary" hidden data-i18n="connect">Connect Xiaomi account</button>
-      <button id="unlink-btn" class="ghost" hidden data-i18n="disconnect">Disconnect</button>
-    </div>
-
-    <div id="link-flow" hidden style="margin-top:20px">
-      <ol>
-        <li>
-          <a id="auth-link" href="#" target="_blank" rel="noopener" data-i18n="step1Link">Open the Xiaomi sign-in page</a>
-          <span data-i18n="step1Rest">and approve access.</span>
-        </li>
-        <li data-i18n="step2">Your browser will land on an address that cannot be opened — that is expected. Copy the entire address from the address bar.</li>
-        <li data-i18n="step3">Paste it below.</li>
-      </ol>
-      <input id="callback-url" type="text" autocomplete="off">
-      <p class="hint" data-i18n="privacyNote">The address is read locally to extract the authorization code. Nothing is sent anywhere else.</p>
-      <div class="row" style="margin-top:14px">
-        <button id="submit-btn" class="primary" data-i18n="finish">Finish sign-in</button>
-        <button id="cancel-btn" class="ghost" data-i18n="cancel">Cancel</button>
-      </div>
-    </div>
-  </section>
-
-  <section class="card" id="defaults-card" hidden>
-    <h2 data-i18n="defaultsHeading">Defaults</h2>
-    <div class="settings-list" id="defaults-rows"></div>
-  </section>
-
   <section>
     <div class="section-head"><h2 data-i18n="camerasHeading">Cameras</h2></div>
     <div id="cameras"><p class="empty" data-i18n="notLoaded">Not loaded yet.</p></div>
-  </section>
-
-  <!-- A mirror, not a second place to change these: access and log level stay
-       in the Supervisor configuration, which is the one place that changes
-       them. -->
-  <section class="card" id="addon-card" hidden>
-    <h2 data-i18n="addonHeading">Add-on settings</h2>
-    <div class="settings-list">
-      <div class="setting-row">
-        <div class="setting-row-btn" data-static>
-          <span class="setting-label" data-i18n="addonAccess">Access</span>
-          <span class="setting-value" id="addon-access"></span>
-        </div>
-      </div>
-      <div class="setting-row">
-        <div class="setting-row-btn" data-static>
-          <span class="setting-label" data-i18n="addonLogLevel">Log level</span>
-          <span class="setting-value" id="addon-loglevel"></span>
-        </div>
-      </div>
-      <div class="setting-row">
-        <a class="setting-row-btn" href="#" id="addon-config-link">
-          <span class="setting-label" data-i18n="addonOpenConfig">Open configuration</span>
-          <span class="setting-chevron" aria-hidden="true">›</span>
-        </a>
-      </div>
-    </div>
   </section>
 </main>
 

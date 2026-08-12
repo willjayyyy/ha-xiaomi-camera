@@ -173,9 +173,46 @@ def test_both_languages_have_the_same_keys():
 
 
 def _keys_of(js: str, lang: str) -> set[str]:
+    """Every `word:` key in the language's block of the I18N table.
+
+    Anchored on what comes *before* the word, not on line position -- two
+    keys packed onto one line (`a: "x", b: "y",`) are both real keys, and a
+    version of this check that only matched the first token on a line made
+    the second one invisible to it. A key is only ever preceded by `{` (the
+    block's own opening brace) or `,` (the previous entry), possibly across a
+    newline; requiring that also keeps a string *value* that happens to end
+    in "word: "" (e.g. "...sign-in: ") from being misread as a key of its own,
+    since nothing but whitespace separates it from the text before it.
+    """
     block = re.search(rf"\b{lang}:\s*{{(.*?)\n  }}", js, re.S)
     assert block, f"no {lang} block in the I18N table"
-    return set(re.findall(r"^\s{4}(\w+):", block.group(1), re.M))
+    return set(re.findall(r"(?:\A|[{,])\s*(\w+):\s*[\"']", block.group(1)))
+
+
+def test_the_page_has_no_defaults_card_and_no_readonly_mirror():
+    """The picture-quality default and the read-only add-on mirror both left
+    the main page -- the first moved into the gear, the second was retired."""
+    html = HTML.read_text()
+    assert 'id="defaults-card"' not in html
+    assert 'id="addon-card"' not in html
+    assert 'id="addon-access"' not in html
+    assert 'id="addon-loglevel"' not in html
+
+
+def test_the_account_card_moved_behind_the_header_buttons():
+    html = HTML.read_text()
+    body = html.split("<main", 1)[1]
+    assert 'id="link-flow"' not in body, "the sign-in flow belongs in the sheet"
+    assert 'id="account-btn"' in body
+    assert 'id="settings-btn"' in body
+
+
+def test_the_page_body_is_only_header_message_and_grid():
+    """Everything else -- defaults, add-on info, the account -- moved behind
+    the two header entrances."""
+    html = HTML.read_text()
+    main = html.split("<main", 1)[1].split("</main>", 1)[0]
+    assert 'class="card"' not in main
 
 
 def test_the_retired_words_appear_nowhere():

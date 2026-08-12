@@ -37,7 +37,9 @@ const I18N = {
     pathCompatRisky: "This model may not connect",
     qualityLow: "Standard", qualityHigh: "High",
     compatTitle: "Compatibility mode",
+    compatEnabled: "Enabled", compatNotEnabled: "Not enabled",
     compatWhy: "Compatibility mode reaches cameras a different way and needs your Xiaomi account password. It is separate from the sign-in you already completed, and stores a long-lived credential.",
+    compatEnableHint: "Turn it on from the settings of a camera that needs it.",
     compatCredit: "Compatibility mode is built on the open-source project go2rtc",
     compatConnect: "Connect with compatibility mode",
     compatRemove: "Remove credential",
@@ -79,12 +81,8 @@ const I18N = {
     previewGroup: "This viewer only",
     addressGroup: "Address",
     settingsSaveFailed: "Could not save that setting.",
-    // Add-on settings mirror ------------------------------------------------
-    addonHeading: "Add-on settings", addonAccess: "Access", addonLogLevel: "Log level",
-    addonOpenConfig: "Open configuration",
-    accessLocal: "Local", accessLan: "LAN",
-    logTrace: "Trace", logDebug: "Debug", logInfo: "Info", logNotice: "Notice",
-    logWarning: "Warning", logError: "Error", logFatal: "Fatal",
+    // Add-on link ------------------------------------------------------------
+    addonHeading: "Add-on",
     // Camera card controls --------------------------------------------------
     play: "Play", stop: "Stop", enlarge: "Enlarge picture", close: "Close",
     settingsButton: "Settings",
@@ -114,7 +112,9 @@ const I18N = {
     pathCompatRisky: "这个型号可能连不上",
     qualityLow: "标清", qualityHigh: "高清",
     compatTitle: "兼容模式",
+    compatEnabled: "已启用", compatNotEnabled: "未启用",
     compatWhy: "兼容模式用另一种方式连接摄像头，需要你的小米账号密码。这与你已完成的授权是分开的，会保存一个长期凭据。",
+    compatEnableHint: "请在需要它的摄像头设置里开启。",
     compatCredit: "兼容模式基于开源项目 go2rtc",
     compatConnect: "用兼容模式连接",
     compatRemove: "删除凭据",
@@ -156,12 +156,8 @@ const I18N = {
     previewGroup: "仅本设备生效",
     addressGroup: "地址",
     settingsSaveFailed: "设置未能保存。",
-    // Add-on settings mirror ------------------------------------------------
-    addonHeading: "加载项设置", addonAccess: "访问方式", addonLogLevel: "日志级别",
-    addonOpenConfig: "打开配置",
-    accessLocal: "仅本机", accessLan: "局域网",
-    logTrace: "跟踪", logDebug: "调试", logInfo: "信息", logNotice: "提示",
-    logWarning: "警告", logError: "错误", logFatal: "严重",
+    // Add-on link ------------------------------------------------------------
+    addonHeading: "加载项",
     // Camera card controls --------------------------------------------------
     play: "播放", stop: "停止", enlarge: "放大画面", close: "关闭",
     settingsButton: "设置",
@@ -182,11 +178,26 @@ let lang = pickLanguage();
 const t = (key) => I18N[lang][key] ?? I18N.en[key] ?? key;
 let cameras = [];
 //: Shared defaults (`{quality, audio, transcode_quality}`), fetched once and
-//: kept live so the settings sheet can show "Follow default (<value>)" — read
-//: from `GET /api/settings`, written back through `PUT /api/settings`.
+//: kept live so a camera's sheet can show "Follow default (<value>)" — read
+//: from `GET /api/settings`, written back through `PUT /api/settings`. Only
+//: read while the settings sheet (or a camera sheet) is open; nothing on the
+//: page itself shows a default any more.
 let defaults = null;
-//: The read-only mirror's own fields (`access_mode`, `log_level`, …).
+//: The add-on's own identity (`{slug, compat_ready}`), from `GET /api/info`.
+//: `slug` is `null` for a standalone deployment, which is what makes the
+//: settings sheet's "open configuration" row optional.
 let addonInfo = null;
+//: Whether the Xiaomi account is currently linked, from the last
+//: `/api/health` response. Read by the account sheet and by the camera
+//: area's empty state; not itself pushed into the DOM by the background poll
+//: below, which would tear down a preview nobody asked to stop.
+let accountLinked = false;
+//: Which screen the shared overlay is currently showing, so a background
+//: event (the account changing, a default changing) can refresh it in place
+//: instead of leaving it stale or reaching into the DOM blind. `null` when
+//: the overlay is closed, or open on a camera's own sheet (tracked
+//: separately by `openSheetDid`).
+let sheetKind = null;
 
 function applyLanguage() {
   document.documentElement.lang = lang === "zh" ? "zh-Hans" : "en";
@@ -194,7 +205,6 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach((el) => {
     el.textContent = t(el.dataset.i18n);
   });
-  $("callback-url").placeholder = t("callbackPlaceholder");
   document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
@@ -205,13 +215,11 @@ function applyLanguage() {
     b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
   });
   localStorage.setItem(STORAGE_KEY, lang);
-  // Rebuilt rather than left stale: every string in these three is baked in
-  // at render time, not read live through `data-i18n`. An open overlay is
-  // closed first -- its content was built the same way, and there is no
-  // session to lose by closing it.
+  // Rebuilt rather than left stale: every string in an open sheet is baked
+  // in at render time, not read live through `data-i18n`. Closed first --
+  // its content was built the same way, and there is no session to lose by
+  // closing it (the sheets are all re-entered from the header, not resumed).
   closeOverlay();
-  if (defaults) renderDefaultsRows();
-  if (addonInfo) renderAddonCard();
   if (!document.querySelector("main").hidden) refreshStatus();
 }
 
@@ -227,13 +235,6 @@ function showMessage(text, kind) {
   el.textContent = text;
   el.className = `msg show ${kind}`;
   if (kind === "success") setTimeout(() => el.classList.remove("show"), 6000);
-}
-
-function setStatus(text, kind) {
-  const el = $("link-status");
-  el.className = `status ${kind}`;
-  el.innerHTML = '<span class="dot"></span>';
-  el.append(text);
 }
 
 /**
@@ -277,56 +278,71 @@ function extractCallbackParams(input) {
   return null;
 }
 
+/**
+ * The camera area's three mutually exclusive states: loading (the initial
+ * markup, and `loadCameras`'s own placeholder), not connected to a Xiaomi
+ * account (this function's `else` branch), and connected with an empty or
+ * populated grid (`loadCameras`/`renderCameras`). The account did not vanish
+ * by moving into the header -- this is where it comes back when there is
+ * nothing else to look at.
+ */
 async function refreshStatus() {
   try {
     const data = await (await api("/api/health")).json();
+    accountLinked = data.linked;
     if (data.linked) {
-      setStatus(t("connected"), "ok");
-      $("link-btn").hidden = true;
-      $("unlink-btn").hidden = false;
-      $("link-flow").hidden = true;
-      await Promise.all([loadCameras(), loadSettings()]);
+      await loadCameras();
     } else {
-      setStatus(t("notConnected"), "warn");
-      $("link-btn").hidden = false;
-      $("unlink-btn").hidden = true;
       // Stopped before the markup holding them is discarded -- Disconnect
       // goes through this branch, and unlike `loadCameras`/`renderCameras`
       // it used to skip this, leaving any running preview's socket and
       // peer-to-peer session open with nothing left able to close them.
       $("cameras").querySelectorAll("[data-preview]").forEach(stopPreview);
-      $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("connectToSee"))}</p>`;
-      $("defaults-card").hidden = true;
-      $("addon-card").hidden = true;
+      $("cameras").innerHTML = `<div class="empty">
+        <p>${escapeHtml(t("connectToSee"))}</p>
+        <button type="button" class="primary" id="cameras-connect-btn">${escapeHtml(t("connect"))}</button>
+      </div>`;
+      $("cameras-connect-btn").addEventListener("click", openAccountSheet);
     }
+    refreshAccountSheetIfOpen();
   } catch {
-    setStatus(t("unreachable"), "err");
+    accountLinked = false;
+    $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("unreachable"))}</p>`;
   }
 }
 
 /**
- * The defaults card and the read-only add-on mirror, both from one request.
- *
- * Loaded alongside the camera list rather than blocking it: this page's
- * primary content is the cameras, and a settings fetch that failed must not
- * take the whole page down with it.
+ * The shared video defaults, read independently of the account link -- they
+ * are not camera facts, so there is nothing to wait on. Loaded once at
+ * startup and kept live so the settings sheet always shows the current
+ * value the moment it opens, rather than fetching on every open.
  */
 async function loadSettings() {
   try {
     const response = await api("/api/settings");
     if (!response.ok) throw new Error(await response.text());
-    const data = await response.json();
-    defaults = data.defaults;
-    // `/api/settings` no longer carries an `addon` block (it moved to
-    // `/api/info`, which has no `access_mode`/`log_level`), so `addonInfo`
-    // stays `undefined` and this card stays hidden until the task that
-    // rewrites this page wires it up to that endpoint.
-    addonInfo = data.addon;
-    renderDefaultsRows();
-    if (addonInfo) renderAddonCard();
+    defaults = (await response.json()).defaults;
   } catch {
-    // Left hidden. Nothing more can be usefully said here that the camera
-    // list's own error state has not already said.
+    // Left `null`. The settings sheet's defaults group stays empty until the
+    // next successful load -- nothing more can usefully be said here that
+    // the camera list's own error state has not already said.
+  }
+}
+
+/**
+ * The add-on's own identity -- the Supervisor slug and whether a
+ * compatibility-mode credential exists. Independent of the account link for
+ * the same reason as `loadSettings`, and independent of it in the other
+ * direction too: `compat_ready` is what the account sheet's compatibility
+ * row shows even before the Xiaomi account itself is connected.
+ */
+async function loadInfo() {
+  try {
+    const response = await api("/api/info");
+    if (!response.ok) throw new Error(await response.text());
+    addonInfo = await response.json();
+  } catch {
+    addonInfo = { slug: null, compat_ready: false };
   }
 }
 
@@ -613,14 +629,21 @@ function previewDetailField() {
 }
 
 // ---------------------------------------------------------------------------
-// The defaults card.
+// The three global default rows, rendered wherever they currently live:
+// inside the settings sheet (M3), rebuilt on every open plus after any
+// change to `defaults` itself.
 // ---------------------------------------------------------------------------
 
 function renderDefaultsRows() {
-  $("defaults-rows").innerHTML = SETTINGS_FIELDS
-    .map((field) => settingRowHtml(field, defaults[field.key]))
-    .join("");
-  $("defaults-card").hidden = false;
+  const container = $("defaults-rows");
+  // Not an error -- the settings sheet may have been closed (or never
+  // opened) since this was last called. Whoever opens it next builds it
+  // fresh from the current `defaults`.
+  if (!container) return;
+  container.innerHTML = defaults
+    ? SETTINGS_FIELDS.map((field) => settingRowHtml(field, defaults[field.key])).join("")
+    : "";
+  wireSettingRows(container, applyDefaultChange);
 }
 
 async function applyDefaultChange(key, value) {
@@ -651,22 +674,6 @@ async function applyDefaultChange(key, value) {
     showMessage(t("settingsSaveFailed"), "error");
     renderDefaultsRows();
   }
-}
-
-// ---------------------------------------------------------------------------
-// The read-only add-on mirror.
-// ---------------------------------------------------------------------------
-
-const ACCESS_LABELS = { local: "accessLocal", lan: "accessLan" };
-const LOG_LEVEL_LABELS = {
-  trace: "logTrace", debug: "logDebug", info: "logInfo", notice: "logNotice",
-  warning: "logWarning", error: "logError", fatal: "logFatal",
-};
-
-function renderAddonCard() {
-  $("addon-access").textContent = t(ACCESS_LABELS[addonInfo.access_mode] || addonInfo.access_mode);
-  $("addon-loglevel").textContent = t(LOG_LEVEL_LABELS[addonInfo.log_level] || addonInfo.log_level);
-  $("addon-card").hidden = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +749,192 @@ function closeOverlay() {
 }
 
 // ---------------------------------------------------------------------------
-// The settings sheet -- one camera's overrides, plus this viewer's own
+// The two header entrances, split by nature: 👤 holds identity (the Xiaomi
+// account, and the compatibility-mode credential -- both are credentials,
+// which is why they share a sheet), ⚙ holds preferences (the video
+// defaults, and a way out to the Supervisor page). Putting them in one sheet
+// is what made "I want to change picture quality" and "I want to sign in
+// again" look like the same kind of operation.
+// ---------------------------------------------------------------------------
+
+/**
+ * M1: the account sheet. The Xiaomi account's own state, plus the
+ * compatibility-mode row underneath it -- both credentials, neither a video
+ * setting, which is why neither lives in the gear.
+ */
+function openAccountSheet() {
+  sheetKind = "account";
+  openOverlay(t("accountTitle"), "", renderAccountSheetBody, () => { sheetKind = null; });
+}
+
+function renderAccountSheetBody(body) {
+  body.innerHTML = `
+    <span class="setting-group-label">${escapeHtml(t("accountHeading"))}</span>
+    <div class="row">
+      <span class="status ${accountLinked ? "ok" : "warn"}">
+        <span class="dot"></span>${escapeHtml(accountLinked ? t("connected") : t("notConnected"))}
+      </span>
+      <span style="flex:1"></span>
+      <button type="button" id="link-btn" class="primary"${accountLinked ? " hidden" : ""}>${escapeHtml(t("connect"))}</button>
+      <button type="button" id="unlink-btn" class="ghost"${accountLinked ? "" : " hidden"}>${escapeHtml(t("disconnect"))}</button>
+    </div>
+    <span class="setting-group-label">${escapeHtml(t("compatTitle"))}</span>
+    <div class="settings-list">
+      <div class="setting-row">
+        <button type="button" class="setting-row-btn" id="compat-row">
+          <span class="setting-label">${escapeHtml(t("compatTitle"))}</span>
+          <span class="setting-value">${escapeHtml(addonInfo?.compat_ready ? t("compatEnabled") : t("compatNotEnabled"))}</span>
+          <span class="setting-chevron" aria-hidden="true">›</span>
+        </button>
+      </div>
+    </div>`;
+  body.querySelector("#link-btn")?.addEventListener("click", openAccountFlow);
+  body.querySelector("#unlink-btn")?.addEventListener("click", unlinkAccount);
+  body.querySelector("#compat-row").addEventListener("click", openCompatManage);
+}
+
+//: Called after anything that can change `accountLinked` in the background
+//: (the health poll below) -- refreshes M1 in place rather than leaving it
+//: stale, without reopening it or touching anything else on screen.
+function refreshAccountSheetIfOpen() {
+  if (sheetKind === "account" && !overlay.root.hidden) renderAccountSheetBody(overlay.body);
+}
+
+/**
+ * M2: connect the Xiaomi account. The same three-step OAuth flow this page
+ * has always used, unchanged -- only where it lives moved, from a card on
+ * the page to this sheet, replacing M1's content until it finishes or is
+ * cancelled, either of which returns to M1.
+ */
+async function openAccountFlow() {
+  const btn = $("link-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const response = await api("/api/link/begin", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    const { authorize_url: authorizeUrl } = await response.json();
+    sheetKind = "flow";
+    openOverlay(t("accountTitle"), "", (body) => renderAccountFlowBody(body, authorizeUrl), () => { sheetKind = null; });
+    window.open(authorizeUrl, "_blank", "noopener");
+  } catch (err) {
+    showMessage(t("startFailed") + err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderAccountFlowBody(body, authorizeUrl) {
+  body.innerHTML = `
+    <ol>
+      <li>
+        <a id="auth-link" href="${escapeHtml(authorizeUrl)}" target="_blank" rel="noopener">${escapeHtml(t("step1Link"))}</a>
+        <span>${escapeHtml(t("step1Rest"))}</span>
+      </li>
+      <li>${escapeHtml(t("step2"))}</li>
+      <li>${escapeHtml(t("step3"))}</li>
+    </ol>
+    <input id="callback-url" type="text" autocomplete="off" placeholder="${escapeHtml(t("callbackPlaceholder"))}">
+    <p class="hint">${escapeHtml(t("privacyNote"))}</p>
+    <div class="row" style="margin-top:14px">
+      <button type="button" id="submit-btn" class="primary">${escapeHtml(t("finish"))}</button>
+      <button type="button" id="cancel-btn" class="ghost">${escapeHtml(t("cancel"))}</button>
+    </div>`;
+  body.querySelector("#submit-btn").addEventListener("click", submitAccountLink);
+  body.querySelector("#cancel-btn").addEventListener("click", openAccountSheet);
+}
+
+async function submitAccountLink() {
+  const input = $("callback-url");
+  const params = extractCallbackParams(input.value);
+  if (!params) { showMessage(t("noCode"), "error"); return; }
+  const btn = $("submit-btn");
+  btn.disabled = true;
+  try {
+    const response = await api("/api/link/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    input.value = "";
+    showMessage(t("linked"), "success");
+    await refreshStatus();
+    openAccountSheet();
+  } catch (err) {
+    showMessage(t("signInFailed") + err.message, "error");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function unlinkAccount() {
+  if (!window.confirm(t("confirmUnlink"))) return;
+  await api("/api/unlink", { method: "POST" });
+  // Re-renders M1 in place through `refreshAccountSheetIfOpen` -- no
+  // separate call needed to land back on it, unlike the flow above, because
+  // this action never left it.
+  await refreshStatus();
+}
+
+/**
+ * M6: manage compatibility mode, opened from M1's compatibility-mode row.
+ * Only the not-enabled half -- the explanation, and where to actually turn
+ * it on. No sign-in form here: enabling it from a settings screen is the
+ * unanchored choice this design moved away from. The credential is only
+ * ever entered from a specific camera that cannot be reached without it, so
+ * that is the only place it is asked for -- a later task adds this sheet's
+ * enabled half (the camera list and the credential's own removal).
+ */
+function openCompatManage() {
+  sheetKind = "compat";
+  openOverlay(t("compatTitle"), "", (body) => {
+    body.innerHTML = `
+      <p class="hint">${escapeHtml(t("compatWhy"))}</p>
+      <p class="hint">${escapeHtml(t("compatEnableHint"))}</p>`;
+  }, () => { sheetKind = null; });
+}
+
+/**
+ * M3: the settings sheet. The three global video defaults every camera
+ * falls back to when it says nothing for itself, plus a way out to the
+ * Supervisor's own configuration page. No path row here -- a camera's
+ * available connection paths depend on its own model and on whether a
+ * credential exists, so a global value for it would be meaningless.
+ */
+function openSettingsSheet() {
+  sheetKind = "settings";
+  openOverlay(t("settingsTitle"), "", renderSettingsSheetBody, () => { sheetKind = null; });
+}
+
+function renderSettingsSheetBody(body) {
+  body.innerHTML = `
+    <span class="setting-group-label">${escapeHtml(t("defaultsHeading"))}</span>
+    <div class="settings-list" id="defaults-rows"></div>
+    ${addonInfo?.slug ? `
+    <span class="setting-group-label">${escapeHtml(t("addonHeading"))}</span>
+    <div class="settings-list">
+      <div class="setting-row">
+        <button type="button" class="setting-row-btn" id="open-config-btn">
+          <span class="setting-label">${escapeHtml(t("openConfig"))}</span>
+          <span class="setting-chevron" aria-hidden="true">›</span>
+        </button>
+      </div>
+    </div>` : ""}`;
+  renderDefaultsRows();
+  body.querySelector("#open-config-btn")?.addEventListener("click", () => {
+    // `window.top`, not this frame: ingress renders the page inside an
+    // iframe, and a same-frame navigation would nest Home Assistant inside
+    // itself instead of replacing it. The slug comes from `/api/info` --
+    // Home Assistant prefixes it with the repository the add-on was
+    // installed from, so the bare slug in `config.yaml` 404s on every real
+    // install; this is why the row is omitted entirely rather than built
+    // from that bare name when `addonInfo.slug` is `null`.
+    window.top.location = `/hassio/addon/${addonInfo.slug}/config`;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The camera sheet -- one camera's overrides, plus this viewer's own
 // preview preferences underneath, in their own group.
 // ---------------------------------------------------------------------------
 
@@ -1219,54 +1411,6 @@ async function loadCameras() {
   }
 }
 
-$("link-btn").addEventListener("click", async () => {
-  $("link-btn").disabled = true;
-  try {
-    const response = await api("/api/link/begin", { method: "POST" });
-    if (!response.ok) throw new Error(await response.text());
-    const { authorize_url: authorizeUrl } = await response.json();
-    $("auth-link").href = authorizeUrl;
-    $("link-flow").hidden = false;
-    window.open(authorizeUrl, "_blank", "noopener");
-  } catch (err) {
-    showMessage(t("startFailed") + err.message, "error");
-  } finally {
-    $("link-btn").disabled = false;
-  }
-});
-
-$("submit-btn").addEventListener("click", async () => {
-  const params = extractCallbackParams($("callback-url").value);
-  if (!params) { showMessage(t("noCode"), "error"); return; }
-  $("submit-btn").disabled = true;
-  try {
-    const response = await api("/api/link/complete", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    $("callback-url").value = "";
-    showMessage(t("linked"), "success");
-    await refreshStatus();
-  } catch (err) {
-    showMessage(t("signInFailed") + err.message, "error");
-  } finally {
-    $("submit-btn").disabled = false;
-  }
-});
-
-$("cancel-btn").addEventListener("click", () => {
-  $("link-flow").hidden = true;
-  $("callback-url").value = "";
-});
-
-$("unlink-btn").addEventListener("click", async () => {
-  if (!window.confirm(t("confirmUnlink"))) return;
-  await api("/api/unlink", { method: "POST" });
-  await refreshStatus();
-});
-
 /**
  * Show the page, or the way in.
  *
@@ -1284,7 +1428,6 @@ async function openPage() {
   }
   $("signin").hidden = true;
   document.querySelector("main").hidden = false;
-  setStatus(t("checking"), "warn");
   refreshStatus();
   return undefined;
 }
@@ -1318,23 +1461,22 @@ $("signin-form").addEventListener("submit", async (event) => {
 
 initOverlay();
 wireCameraGrid($("cameras"));
-wireSettingRows($("defaults-rows"), applyDefaultChange);
-
-$("addon-config-link").addEventListener("click", (event) => {
-  event.preventDefault();
-  // `window.top`, not this frame: ingress renders the page inside an iframe,
-  // and a same-frame navigation to the Supervisor's own config page would
-  // nest Home Assistant inside itself instead of replacing it.
-  window.top.location = "/hassio/addon/xiaomi_camera_bridge/config";
-});
+$("account-btn").addEventListener("click", openAccountSheet);
+$("settings-btn").addEventListener("click", openSettingsSheet);
 
 applyLanguage();
+loadInfo();
+loadSettings();
 openPage();
 // Only the account state is polled; re-rendering the grid would tear down any
-// preview the user is watching.
+// preview the user is watching. If M1 happens to be open, it is refreshed in
+// place instead -- see `refreshAccountSheetIfOpen`.
 setInterval(async () => {
   try {
     const data = await (await api("/api/health")).json();
-    setStatus(data.linked ? t("connected") : t("notConnected"), data.linked ? "ok" : "warn");
-  } catch { setStatus(t("unreachable"), "err"); }
+    accountLinked = data.linked;
+  } catch {
+    accountLinked = false;
+  }
+  refreshAccountSheetIfOpen();
 }, 30000);

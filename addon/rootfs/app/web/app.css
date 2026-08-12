@@ -116,12 +116,28 @@
   header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; }
   h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -.02em; margin: 0 0 6px; }
   .sub { color: var(--ink-2); margin: 0; font-size: .95rem; }
-  .lang { margin-left: auto; font-size: .85rem; color: var(--ink-2); white-space: nowrap; }
+  /* The two entrances that replaced the account/defaults/add-on cards:
+     identity (who) and preferences (what), kept apart on purpose -- see the
+     comment on `openAccountSheet` in the script. */
+  .head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s3); }
+  .lang { font-size: .85rem; color: var(--ink-2); white-space: nowrap; }
   .lang button {
     background: none; border: 0; color: var(--ink-2); cursor: pointer;
     font: inherit; padding: 4px 6px; border-radius: 6px;
   }
   .lang button[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+  /* Same visual and touch-target size as `.settings-btn` on a camera card --
+     one icon-button language across the page rather than a second one
+     invented for the header. */
+  .icon-btn {
+    flex: none; width: 36px; height: 36px; border-radius: var(--r-pill); padding: 0;
+    background: var(--sunken); color: var(--ink-2); border: 0; position: relative;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+  }
+  .icon-btn::after { content: ""; position: absolute; inset: -4px; }
+  .icon-btn svg { width: 17px; height: 17px; fill: currentColor; }
+  .icon-btn:hover { color: var(--accent); background: var(--accent-wash); }
 
   /* ---- Card -------------------------------------------------------------
      Borderless: a Mi Home card is told apart from the ground by being white,
@@ -475,6 +491,7 @@
   .msg.error { background: color-mix(in srgb, var(--err) 11%, transparent); color: var(--err); }
   .msg.success { background: color-mix(in srgb, var(--ok) 11%, transparent); color: var(--ok); }
   .empty { color: var(--ink-2); text-align: center; padding: 40px 0; }
+  .empty button.primary { margin-top: var(--s4); }
 
   /* ---- Focus ------------------------------------------------------------
      One rule for every focusable control on the page: a ring for keyboard
