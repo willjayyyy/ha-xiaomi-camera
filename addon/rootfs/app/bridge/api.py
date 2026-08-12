@@ -610,9 +610,14 @@ class BridgeApi:
         # quality and audio are read through, at the same moment: when a
         # session opens. Dropping the cached session is what forces that
         # decision to be remade, exactly as it already does for the other
-        # two; there is no separate go2rtc stream URL to touch, since go2rtc
-        # always pulls this camera from this bridge's own `/api/stream/{did}`
-        # regardless of which path serves it.
+        # two.
+        #
+        # As of this writing there is also no separate go2rtc stream URL to
+        # touch: go2rtc always pulls every camera from this bridge's own
+        # `/api/stream/{did}`, whichever path serves it. That holds only
+        # because compatibility mode has no source URL of its own yet -- the
+        # day it gets one, a path change will also need to change what
+        # go2rtc sources from, and this paragraph will be wrong.
         session_affecting = {"quality", "audio", "path"} & set(changes)
         self._settings_store.set_override(did, **changes)
         sessions: SessionManager | None = self._sessions_provider()
