@@ -20,6 +20,7 @@ the route table.
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 
 import pytest
 from aiohttp import WSMsgType, web
@@ -330,15 +331,25 @@ class TestASettingsChangeTellsOpenPreviewsItIsReloading:
     starts removes both the twenty-second silence and the permanent failure.
     """
 
-    async def test_it_notifies_the_open_socket_before_reloading(self, tmp_path) -> None:
+    async def test_it_notifies_every_open_socket_for_that_camera_and_no_other(
+        self, tmp_path
+    ) -> None:
+        """Two viewers on the reloading camera both hear about it; a third
+        viewer on an unrelated camera hears nothing -- `_notify_reloading`
+        must reach every socket registered under the reloading `did` and
+        none registered under any other.
+        """
         previews = _Previews([])  # never sends a frame; only the notify matters here
 
         class _Camera:
-            did = "42"
+            def __init__(self, did: str) -> None:
+                self.did = did
 
         class _Registry:
+            _dids: ClassVar = {"42", "99"}
+
             def get(self, did: str) -> object | None:
-                return _Camera() if did == "42" else None
+                return _Camera(did) if did in self._dids else None
 
             def power_state(self, did: str) -> bool | None:
                 return True
@@ -386,17 +397,27 @@ class TestASettingsChangeTellsOpenPreviewsItIsReloading:
         client = TestClient(TestServer(app))
         await client.start_server()
         try:
-            async with client.ws_connect("/api/preview/42/ws") as ws:
+            async with (
+                client.ws_connect("/api/preview/42/ws") as ws_a,
+                client.ws_connect("/api/preview/42/ws") as ws_b,
+                client.ws_connect("/api/preview/99/ws") as ws_other,
+            ):
                 response = await client.put(
                     "/api/cameras/42/settings", json={"quality": "high"}
                 )
                 assert response.status == 200
-                message = await asyncio.wait_for(ws.receive(), timeout=2)
-                assert message.type is WSMsgType.TEXT
-                assert message.json() == {
-                    "type": "unavailable",
-                    "reason": "reloading",
-                }
+                for ws in (ws_a, ws_b):
+                    message = await asyncio.wait_for(ws.receive(), timeout=2)
+                    assert message.type is WSMsgType.TEXT
+                    assert message.json() == {
+                        "type": "unavailable",
+                        "reason": "reloading",
+                    }
+                # `99` was never touched -- its socket has nothing waiting,
+                # and `_Previews([])` never produces a frame either, so this
+                # only proves true if the loop above stayed silent for it.
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(ws_other.receive(), timeout=0.2)
             # The reload itself still happened -- the notify is additional,
             # not a replacement for reopening the session.
             assert sessions.reloaded == ["42"]

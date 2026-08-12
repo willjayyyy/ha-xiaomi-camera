@@ -756,13 +756,18 @@ class BridgeApi:
             # changing means reopening that camera's session -- and only
             # this camera's.
             _LOGGER.info("reloading session %s for changed %s", did, sorted(changes))
-            # Told immediately, before the reload even starts: the add-on
-            # knows it is about to interrupt this camera's stream, so a
-            # viewer should hear that from it rather than deduce it from
-            # silence. See `_notify_reloading`.
-            await self._notify_reloading(did)
             await sessions.async_reload(did)
             _LOGGER.info("session %s reloaded", did)
+            # Told only once the old session is fully torn down, not while it
+            # is still in flight: `SessionManager._async_stop_one` removes
+            # the entry from its table before it awaits the vendor P2P
+            # teardown, so `session_for()` would build a second, concurrent
+            # session for the same physical camera if a viewer reconnected
+            # into that window. Waiting for `async_reload` to return closes
+            # the window entirely -- on real hardware that cost about 1.68s,
+            # against the 20s `no_video` this replaces. See
+            # `_notify_reloading`.
+            await self._notify_reloading(did)
         await self._refresh_callback(explicit=True)
         return web.json_response({"ok": True})
 
@@ -784,9 +789,21 @@ class BridgeApi:
         session cannot yet produce.
         """
         for ws in list(self._preview_sockets.get(did, ())):
-            with contextlib.suppress(ConnectionResetError):
+            # Broad on purpose, matching every other best-effort socket
+            # cleanup in this file (`async_stop` above, `_stream`'s
+            # `response.write_eof()`): this runs inside `_set_camera_settings`,
+            # so a narrower catch that let some other error through -- a
+            # `RuntimeError` from writing to a transport that is mid-close,
+            # say -- would abort the settings PUT before the session it is
+            # announcing ever reloads. A best-effort notification must never
+            # be able to fail the operation it is announcing.
+            try:
                 await ws.send_json({"type": "unavailable", "reason": "reloading"})
                 await ws.close()
+            except Exception:
+                _LOGGER.debug(
+                    "could not notify a preview socket for %s", did, exc_info=True
+                )
 
     async def _preview_ws(self, request: web.Request) -> web.WebSocketResponse:
         """Pictures from one camera, over one connection.
