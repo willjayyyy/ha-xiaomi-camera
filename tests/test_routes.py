@@ -20,8 +20,10 @@ from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
+from bridge import go2rtc_xiaomi
 from bridge.api import BridgeApi
 from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
+from bridge.go2rtc_xiaomi import SignInBusy
 from bridge.paths import VideoPath
 from bridge.settings import SettingsStore
 
@@ -204,6 +206,7 @@ def _build_bridge(
     extra: list[_Camera] | None = None,
     *,
     slug: str | None = None,
+    web_password: str = "",
 ) -> BridgeApi:
     """A `BridgeApi` wired to camera `aaa` (plus `extra`) and its own settings
     file.
@@ -225,7 +228,7 @@ def _build_bridge(
         video_quality=VideoQuality.LOW,
         enable_audio=False,
         log_level="info",
-        web_password="",
+        web_password=web_password,
         transcode_quality=TranscodeQuality.STANDARD,
         supervised=False,
     )
@@ -309,8 +312,8 @@ async def test_info_has_no_slug_when_none_was_configured(client) -> None:
 @pytest.mark.asyncio
 async def test_info_reports_compat_ready(client) -> None:
     body = await (await client.get("/api/info")).json()
-    # Hardcoded on the production path until compatibility mode's account
-    # state is wired in -- see `BridgeApi._compat_ready`.
+    # `go2rtc_xiaomi.compat_ready()`'s cache starts `False` and nothing in
+    # this test signs in, so this is the real (empty) answer, not a stub.
     assert body["compat_ready"] is False
 
 
@@ -475,3 +478,166 @@ async def test_a_refused_camera_reaches_the_page_with_its_support_level(
     # The page asks this rather than re-deriving it from `support`, so it has
     # to arrive on the wire.
     assert refused["publishable"] is False
+
+
+# ----------------------------------------------------------------------
+# Compatibility mode's sign-in, carried to go2rtc.
+#
+# Only two routes -- `POST /api/compat/signin` and `DELETE /api/compat` --
+# on the ingress app, behind the same password guard as everything else on
+# the page. go2rtc's wider API exposes `exec` and stream management, and
+# there must be nothing generic here for a later task to grow into a proxy
+# for either.
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_compat_ready_cache():
+    """`go2rtc_xiaomi.compat_ready()` is cached module state -- see its own
+    docstring for why. Reset around every test in this file so one test's
+    sign-in does not leak into the next."""
+    go2rtc_xiaomi._ready = False
+    yield
+    go2rtc_xiaomi._ready = False
+
+
+@pytest.fixture
+async def locked_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The ingress listener behind a configured password, with no session
+    cookie supplied -- the same "not signed in" state a fresh browser is in.
+    """
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
+    bridge_api = _build_bridge(tmp_path, web_password="correct-horse-battery")
+    test_client = TestClient(TestServer(bridge_api.build_ingress_app()))
+    await test_client.start_server()
+    try:
+        yield test_client
+    finally:
+        await test_client.close()
+
+
+@pytest.mark.asyncio
+async def test_sign_in_is_behind_the_page_password(locked_client) -> None:
+    response = await locked_client.post("/api/compat/signin", json={"step": "password"})
+    assert response.status == 401
+
+
+@pytest.mark.asyncio
+async def test_forget_is_behind_the_page_password(locked_client) -> None:
+    response = await locked_client.delete("/api/compat")
+    assert response.status == 401
+
+
+def test_only_the_two_compat_routes_exist(
+    bridge: BridgeApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nothing generic. go2rtc's wider API exposes `exec` and stream
+    management, and a passthrough would put both behind our password."""
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
+    paths = {
+        route.resource.canonical for route in bridge.build_ingress_app().router.routes()
+    }
+    assert not any("xiaomi" in p for p in paths)
+    assert "/api/compat/signin" in paths
+    assert "/api/compat" in paths
+
+
+@pytest.mark.asyncio
+async def test_a_sign_in_is_carried_to_go2rtc(client, monkeypatch: pytest.MonkeyPatch):
+    async def fake_sign_in(step, **fields):
+        assert step == "password"
+        assert fields == {"username": "u", "password": "p"}
+        return go2rtc_xiaomi.SignInResult(ok=True)
+
+    monkeypatch.setattr(go2rtc_xiaomi, "sign_in", fake_sign_in)
+    response = await client.post(
+        "/api/compat/signin",
+        json={"step": "password", "username": "u", "password": "p"},
+    )
+    assert response.status == 200
+    assert (await response.json())["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_successful_sign_in_updates_compat_ready(
+    client, monkeypatch: pytest.MonkeyPatch
+):
+    async def fake_sign_in(step, **fields):
+        return go2rtc_xiaomi.SignInResult(ok=True)
+
+    async def fake_refresh():
+        go2rtc_xiaomi._ready = True
+
+    monkeypatch.setattr(go2rtc_xiaomi, "sign_in", fake_sign_in)
+    monkeypatch.setattr(go2rtc_xiaomi, "refresh_compat_ready", fake_refresh)
+    assert go2rtc_xiaomi.compat_ready() is False
+    await client.post("/api/compat/signin", json={"step": "password"})
+    assert go2rtc_xiaomi.compat_ready() is True
+
+
+@pytest.mark.asyncio
+async def test_a_next_step_reports_what_go2rtc_asked_for(
+    client, monkeypatch: pytest.MonkeyPatch
+):
+    async def fake_sign_in(step, **fields):
+        return go2rtc_xiaomi.SignInResult(ok=False, verify_phone="138****5678")
+
+    monkeypatch.setattr(go2rtc_xiaomi, "sign_in", fake_sign_in)
+    response = await client.post("/api/compat/signin", json={"step": "password"})
+    assert response.status == 401
+    body = await response.json()
+    assert body["verify_phone"] == "138****5678"
+    assert body["captcha"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_step_is_rejected_by_name(client) -> None:
+    response = await client.post("/api/compat/signin", json={"step": "carrier-pigeon"})
+    assert response.status == 400
+
+
+@pytest.mark.asyncio
+async def test_a_second_sign_in_is_refused_with_a_reason(
+    client, monkeypatch: pytest.MonkeyPatch
+):
+    async def fake_sign_in(step, **fields):
+        raise SignInBusy
+
+    monkeypatch.setattr(go2rtc_xiaomi, "sign_in", fake_sign_in)
+    response = await client.post("/api/compat/signin", json={"step": "password"})
+    assert response.status == 409
+    assert (await response.json())["error"] == "sign_in_busy"
+
+
+@pytest.mark.asyncio
+async def test_a_go2rtc_failure_is_reported_without_its_raw_text(
+    client, monkeypatch: pytest.MonkeyPatch
+):
+    """Whatever go2rtc's own error said, it must pass through `safe_error`
+    rather than reach the response verbatim -- it can carry the account
+    password in cleartext."""
+
+    async def fake_sign_in(step, **fields):
+        raise RuntimeError("upstream said: rtsp://admin:hunter2@host/failed")
+
+    monkeypatch.setattr(go2rtc_xiaomi, "sign_in", fake_sign_in)
+    response = await client.post("/api/compat/signin", json={"step": "password"})
+    assert response.status == 502
+    body = await response.json()
+    assert "hunter2" not in body["error"]
+
+
+@pytest.mark.asyncio
+async def test_forgetting_the_credential_is_not_supported(client) -> None:
+    """go2rtc's own `/api/xiaomi` (its `internal/xiaomi/xiaomi.go`) accepts
+    GET and POST only -- there is no removal path to call, and hand-editing
+    the state file go2rtc owns would give it a second writer. A clear
+    "not supported" beats a button that does nothing.
+    """
+    response = await client.delete("/api/compat")
+    assert response.status == 501
+    assert (await response.json())["error"] == "not_supported"

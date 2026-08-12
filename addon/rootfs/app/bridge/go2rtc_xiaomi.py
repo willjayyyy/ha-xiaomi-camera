@@ -4,6 +4,11 @@
 their devices. Both are reached over loopback. go2rtc's wider API exposes
 `exec` and stream management, so nothing here is generic -- there is no
 "call go2rtc" helper to grow into one.
+
+Also owns `compat_ready` -- the cached answer to "does go2rtc hold at least
+one Xiaomi credential" that every other module reads instead of asking
+go2rtc itself. See `refresh_compat_ready` for why it is cached rather than
+read live.
 """
 
 from __future__ import annotations
@@ -152,6 +157,40 @@ async def _device_urls(user: str, region: str) -> dict[str, str]:
         if did:
             urls[did] = url
     return urls
+
+
+#: Whether go2rtc holds at least one Xiaomi credential, as of the last
+#: `refresh_compat_ready()` call. Cached rather than asked fresh on every
+#: read: `path_for` consults it during every camera-list refresh and every
+#: `/api/cameras`, both of which run far more often than the credential set
+#: changes, and a network round trip inside a pure resolution function would
+#: be wrong even though it is only loopback.
+_ready = False
+
+
+def compat_ready() -> bool:
+    """Whether compatibility mode has a credential to use, as of the last
+    refresh. Never makes a network call -- see `_ready` above."""
+    return _ready
+
+
+async def refresh_compat_ready() -> None:
+    """Update the cached `compat_ready` flag from go2rtc's own account list.
+
+    Call this at start-up, right after a sign-in succeeds, and on every
+    camera-list refresh -- the moments the four readers of `compat_ready`
+    (`BridgeApi._compat_ready`, `CameraRegistry._compat_ready`, and both call
+    sites in `bridge.__main__`) need a current answer for. A failure to
+    reach go2rtc -- it not being up yet at start-up, a transient error --
+    degrades to "not ready" rather than raising, the same choice every other
+    function in this module makes rather than taking its caller down with it.
+    """
+    global _ready
+    try:
+        _ready = bool(await signed_in_users())
+    except RuntimeError as err:
+        _LOGGER.warning("could not refresh compat_ready: %s", safe_error(err))
+        _ready = False
 
 
 async def all_device_urls(region: str) -> dict[str, str]:

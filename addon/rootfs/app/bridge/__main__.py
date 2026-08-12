@@ -17,6 +17,7 @@ import sys
 
 import aiohttp
 
+from . import go2rtc_xiaomi
 from .account import AccountManager, NotLinkedError
 from .api import BridgeApi
 from .cameras import CameraRegistry
@@ -144,6 +145,11 @@ class Bridge:
         await self._api.async_start()
         self._discovery_uuid = await async_announce()
 
+        # Compatibility mode's credential lives in go2rtc, independent of
+        # whether a Xiaomi account is linked here -- so this has to run even
+        # when the block below never does. See `go2rtc_xiaomi.compat_ready`.
+        await go2rtc_xiaomi.refresh_compat_ready()
+
         # A failure here must not take the bridge down: the UI is exactly where
         # the user goes to fix a broken or missing account, and an add-on that
         # crash-loops on a boot without network never gets there. It would also
@@ -215,13 +221,14 @@ class Bridge:
             # of the process.
             await self._sessions.async_prune({c.did for c in publishable})
         self._settings.prune({c.did for c in publishable})
-        # Every camera reaching this point is fully supported today, so each
-        # one resolves to something -- `compat_ready` is a placeholder until
-        # compatibility mode's account state is wired in.
+        # `self._registry.async_refresh()` above already refreshed the
+        # cache this reads -- see `CameraRegistry.async_refresh`'s
+        # docstring -- so this is a plain read, not a second network call.
+        compat_ready = go2rtc_xiaomi.compat_ready()
         await self._restreamer.async_apply(
             {
                 c.did: self._settings.resolved_for(
-                    c.did, support=c.support, compat_ready=False
+                    c.did, support=c.support, compat_ready=compat_ready
                 )
                 for c in publishable
             },
@@ -273,12 +280,14 @@ class Bridge:
         # Sessions only ever open for cameras the vendor SDK itself accepted
         # (`MIoTCameraInfo` only exists for those), so `support` is always
         # "full" here -- and `session_for` refuses anything not on the
-        # official path regardless, so a stale `compat_ready` cannot open a
-        # session it should not.
+        # official path regardless, so what `compat_ready` reads here can
+        # never open a session it should not. Read from the same cache as
+        # every other caller anyway, rather than hardcoding a second answer
+        # to a question `go2rtc_xiaomi.compat_ready` already owns.
         self._sessions = SessionManager(
             client,
             resolver=lambda did: self._settings.resolved_for(
-                did, support="full", compat_ready=False
+                did, support="full", compat_ready=go2rtc_xiaomi.compat_ready()
             ),
         )
 

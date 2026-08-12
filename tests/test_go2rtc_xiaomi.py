@@ -16,6 +16,8 @@ from bridge import go2rtc_xiaomi as _module
 from bridge.go2rtc_xiaomi import (
     SignInBusy,
     all_device_urls,
+    compat_ready,
+    refresh_compat_ready,
     sign_in,
     signed_in_users,
 )
@@ -250,3 +252,48 @@ async def test_a_401_body_with_a_malformed_captcha_fails_without_raising(go2rtc)
     go2rtc.reply(401, {"Captcha": "!!!not-base64!!!"})
     result = await sign_in("password", username="u", password="p")
     assert result == (False, None, None, None)
+
+
+# ----------------------------------------------------------------------
+# `compat_ready` -- cached, and refreshed only on request.
+#
+# `path_for` consults this on every camera refresh and every `/api/cameras`;
+# a network round trip inside that pure resolution function would be wrong
+# even over loopback. So the cache never calls go2rtc on a bare read, only
+# when `refresh_compat_ready()` is asked to.
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_cache():
+    _module._ready = False
+    yield
+    _module._ready = False
+
+
+async def test_compat_ready_starts_false_and_never_calls_go2rtc():
+    """No fixture patching `_BASE` here on purpose: if a bare read called
+    go2rtc, this would fail with a connection error rather than return
+    `False`."""
+    assert compat_ready() is False
+
+
+async def test_refresh_turns_it_on_when_an_account_is_signed_in(go2rtc):
+    go2rtc.reply(200, ["123"])
+    await refresh_compat_ready()
+    assert compat_ready() is True
+
+
+async def test_refresh_turns_it_off_when_no_account_is_signed_in(go2rtc):
+    go2rtc.reply(200, [])
+    await refresh_compat_ready()
+    assert compat_ready() is False
+
+
+async def test_refresh_degrades_to_false_rather_than_raising(go2rtc):
+    """go2rtc may not be up yet (add-on start-up) or may answer badly for a
+    moment -- neither should take down whatever is refreshing this flag."""
+    go2rtc.reply(500, {})
+    _module._ready = True
+    await refresh_compat_ready()
+    assert compat_ready() is False

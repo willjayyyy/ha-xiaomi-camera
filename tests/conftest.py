@@ -197,6 +197,25 @@ sys.modules["miot.types"] = _types
 sys.modules["miot.client"] = _client
 
 
+@pytest.fixture(autouse=True)
+def _no_compat_ready_network_by_default(monkeypatch):
+    """`CameraRegistry.async_refresh` reaches go2rtc over loopback to keep
+    `compat_ready` current (see `go2rtc_xiaomi.refresh_compat_ready`). Most
+    tests build a registry to exercise something else entirely and never
+    stood up a go2rtc double, so this defaults that one call to a no-op
+    everywhere. A test that wants the real behaviour --
+    `test_go2rtc_xiaomi.py`, `test_compat_ready.py` -- overrides it with its
+    own `monkeypatch.setattr`, which simply wins for that test.
+    """
+    from bridge import go2rtc_xiaomi
+
+    async def _noop() -> None:
+        return None
+
+    monkeypatch.setattr(go2rtc_xiaomi, "refresh_compat_ready", _noop, raising=False)
+    yield
+
+
 # `pytest-homeassistant-custom-component` requires Python >= 3.14, so it is
 # absent on any older interpreter. The fixture is only
 # defined -- and so only autoused -- above that version, gated on the

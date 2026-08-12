@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from miot.client import MIoTClient
 from miot.types import MIoTCameraInfo, MIoTGetPropertyParam
 
+from . import go2rtc_xiaomi
 from .const import POWER_PIID, POWER_SIID
 from .paths import VideoPath, is_full_support, path_for
 from .settings import SettingsStore
@@ -253,7 +254,14 @@ class CameraRegistry:
         exists to prevent, just one call earlier. Caught here rather than
         left to reach ``/api/cameras`` as a 500 that empties the entire
         camera list over one unrelated device.
+
+        Also refreshes `compat_ready` -- this is one of the moments it must
+        stay current (see `go2rtc_xiaomi.refresh_compat_ready`), and every
+        caller of this method (the control plane, the page, and the
+        background refresh loop) needs it fresh before ``_path_for`` below
+        reads the cache.
         """
+        await go2rtc_xiaomi.refresh_compat_ready()
         all_devices = await self._client.get_devices_async()
         self._all_devices = all_devices
         try:
@@ -353,11 +361,9 @@ class CameraRegistry:
         )
 
     def _compat_ready(self) -> bool:
-        # No compatibility-mode credential exists yet. Hardcoded here for
-        # the same reason it is hardcoded at the other two call sites
-        # (`__main__.py`, `api.py`): a later task wires the real account
-        # state into all three at once.
-        return False
+        """Delegated to the one owner of this fact -- see
+        `go2rtc_xiaomi.compat_ready`'s docstring."""
+        return go2rtc_xiaomi.compat_ready()
 
     async def async_set_power(self, did: str, value: bool) -> None:
         """Switch a camera on or off."""

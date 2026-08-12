@@ -61,11 +61,16 @@ class _FakeRestreamer:
 class _FakeSettings:
     def __init__(self) -> None:
         self.pruned: set[str] | None = None
+        #: Every `compat_ready` value `async_refresh` passed through, so a
+        #: test can pin that this is read from the real cached flag rather
+        #: than hardcoded -- see `test_compat_ready.py`.
+        self.compat_ready_seen: list[bool] = []
 
     def prune(self, dids: set[str]) -> None:
         self.pruned = set(dids)
 
     def resolved_for(self, did: str, *, support: str, compat_ready: bool) -> str:
+        self.compat_ready_seen.append(compat_ready)
         return f"resolved-{did}"
 
 

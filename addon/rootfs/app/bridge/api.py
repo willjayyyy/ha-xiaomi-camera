@@ -25,6 +25,7 @@ credentials.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 import secrets
@@ -33,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 import av.error
 from aiohttp import web
 
+from . import go2rtc_xiaomi
 from .account import AccountManager, LinkFailedError
 from .config import Options, TranscodeQuality, VideoQuality
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
@@ -188,6 +190,12 @@ class BridgeApi:
                 web.get("/api/settings", self._settings),
                 web.put("/api/settings", self._set_defaults),
                 web.put("/api/cameras/{did}/settings", self._set_camera_settings),
+                # Compatibility mode's own sign-in, carried to go2rtc.
+                # Nothing generic: go2rtc's wider API exposes `exec` and
+                # stream management, and a passthrough would put both
+                # behind this add-on's password too.
+                web.post("/api/compat/signin", self._compat_signin),
+                web.delete("/api/compat", self._compat_forget),
                 # Facts about the add-on itself, not any one camera: changes
                 # only when the add-on restarts, unlike `/api/cameras`.
                 web.get("/api/info", self._info),
@@ -578,11 +586,67 @@ class BridgeApi:
         )
 
     def _compat_ready(self) -> bool:
-        # No compatibility-mode credential exists yet. Hardcoded here for
-        # the same reason it is hardcoded at the other call sites
-        # (`__main__.py`, `cameras.py`): a later task wires the real account
-        # state into all of them at once.
-        return False
+        """Delegated to the one owner of this fact -- see
+        `go2rtc_xiaomi.compat_ready`'s docstring."""
+        return go2rtc_xiaomi.compat_ready()
+
+    async def _compat_signin(self, request: web.Request) -> web.Response:
+        """One step of compatibility mode's sign-in, carried to go2rtc.
+
+        Only this. go2rtc's API also exposes `exec` and stream management,
+        and a general proxy would put both behind this add-on's password --
+        which is a smaller door than either of those deserves.
+        """
+        body = await _json_body(request)
+        step = body.get("step")
+        if step not in {"password", "captcha", "verify"}:
+            return web.json_response({"error": "unknown_step"}, status=400)
+        try:
+            result = await go2rtc_xiaomi.sign_in(
+                step, **{k: v for k, v in body.items() if k != "step"}
+            )
+        except go2rtc_xiaomi.SignInBusy:
+            return web.json_response({"error": "sign_in_busy"}, status=409)
+        except Exception as err:
+            # Credentials live in this exception text often enough that it
+            # must never reach a response unredacted.
+            return web.json_response({"error": safe_error(err)}, status=502)
+        if result.ok:
+            # Refreshed before the camera-list refresh below, which reads
+            # this cache to decide whether the compat path is offered --
+            # otherwise the page's own reload would show "not signed in"
+            # for one more cycle.
+            await go2rtc_xiaomi.refresh_compat_ready()
+            await self._refresh_callback(explicit=True)
+            return web.json_response({"ok": True})
+        return web.json_response(
+            {
+                "captcha": (
+                    base64.b64encode(result.captcha).decode()
+                    if result.captcha
+                    else None
+                ),
+                "verify_phone": result.verify_phone,
+                "verify_email": result.verify_email,
+            },
+            status=401,
+        )
+
+    async def _compat_forget(self, request: web.Request) -> web.Response:
+        """Remove compatibility mode's Xiaomi credential -- which go2rtc has
+        no way to do.
+
+        go2rtc's own `/api/xiaomi` handler (`internal/xiaomi/xiaomi.go` in
+        its source) accepts a GET to list and a POST to sign in; there is no
+        third case, and the in-memory token map that handler fills is only
+        ever written to, never deleted from, anywhere in that file. go2rtc
+        is also the sole writer of the state file it stores the token in
+        (`app.PatchConfig`, called from that same POST handler), so editing
+        that file from here would give it a second writer -- exactly what
+        this add-on's configuration design avoids everywhere else. A control
+        that says it is not supported is better than one that does nothing.
+        """
+        return web.json_response({"error": "not_supported"}, status=501)
 
     async def _set_defaults(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
