@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -641,3 +642,80 @@ async def test_forgetting_the_credential_is_not_supported(client) -> None:
     response = await client.delete("/api/compat")
     assert response.status == 501
     assert (await response.json())["error"] == "not_supported"
+
+
+# ----------------------------------------------------------------------
+# Login backoff -- see bridge/api.py's `_login_penalty`.
+# ----------------------------------------------------------------------
+
+
+class _FakeClock:
+    """A clock that only moves when something awaits `asyncio.sleep`.
+
+    Standing in for wall time lets the backoff tests assert on delay without
+    a slow test suite actually waiting out a 30-second cap.
+    """
+
+    def __init__(self) -> None:
+        self._elapsed = 0.0
+
+    def now(self) -> float:
+        return self._elapsed
+
+    async def sleep(self, seconds: float) -> None:
+        self._elapsed += seconds
+
+
+@pytest.fixture
+def clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
+    import bridge.api as api_module
+
+    fake = _FakeClock()
+    monkeypatch.setattr(api_module.asyncio, "sleep", fake.sleep)
+    return fake
+
+
+@pytest.fixture
+async def bridge_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """The ingress listener behind a configured password, used to exercise
+    `/api/login` itself rather than what it guards."""
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_STATIC_DIR", str(_APP / "web"))
+    bridge_api = _build_bridge(tmp_path, web_password="right")
+    test_client = TestClient(TestServer(bridge_api.build_ingress_app()))
+    await test_client.start_server()
+    try:
+        yield test_client
+    finally:
+        await test_client.close()
+
+
+@pytest.mark.asyncio
+async def test_repeated_wrong_passwords_are_slowed_down(bridge_client, clock) -> None:
+    """`access_mode: lan` puts this page on the network, and what it guards
+    is the pictures. Unlimited guesses is not a posture."""
+    for _ in range(5):
+        await bridge_client.post("/api/login", json={"password": "wrong"})
+    before = clock.now()
+    await bridge_client.post("/api/login", json={"password": "wrong"})
+    assert clock.now() - before >= 1
+
+
+@pytest.mark.asyncio
+async def test_a_correct_password_clears_the_penalty(bridge_client, clock) -> None:
+    for _ in range(5):
+        await bridge_client.post("/api/login", json={"password": "wrong"})
+    await bridge_client.post("/api/login", json={"password": "right"})
+    before = clock.now()
+    await bridge_client.post("/api/login", json={"password": "wrong"})
+    assert clock.now() - before < 1
+
+
+@pytest.mark.asyncio
+async def test_the_attempted_password_is_never_logged(
+    bridge_client, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    await bridge_client.post("/api/login", json={"password": "hunter2"})
+    assert "hunter2" not in caplog.text

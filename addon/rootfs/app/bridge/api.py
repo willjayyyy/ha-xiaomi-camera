@@ -70,6 +70,16 @@ _SESSION_SECONDS = 30 * 24 * 3600
 #: is not sent to other add-ons living behind the same proxy.
 _INGRESS_HEADER = "X-Ingress-Path"
 
+#: Failures per source address, and the delay each earns. Five free attempts
+#: covers a typo and a forgotten variant; after that the answer slows down,
+#: doubling each time and capped so a very persistent attacker still gets an
+#: answer eventually. Never a lockout -- that turns the page into a
+#: denial-of-service switch anyone on the network can throw, with the owner
+#: on the wrong side of it, standing in their own house, unable to see their
+#: own cameras.
+_MAX_FREE_ATTEMPTS = 5
+_MAX_PENALTY_S = 30.0
+
 
 def _bounded(raw: str | None, name: str, low: int, high: int, default: int) -> int:
     """A whole number within range, or the default when nothing was asked for.
@@ -145,6 +155,12 @@ class BridgeApi:
         self._restreamer = restreamer
         self._refresh_callback = refresh_callback
         self._runners: list[web.AppRunner] = []
+        # Keyed on the peer address (never a forwarded-for header -- see
+        # `webauth._from_supervisor` for why that distinction matters), and
+        # never persisted: a restart is an acceptable way to reset it, and
+        # keeping it only in memory is what keeps the login page itself free
+        # of anything worth calling storage.
+        self._login_failures: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Server lifetime
@@ -822,6 +838,9 @@ class BridgeApi:
             # cannot explain.
             raise web.HTTPBadRequest(text="No password is configured.")
 
+        peer = request.remote or "unknown"
+        await self._login_penalty(peer)
+
         supplied = str((await _json_body(request)).get("password", ""))
         # Compared as bytes: `compare_digest` refuses non-ASCII strings
         # outright, and a password with a Chinese character in it would
@@ -829,7 +848,22 @@ class BridgeApi:
         if not secrets.compare_digest(
             supplied.encode("utf-8"), expected.encode("utf-8")
         ):
+            failures = self._login_failures.get(peer, 0) + 1
+            self._login_failures[peer] = failures
+            # The source and the count, never the value: the attempted
+            # password must not enter a log line, full stop -- see
+            # `redact.py`'s reason for existing, which is that credentials
+            # leaked through exception text before.
+            _LOGGER.warning(
+                "wrong web password from %s (%d failed attempt(s))",
+                peer,
+                failures,
+            )
             raise web.HTTPUnauthorized(text="That password is not right.")
+
+        # A success clears the slate completely -- this is a delay on
+        # guessing, not a debt the address carries forward.
+        self._login_failures.pop(peer, None)
 
         response = web.json_response({"status": "ok"})
         response.set_cookie(
@@ -844,6 +878,23 @@ class BridgeApi:
             max_age=_SESSION_SECONDS,
         )
         return response
+
+    async def _login_penalty(self, peer: str) -> None:
+        """Delay this address's login attempt, if it has earned one.
+
+        A genuine `await asyncio.sleep` rather than anything that blocks the
+        loop: this is a single-threaded server, and every camera's preview
+        and every API call shares it. A sleep that blocked would let an
+        attacker degrade the whole add-on just by failing to log in
+        repeatedly. Several delayed attempts from different addresses run
+        concurrently without interfering, because each is its own coroutine
+        waiting on its own timer.
+        """
+        failures = self._login_failures.get(peer, 0)
+        if failures < _MAX_FREE_ATTEMPTS:
+            return
+        delay = min(2.0 ** (failures - _MAX_FREE_ATTEMPTS), _MAX_PENALTY_S)
+        await asyncio.sleep(delay)
 
     async def _logout(self, request: web.Request) -> web.Response:
         response = web.json_response({"status": "ok"})
