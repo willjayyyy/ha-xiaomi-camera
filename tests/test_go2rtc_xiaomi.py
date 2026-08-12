@@ -53,6 +53,9 @@ class _FakeGo2rtc:
         self._status = 200
         self._body: object = []
         self._device_bodies: dict[str, object] = {}
+        self._device_statuses: dict[str, int] = {}
+        self._device_raw_text: dict[str, str] = {}
+        self._raw_text: str | None = None
         self._gate = asyncio.Event()
         self._gate.set()
 
@@ -60,10 +63,25 @@ class _FakeGo2rtc:
         """Sets the POST reply, and the GET reply when no `id` is given."""
         self._status = status
         self._body = body
+        self._raw_text = None
 
-    def reply_devices(self, user: str, body: object) -> None:
+    def reply_raw(self, status: int, text: str) -> None:
+        """Sets a non-JSON POST reply, for a 401 body that cannot even be
+        parsed rather than one that parses to the wrong shape."""
+        self._status = status
+        self._raw_text = text
+
+    def reply_devices(self, user: str, body: object, status: int = 200) -> None:
         """Sets the GET reply for `?id=<user>`."""
         self._device_bodies[user] = body
+        self._device_statuses[user] = status
+
+    def reply_devices_raw(self, user: str, text: str, status: int = 200) -> None:
+        """Sets a non-JSON GET reply for `?id=<user>`, for a body that
+        cannot even be parsed rather than one that parses to the wrong
+        shape."""
+        self._device_raw_text[user] = text
+        self._device_statuses[user] = status
 
     def hang(self) -> None:
         self._gate.clear()
@@ -75,12 +93,24 @@ class _FakeGo2rtc:
         form = dict(await request.post())
         self.last_request = _Recorded(request.content_type, form)
         await self._gate.wait()
+        if self._raw_text is not None:
+            return web.Response(
+                text=self._raw_text, status=self._status, content_type="text/plain"
+            )
         return web.json_response(self._body, status=self._status)
 
     async def _get(self, request: web.Request) -> web.Response:
         user = request.query.get("id")
         if user is not None:
-            return web.json_response(self._device_bodies.get(user, {"sources": []}))
+            status = self._device_statuses.get(user, 200)
+            if user in self._device_raw_text:
+                return web.Response(
+                    text=self._device_raw_text[user],
+                    status=status,
+                    content_type="text/plain",
+                )
+            body = self._device_bodies.get(user, {"sources": []})
+            return web.json_response(body, status=status)
         return web.json_response(self._body, status=self._status)
 
 
@@ -167,3 +197,56 @@ async def test_device_urls_merge_across_every_signed_in_account(go2rtc):
 async def test_signed_in_users_reads_the_bare_endpoint(go2rtc):
     go2rtc.reply(200, ["123", "456"])
     assert await signed_in_users() == ["123", "456"]
+
+
+async def test_one_bad_account_does_not_take_down_the_others(go2rtc):
+    """A camera reachable through a healthy account must not be reported
+    unreachable just because some other signed-in account had a bad moment
+    -- an expired session or a transient error, here a plain 500."""
+    go2rtc.reply(200, ["123", "456"])
+    go2rtc.reply_devices("123", {}, status=500)
+    go2rtc.reply_devices(
+        "456",
+        {"sources": [{"url": "xiaomi://456:cn@192.168.1.10?did=100&model=b"}]},
+    )
+    urls = await all_device_urls("cn")
+    assert urls == {"100": "xiaomi://456:cn@192.168.1.10?did=100&model=b"}
+
+
+async def test_one_account_with_an_unreadable_body_does_not_take_down_the_others(
+    go2rtc,
+):
+    """Same isolation, for a body that cannot be parsed rather than a bad
+    status code."""
+    go2rtc.reply(200, ["123", "456"])
+    go2rtc.reply_devices_raw("123", "not json")
+    go2rtc.reply_devices(
+        "456",
+        {"sources": [{"url": "xiaomi://456:cn@192.168.1.10?did=100&model=b"}]},
+    )
+    urls = await all_device_urls("cn")
+    assert urls == {"100": "xiaomi://456:cn@192.168.1.10?did=100&model=b"}
+
+
+async def test_a_non_json_401_body_fails_without_raising(go2rtc):
+    """The caller is rendering this to someone part-way through a login, so
+    an unreadable body must come back as a plain failure, never an
+    exception."""
+    go2rtc.reply_raw(401, "not json")
+    result = await sign_in("password", username="u", password="p")
+    assert result == (False, None, None, None)
+
+
+async def test_a_401_body_that_is_a_list_fails_without_raising(go2rtc):
+    """`body.get(...)` would raise `AttributeError` on a list; this must not
+    surface as one."""
+    go2rtc.reply(401, ["unexpected"])
+    result = await sign_in("password", username="u", password="p")
+    assert result == (False, None, None, None)
+
+
+async def test_a_401_body_with_a_malformed_captcha_fails_without_raising(go2rtc):
+    """Bad base64 padding in `Captcha` must not surface as `binascii.Error`."""
+    go2rtc.reply(401, {"Captcha": "!!!not-base64!!!"})
+    result = await sign_in("password", username="u", password="p")
+    assert result == (False, None, None, None)
