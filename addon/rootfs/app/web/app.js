@@ -81,6 +81,8 @@ const I18N = {
     previewGroup: "This viewer only",
     addressGroup: "Address",
     settingsSaveFailed: "Could not save that setting.",
+    pathSwitchWarning: "Changing the connection rebuilds this camera's stream -- anything watching it now, including this preview, HomeKit and a recorder, reconnects.",
+    switchConnection: "Switch",
     // Add-on link ------------------------------------------------------------
     addonHeading: "Add-on",
     // Camera card controls --------------------------------------------------
@@ -156,6 +158,8 @@ const I18N = {
     previewGroup: "仅本设备生效",
     addressGroup: "地址",
     settingsSaveFailed: "设置未能保存。",
+    pathSwitchWarning: "切换连接方式会重建这台摄像头的流，正在观看的一切都会重连，包括这个预览、HomeKit 和录像。",
+    switchConnection: "切换",
     // Add-on link ------------------------------------------------------------
     addonHeading: "加载项",
     // Camera card controls --------------------------------------------------
@@ -445,10 +449,11 @@ function savePrefs(did, prefs) {
  * arguments are always the same value, and `current` marks nothing extra.
  */
 function segment(kind, choices, selected, current = selected) {
-  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label }) => {
+  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label, disabled }) => {
     const isCurrent = String(value) === String(current) && String(value) !== String(selected);
     return `<button type="button" data-value="${escapeHtml(value)}" `
       + `aria-pressed="${String(value) === String(selected)}"`
+      + `${disabled ? ` disabled title="${escapeHtml(t(disabled))}"` : ""}`
       + `${isCurrent ? ' class="current"' : ""}>${escapeHtml(label)}</button>`;
   }).join("")}</div>`;
 }
@@ -572,8 +577,15 @@ function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = 
     ...(allowFollow ? [{ value: FOLLOW_DEFAULT, label: t("followDefault") }] : []),
     ...field.choices(),
   ];
-  const selected = allowFollow && rawValue === null ? FOLLOW_DEFAULT : String(rawValue);
-  const valueLabel = choices.find((c) => c.value === selected)?.label ?? "";
+  const followingDefault = allowFollow && rawValue === null;
+  const selected = followingDefault ? FOLLOW_DEFAULT : String(rawValue);
+  // Following the default reads "Follow default (<resolved value>)", not a
+  // bare "Follow default" -- collapsed, that label is the one thing this
+  // page is opened to learn, and "Follow default" alone does not say it.
+  const resolvedLabel = field.choices().find((c) => c.value === String(resolvedValue))?.label ?? "";
+  const valueLabel = followingDefault
+    ? `${t("followDefault")}${lang === "zh" ? `（${resolvedLabel}）` : ` (${resolvedLabel})`}`
+    : (choices.find((c) => c.value === selected)?.label ?? "");
   return `<div class="setting-row" data-field="${escapeHtml(field.key)}">
     <button type="button" class="setting-row-btn" aria-expanded="false">
       <span class="setting-label">${escapeHtml(t(field.labelKey))}</span>
@@ -978,10 +990,7 @@ function renderCameraSheetBody(did) {
       allowFollow: true,
       resolvedValue: camera.settings[field.key],
     }))
-    .join("");
-  const prefs = prefsFor(did);
-  const fpsField = previewFpsField(camera);
-  const detailField = previewDetailField();
+    .join("") + pathRowHtml(camera);
   // Copying a stream address is a once-per-NVR errand, not something wanted
   // at a glance every time this page opens -- and the address was truncated
   // mid-string at a card's width anyway, so it moved here where there is
@@ -997,24 +1006,90 @@ function renderCameraSheetBody(did) {
   overlay.body.innerHTML = `
     <span class="setting-group-label">${escapeHtml(t("cameraSettings"))}</span>
     <div class="settings-list" data-sheet-camera>${rows}</div>
-    <span class="setting-group-label">${escapeHtml(t("previewGroup"))}</span>
-    <div class="settings-list" data-sheet-preview>
-      ${settingRowHtml(fpsField, prefs.fps)}
-      ${settingRowHtml(detailField, prefs.detail)}
-    </div>
     ${addressGroup}`;
-
-  // `_field` supplies what `SETTINGS_FIELDS` cannot for the two preview rows,
-  // which the shared row component does not otherwise know how to parse.
-  overlay.body.querySelector('[data-field="fps"]')._field = fpsField;
-  overlay.body.querySelector('[data-field="previewDetail"]')._field = detailField;
 
   wireSettingRows(overlay.body.querySelector("[data-sheet-camera]"), (key, value) =>
     applyCameraOverride(did, key, value)
   );
-  wireSettingRows(overlay.body.querySelector("[data-sheet-preview]"), (key, value) =>
-    applyPreviewPref(did, key, value)
-  );
+  wirePathRow(overlay.body.querySelector('[data-field="path"]'), did);
+}
+
+/**
+ * The connection row: `official`/`compat`, always both present. The one
+ * that cannot be used is disabled with the reason the add-on sent in
+ * `camera.paths` -- never omitted, because a row whose choices change shape
+ * underfoot is a row whose meaning changes underfoot.
+ *
+ * No "Follow default" here: `path` has no default to follow (see
+ * `settings.py`'s module docstring) -- which paths a camera can even reach
+ * depends on its own model and on whether the compatibility-mode credential
+ * exists, so a shared value for it would not mean anything.
+ */
+function pathRowHtml(camera) {
+  const selected = camera.override.path || "official";
+  const choices = [
+    { value: "official", label: t("pathOfficial"), disabled: camera.paths.official },
+    { value: "compat", label: t("pathCompat"), disabled: camera.paths.compat },
+  ];
+  const valueLabel = choices.find((c) => c.value === selected)?.label ?? "";
+  // The disabled option's reason is said twice: as a `title` for anyone
+  // hovering the control, and as its own line for anyone who cannot (most
+  // people opening this from the Home Assistant app).
+  const reasons = choices.filter((c) => c.disabled).map((c) => t(c.disabled));
+  return `<div class="setting-row" data-field="path">
+    <button type="button" class="setting-row-btn" aria-expanded="false">
+      <span class="setting-label">${escapeHtml(t("pathRow"))}</span>
+      <span class="setting-value" data-value>${escapeHtml(valueLabel)}</span>
+      <span class="setting-chevron" aria-hidden="true">›</span>
+    </button>
+    <div class="setting-choices" hidden data-path-panel>
+      ${segment("path", choices, selected)}
+      ${reasons.map((reason) => `<p class="hint">${escapeHtml(reason)}</p>`).join("")}
+    </div>
+  </div>`;
+}
+
+/**
+ * Wire the connection row. Kept apart from `wireSettingRows` -- unlike
+ * every other row, choosing an option here does not apply it: it replaces
+ * the row's own panel with a confirmation (see `showPathSwitchConfirm`),
+ * because switching this reconnects everything watching the camera, not
+ * only this preview.
+ */
+function wirePathRow(row, did) {
+  if (!row) return;
+  const toggle = row.querySelector(".setting-row-btn");
+  const panel = row.querySelector("[data-path-panel]");
+  toggle.addEventListener("click", () => {
+    const opening = panel.hidden;
+    panel.hidden = !opening;
+    toggle.setAttribute("aria-expanded", String(opening));
+  });
+  panel.addEventListener("click", (event) => {
+    const choice = event.target.closest(".seg button");
+    if (!choice || choice.disabled || choice.getAttribute("aria-pressed") === "true") return;
+    showPathSwitchConfirm(panel, choice.dataset.value, did);
+  });
+}
+
+/**
+ * The connection row's own confirmation, rendered inside the sheet -- never
+ * the browser's `confirm()`, which cannot be laid out bilingually and
+ * cannot be tested. States the real blast radius: rebuilding this camera's
+ * stream reconnects everything watching it, not just the preview.
+ */
+function showPathSwitchConfirm(panel, value, did) {
+  panel.innerHTML = `
+    <p class="hint">${escapeHtml(t("pathSwitchWarning"))}</p>
+    <div class="row" style="margin-top:8px">
+      <button type="button" class="ghost" data-path-cancel>${escapeHtml(t("cancel"))}</button>
+      <button type="button" class="primary" data-path-confirm>${escapeHtml(t("switchConnection"))}</button>
+    </div>`;
+  panel.querySelector("[data-path-cancel]").addEventListener("click", () => renderCameraSheetBody(did));
+  panel.querySelector("[data-path-confirm]").addEventListener("click", async () => {
+    await applyCameraOverride(did, "path", value);
+    renderCameraSheetBody(did);
+  });
 }
 
 async function applyCameraOverride(did, key, value) {
@@ -1193,9 +1268,9 @@ function prefChipHtml(_camera) {
   return "";
 }
 
-//: Opens the sheet where this camera's connection is switched to
-//: compatibility mode. No-op stub -- Task D4 builds the camera settings
-//: sheet with its connection-path row, which is what this will open.
+//: Opens compatibility mode's sign-in flow for a camera that has no usable
+//: path yet. No-op stub -- Task E4 builds M4, the sign-in panel this opens,
+//: alongside `openCompatSignIn` below.
 function openPathCompatConnect(_did) {}
 
 //: Opens the compatibility-mode sign-in sheet for this camera. No-op stub

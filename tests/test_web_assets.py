@@ -302,3 +302,60 @@ def test_the_play_triangle_is_not_nudged():
 def test_the_picture_is_not_a_second_way_to_enlarge():
     """缺陷 8: tapping the picture enlarged it as well as the control."""
     assert ".preview[data-playing]" not in JS.read_text()
+
+
+def test_the_camera_sheet_has_no_preview_preferences():
+    """Frame rate and detail float on the picture itself (a later task) --
+    the sheet is only settings that change the camera for everyone."""
+    js = JS.read_text()
+    sheet = _function_body(js, "renderCameraSheetBody")
+    assert "prefFps" not in sheet
+    assert "prefDetail" not in sheet
+
+
+def test_the_camera_sheet_has_no_bulk_action():
+    """Bulk-apply was designed and then cut once the global defaults layer
+    made it redundant -- see revisions.md R1b."""
+    js = JS.read_text()
+    assert "apply-to-all" not in js
+    assert "applyToAll" not in js
+    assert "apply_to_all" not in js
+
+
+def test_the_connection_row_offers_no_follow_default():
+    """`path` has no default to follow -- which paths a camera can reach
+    depends on its own model and on whether a credential exists, so a
+    global value would be meaningless."""
+    js = JS.read_text()
+    row = _function_body(js, "pathRowHtml")
+    assert "FOLLOW_DEFAULT" not in row
+    assert "allowFollow" not in row
+
+
+def test_the_connection_row_always_shows_both_options_with_their_reasons():
+    """Both options are always rendered, never hidden -- the unusable one is
+    disabled and says why, read from the `paths` map the add-on sends."""
+    js = JS.read_text()
+    row = _function_body(js, "pathRowHtml")
+    assert "pathOfficial" in row and "pathCompat" in row
+    assert "camera.paths.official" in row and "camera.paths.compat" in row
+
+
+def test_collapsed_follow_default_rows_show_the_resolved_value():
+    """A row reading a bare "Follow default" does not say what the camera is
+    actually getting. `resolvedValue` already reaches `settingRowHtml` --
+    this checks the collapsed label is actually built from it, not only the
+    expanded control's `current` marker."""
+    js = JS.read_text()
+    body = _function_body(js, "settingRowHtml")
+    assert body.count("resolvedValue") >= 2
+
+
+def test_switching_connection_confirms_inside_the_sheet():
+    """Never the browser's `confirm()` -- it cannot be laid out bilingually
+    and cannot be tested. `pathSwitchWarning` must exist but must not be
+    handed to `confirm`/`window.confirm`."""
+    js = JS.read_text()
+    assert "pathSwitchWarning" in js
+    assert 'confirm(t("pathSwitchWarning"))' not in js
+    assert 'window.confirm(t("pathSwitchWarning"))' not in js
