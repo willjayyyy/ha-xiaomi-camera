@@ -44,7 +44,7 @@ const I18N = {
     compatCredit: "Compatibility mode is built on the open-source project go2rtc",
     compatConnect: "Connect with compatibility mode",
     compatRemove: "Remove credential",
-    compatCannotRemove: "Cannot be removed here.",
+    compatCannotRemove: "Stays until the add-on is uninstalled -- which clears its other data too.",
     compatNoCameras: "No cameras yet.",
     compatSignInBusy: "Another sign-in is already running. Try again shortly.",
     compatCaptchaLabel: "Captcha",
@@ -128,7 +128,7 @@ const I18N = {
     compatCredit: "兼容模式基于开源项目 go2rtc",
     compatConnect: "用兼容模式连接",
     compatRemove: "删除凭据",
-    compatCannotRemove: "无法在此删除。",
+    compatCannotRemove: "会一直保留，直到卸载这个加载项 —— 卸载会连同其他数据一并清空。",
     compatNoCameras: "暂无摄像头。",
     compatSignInBusy: "已有一个登录正在进行，请稍后再试。",
     compatCaptchaLabel: "图形验证码",
@@ -1144,6 +1144,15 @@ function showPathSwitchConfirm(panel, value, did) {
   });
 }
 
+/**
+ * PUT one changed field to a camera's settings, and patch the local copy to
+ * match on success. The one place this page writes to the settings
+ * endpoint -- `switchCameraPath` (a blocked card's own path switch) calls
+ * this rather than duplicating the request, and only adds a full
+ * `loadCameras()` reload after, because the camera it starts from has no
+ * local `settings` to patch in the first place. See that function's own
+ * comment for why the two still end differently.
+ */
 async function applyCameraOverride(did, key, value) {
   const camera = cameras.find((c) => c.did === did);
   try {
@@ -1378,24 +1387,22 @@ async function openPathCompatConnect(did) {
 }
 
 /**
- * PUT this camera's connection path from outside its settings sheet (a
+ * Change a camera's connection path from outside its settings sheet (a
  * blocked card's own action button), then reload the whole camera list so
  * its card picks up whatever became true -- a resolved `settings`, a fresh
- * `stream_error`, or still blocked for a different reason. A full reload
- * rather than patching `cameras` in place: this camera had no resolved
- * `settings` at all going in, so there is nothing local worth patching.
+ * `stream_error`, or still blocked for a different reason.
+ *
+ * The write itself is `applyCameraOverride` -- one function knows how to
+ * PUT to /api/cameras/{did}/settings, not two. Only the aftermath differs,
+ * and genuinely so: `applyCameraOverride` patches `camera.settings` locally
+ * because the sheet it serves always starts from a camera that already has
+ * one, while a blocked card's camera has none at all (`camera.settings` is
+ * `null` going in, see `blocker()`) -- there is nothing local worth
+ * patching, so this reloads instead. See `applyCameraOverride`'s own
+ * comment for the other half of this split.
  */
 async function switchCameraPath(did, path) {
-  try {
-    const response = await api(`/api/cameras/${encodeURIComponent(did)}/settings`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-  } catch {
-    showMessage(t("settingsSaveFailed"), "error");
-  }
+  await applyCameraOverride(did, "path", path);
   await loadCameras();
 }
 

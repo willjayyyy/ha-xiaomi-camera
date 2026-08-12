@@ -220,12 +220,18 @@ def test_the_account_card_moved_behind_the_header_buttons():
 
 def test_only_compat_mode_screens_carry_explanatory_prose():
     """Copy is labels, not explanations -- state is never carried by a
-    sentence. `compatWhy` and `compatEnableHint` are the restated rule's two
-    named exceptions, and both belong to compatibility mode's own screens
-    (M1's account sheet, M6). Scoped to M1 and M3 (the sheets this task
-    built, plus the gear that sits beside M1) -- M2 is the pre-existing OAuth
-    flow, moved here verbatim per the brief, and its own onboarding copy
-    (`step2`, `privacyNote`, ...) predates this rule and is out of scope.
+    sentence. `compatWhy`, `compatEnableHint` and `compatCannotRemove` are
+    the restated rule's three named exceptions, and all belong to
+    compatibility mode's own screens (M1's account sheet, M6).
+    `compatCannotRemove` is M6's enabled half stating, in an actionable
+    sentence rather than a bare "cannot be removed here", what is true now
+    (the credential stays) and what removes it (uninstalling the add-on --
+    verified against Supervisor's own `App.unload`/`uninstall`, which always
+    clears `path_data` regardless of the "keep config" option). Scoped to M1
+    and M3 (the sheets this task built, plus the gear that sits beside M1)
+    -- M2 is the pre-existing OAuth flow, moved here verbatim per the brief,
+    and its own onboarding copy (`step2`, `privacyNote`, ...) predates this
+    rule and is out of scope.
     """
     js = JS.read_text()
     functions = (
@@ -242,7 +248,7 @@ def test_only_compat_mode_screens_carry_explanatory_prose():
     #: sentence does.
     SENTENCE_LENGTH = 30
     prose = {key for key in keys if len(values.get(key, "")) > SENTENCE_LENGTH}
-    allowed = {"compatWhy", "compatEnableHint"}
+    allowed = {"compatWhy", "compatEnableHint", "compatCannotRemove"}
     assert prose == allowed, (
         f"unexpected explanatory prose on M1/M3: {sorted(prose - allowed)}"
     )
