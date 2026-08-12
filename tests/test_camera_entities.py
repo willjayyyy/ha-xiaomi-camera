@@ -511,12 +511,39 @@ async def test_one_device_with_an_odd_model_string_does_not_hide_the_cameras(
     comes from the user's account, and one device that does not must not turn
     `/api/cameras` into a 500 -- every camera would vanish at once, which
     reads as the add-on being broken rather than as one odd device.
+
+    Degrading needs something to degrade to: the previous refresh's camera
+    list. A device the vendor call chokes on appearing later is the shape
+    this actually takes -- devices are added to an account over time, not all
+    at once at start-up.
     """
-    descriptions = await _describe(
-        [_device("aaa", "chuangmi.camera.81ac1"), _device("odd", "gateway")],
-        _settings(tmp_path),
+    client = _FakeCameraClient([_device("aaa", "chuangmi.camera.81ac1")])
+    registry = CameraRegistry(client, _settings(tmp_path))
+    assert {d.did for d in await registry.async_refresh()} == {"aaa"}
+
+    odd = _device("odd", "gateway")
+    client._devices[odd.did] = odd
+
+    assert {d.did for d in await registry.async_refresh()} == {"aaa"}
+
+
+async def test_an_odd_model_on_the_first_refresh_fails_loudly(tmp_path) -> None:
+    """With no previous list, there is nothing to degrade to -- and quietly
+    reporting no cameras is far worse than an error.
+
+    An empty list is a valid answer with a meaning: the account has no
+    cameras. The integration deletes every entity on it, `SettingsStore.prune`
+    drops every stored override, and go2rtc's stream table empties -- none of
+    which is recoverable by the next successful refresh. Failing the poll
+    costs one poll.
+    """
+    client = _FakeCameraClient(
+        [_device("aaa", "chuangmi.camera.81ac1"), _device("odd", "gateway")]
     )
-    assert {d.did for d in descriptions} == {"aaa"}
+    registry = CameraRegistry(client, _settings(tmp_path))
+
+    with pytest.raises(IndexError):
+        await registry.async_refresh()
 
 
 async def test_the_wire_format_carries_the_publishing_decision(tmp_path) -> None:

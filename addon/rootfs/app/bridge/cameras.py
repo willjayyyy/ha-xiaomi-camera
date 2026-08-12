@@ -264,9 +264,12 @@ class CameraRegistry:
         isolation -- confirmed by reading the same pinned SDK source. One
         dotless model string there raises ``IndexError`` before any of this
         method's own guarding runs, which is exactly the crash this method
-        exists to prevent, just one call earlier. Caught here rather than
-        left to reach ``/api/cameras`` as a 500 that empties the entire
-        camera list over one unrelated device.
+        exists to prevent, just one call earlier. Caught here so one odd
+        device does not cost a working camera list -- but only when there is
+        a previous list to keep. With none, the error is re-raised: a 500
+        fails the caller's poll and destroys nothing, whereas continuing
+        would report the account as having no cameras at all, which every
+        consumer downstream acts on by deleting things.
 
         Also refreshes `compat_ready` -- this is one of the moments it must
         stay current (see `go2rtc_xiaomi.refresh_compat_ready`), and every
@@ -285,11 +288,30 @@ class CameraRegistry:
                 for did, info in all_devices.items()
                 if _device_class(info.model) == ""
             ]
+            named = ", ".join(culprits) if culprits else "<undetermined>"
+            if not self._cameras:
+                # Nothing to degrade to. Every camera would fall to the
+                # refused branch below, resolve to no path, and drop out of
+                # `/api/cameras` -- which answers 200 with an empty list, so
+                # the integration reads it as "the account has no cameras"
+                # and deletes every entity, while `SettingsStore.prune` drops
+                # every override that could have brought them back. A 500 the
+                # coordinator fails on costs one poll and destroys nothing,
+                # which is strictly the better failure.
+                _LOGGER.error(
+                    "get_cameras_async() raised on malformed model string(s) "
+                    "for device(s) %s, and there is no previous camera list "
+                    "to fall back to; failing this refresh rather than "
+                    "reporting an empty account",
+                    named,
+                )
+                raise
             _LOGGER.error(
                 "get_cameras_async() raised on malformed model string(s) for "
-                "device(s) %s; camera list for this refresh falls back to the "
-                "unfiltered device list below",
-                ", ".join(culprits) if culprits else "<undetermined>",
+                "device(s) %s; keeping the %d camera(s) from the previous "
+                "refresh",
+                named,
+                len(self._cameras),
             )
         # Every camera with a resolvable path, not just the ones the vendor
         # library accepts. A model it refuses still answers MIoT property
