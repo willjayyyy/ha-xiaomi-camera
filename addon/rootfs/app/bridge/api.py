@@ -746,12 +746,13 @@ class BridgeApi:
         # decision to be remade, exactly as it already does for the other
         # two.
         #
-        # As of this writing there is also no separate go2rtc stream URL to
-        # touch: go2rtc always pulls every camera from this bridge's own
-        # `/api/stream/{did}`, whichever path serves it. That holds only
-        # because compatibility mode has no source URL of its own yet -- the
-        # day it gets one, a path change will also need to change what
-        # go2rtc sources from, and this paragraph will be wrong.
+        # The go2rtc stream URL a path change also moves is not touched here
+        # either -- compatibility mode does have a source of its own (see
+        # `restream.source_for`), and it is `_refresh_callback` below that
+        # rebuilds and delivers the whole stream table from the settings this
+        # line has just written. Two writers of that table, one here and one
+        # there, is exactly the second source `restream.py` is arranged to
+        # avoid.
         session_affecting = {"quality", "audio", "path"} & set(changes)
         self._settings_store.set_override(did, **changes)
         sessions: SessionManager | None = self._sessions_provider()

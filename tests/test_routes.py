@@ -43,11 +43,13 @@ _PAGE = (_APP / "web" / "index.html").read_text(encoding="utf-8") + (
     _APP / "web" / "app.js"
 ).read_text(encoding="utf-8")
 
-#: `web.get("/api/health", ...)` and friends, per listener. `put` joined the
-#: settings endpoints in a later task; missing it here would make this file
-#: blind to exactly the mismatch it exists to catch, for any route that
-#: happens to use that method.
-_ROUTE = re.compile(r'web\.(get|post|put)\(\s*"(?P<path>[^"]+)"')
+#: `web.get("/api/health", ...)` and friends, per listener. Every method the
+#: listeners actually register, and it has twice fallen behind: `put` arrived
+#: with the settings endpoints and `delete` with `/api/compat`, and until each
+#: was added here this file was blind to exactly the mismatch it exists to
+#: catch for any route using it. Add the method here in the same change that
+#: first registers a route with it.
+_ROUTE = re.compile(r'web\.(get|post|put|delete)\(\s*"(?P<path>[^"]+)"')
 
 #: Every address the page names, whether through `api("/api/…")` or as an
 #: element's source. Both forms have shipped pointing at a route that did not

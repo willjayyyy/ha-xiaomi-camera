@@ -1327,7 +1327,11 @@ function previewIdleHtml(c) {
  *    case that opens M4.
  */
 function blocker(c) {
-  if (c.settings) {
+  // `publishable`, not `c.settings` -- the add-on answers that question once
+  // for the stream table, the session manager and its own camera list, and
+  // deriving it a second time here is how the two sides of the wire end up
+  // meaning different things by it. See `cameraState` above.
+  if (c.publishable) {
     if (!c.stream_error) return null;
     return {
       text: c.stream_error,
@@ -1606,19 +1610,20 @@ function wireCopy(container) {
   });
 }
 
-//: Consecutive reconnects tolerated before a preview gives up and offers a
-//: retry. A session reopening after a settings change takes several
-//: seconds, and the old budget of four tries a second apart expired inside
-//: that window -- the preview then said it had failed while the add-on was
-//: still coming back.
-const PREVIEW_MAX_FAILURES = 6;
+//: One wait per reconnect: 0.5s, 1s, 2s, 4s, 8s -- 15.5s of trying in total,
+//: which covers a session reopening after a settings change without
+//: hammering a camera that is genuinely gone. Backoff, not a fixed pace: the
+//: old budget of four tries a second apart expired inside that window, and
+//: the preview said it had failed while the add-on was still coming back.
+//: Only paces reconnects after a failure -- a healthy connection is never
+//: reopened, so nothing paces the pictures but the stream itself.
+const PREVIEW_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
 
-//: Backoff, not a fixed pace: 0.5s, 1s, 2s, 4s, 8s, 8s -- about 24 seconds in
-//: total, which covers a session reopen without hammering a camera that is
-//: genuinely gone. Only paces reconnects after a failure -- a healthy
-//: connection is never reopened, so nothing paces the pictures but the
-//: stream itself.
-const PREVIEW_BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 8000];
+//: Consecutive failures tolerated before a preview gives up and offers a
+//: retry. Derived from the waits above rather than written out again: the
+//: two were separate constants, they disagreed by one, and the last wait was
+//: never used by anyone.
+const PREVIEW_MAX_FAILURES = PREVIEW_BACKOFF_MS.length + 1;
 
 /**
  * The socket address for a path, from the address this page was served on.
