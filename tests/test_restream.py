@@ -60,16 +60,12 @@ def make_options(
     mode: AccessMode,
     user: str = "",
     password: str = "",
-    transcode_quality: TranscodeQuality = TranscodeQuality.STANDARD,
 ) -> Options:
     return Options(
         access_mode=mode,
         rtsp_username=user,
         rtsp_password=password,
-        video_quality=VideoQuality.LOW,
-        enable_audio=False,
         log_level="info",
-        transcode_quality=transcode_quality,
     )
 
 

@@ -22,7 +22,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from bridge import go2rtc_xiaomi
 from bridge.api import BridgeApi
-from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
+from bridge.config import AccessMode, Options
 from bridge.go2rtc_xiaomi import SignInBusy
 from bridge.paths import VideoPath
 from bridge.settings import SettingsStore
@@ -228,11 +228,8 @@ def _build_bridge(
         access_mode=AccessMode.LOCAL,
         rtsp_username="",
         rtsp_password="",
-        video_quality=VideoQuality.LOW,
-        enable_audio=False,
         log_level="info",
         web_password=web_password,
-        transcode_quality=TranscodeQuality.STANDARD,
         supervised=False,
     )
     settings_store = SettingsStore(tmp_path / "settings.json")

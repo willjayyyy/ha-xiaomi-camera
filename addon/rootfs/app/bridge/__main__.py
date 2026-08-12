@@ -105,11 +105,6 @@ class Bridge:
         # Three separate stores would each answer "what does this camera get"
         # independently, and independent answers are exactly what drifts.
         self._settings = SettingsStore(SETTINGS_FILE)
-        # Runs once, before anything else touches this store: a 1.4.0 install
-        # still carries these values in options.json, and this is the only
-        # chance to adopt them before the page starts treating the store as
-        # the sole source of truth.
-        self._settings.seed_from_options(self._options)
         self._api = BridgeApi(
             account=self._account,
             registry_provider=lambda: self._registry,
@@ -356,8 +351,7 @@ async def async_main() -> int:
 
     # No picture size here any more: it is per camera and lives in the
     # settings store, so printing the add-on option would show someone
-    # diagnosing a stream a value that decides nothing. What was adopted from
-    # it, if anything, is logged once by `SettingsStore.seed_from_options`.
+    # diagnosing a stream a value that decides nothing.
     _LOGGER.info(
         "Starting bridge (access_mode=%s, supervised=%s, build=%s)",
         options.access_mode.value,

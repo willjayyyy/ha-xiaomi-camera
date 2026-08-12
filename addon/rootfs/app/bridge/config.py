@@ -113,11 +113,8 @@ class Options:
     access_mode: AccessMode
     rtsp_username: str
     rtsp_password: str
-    video_quality: VideoQuality
-    enable_audio: bool
     log_level: str
     web_password: str = ""
-    transcode_quality: TranscodeQuality = TranscodeQuality.STANDARD
     supervised: bool = True
 
     @property
@@ -189,9 +186,6 @@ _DEFAULTS: dict[str, object] = {
     "access_mode": AccessMode.LOCAL.value,
     "rtsp_username": "",
     "rtsp_password": "",
-    "video_quality": VideoQuality.LOW.value,
-    "transcode_quality": TranscodeQuality.STANDARD.value,
-    "enable_audio": False,
     "log_level": "info",
     "web_password": "",
 }
@@ -205,8 +199,6 @@ _DEFAULTS: dict[str, object] = {
 _ENV_PREFIX = "XIAOMI_CAMERA_"
 
 _ACCESS_MODES: Final = frozenset(mode.value for mode in AccessMode)
-_QUALITIES: Final = frozenset(quality.value for quality in VideoQuality)
-_TRANSCODE_QUALITIES: Final = frozenset(q.value for q in TranscodeQuality)
 
 
 def _env_overrides() -> dict[str, object]:
@@ -260,18 +252,6 @@ def load_options(
         ),
         rtsp_username=str(raw["rtsp_username"] or ""),
         rtsp_password=str(raw["rtsp_password"] or ""),
-        video_quality=VideoQuality(
-            _choice(_QUALITIES, raw["video_quality"], "video_quality", "low or high")
-        ),
-        transcode_quality=TranscodeQuality(
-            _choice(
-                _TRANSCODE_QUALITIES,
-                raw["transcode_quality"],
-                "transcode_quality",
-                ", ".join(sorted(_TRANSCODE_QUALITIES)),
-            )
-        ),
-        enable_audio=bool(raw["enable_audio"]),
         log_level=_choice(
             LOG_LEVELS, raw["log_level"], "log_level", ", ".join(LOG_LEVELS)
         ),

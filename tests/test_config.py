@@ -12,15 +12,11 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from bridge import config
-from bridge.config import (
-    AccessMode,
-    Options,
-    TranscodeQuality,
-    VideoQuality,
-    load_options,
-)
-from bridge.settings import SettingsStore
+from bridge.config import AccessMode, Options, load_options
+
+_ADDON_DIR = Path(__file__).resolve().parent.parent / "addon"
 
 
 def write_options(tmp_path: Path, **overrides: object) -> Path:
@@ -28,8 +24,6 @@ def write_options(tmp_path: Path, **overrides: object) -> Path:
         "access_mode": "local",
         "rtsp_username": "",
         "rtsp_password": "",
-        "video_quality": "low",
-        "enable_audio": False,
         "log_level": "info",
     }
     payload.update(overrides)
@@ -44,8 +38,6 @@ class TestBindAddress:
             access_mode=AccessMode.LOCAL,
             rtsp_username="",
             rtsp_password="",
-            video_quality=VideoQuality.LOW,
-            enable_audio=False,
             log_level="info",
         )
         assert options.bind_address == "127.0.0.1"
@@ -55,8 +47,6 @@ class TestBindAddress:
             access_mode=AccessMode.LAN,
             rtsp_username="user",
             rtsp_password="secret",
-            video_quality=VideoQuality.LOW,
-            enable_audio=False,
             log_level="info",
         )
         assert options.bind_address == "0.0.0.0"
@@ -202,23 +192,10 @@ class TestEnvironmentOverrides:
     def test_environment_wins_over_the_options_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("XIAOMI_CAMERA_VIDEO_QUALITY", "high")
-        path = write_options(tmp_path, video_quality="low")
+        monkeypatch.setenv("XIAOMI_CAMERA_RTSP_USERNAME", "from-env")
+        path = write_options(tmp_path, rtsp_username="from-file")
 
-        assert load_options(path, supervised=False).video_quality is VideoQuality.HIGH
-
-    def test_booleans_are_read_as_booleans(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Every environment variable is a string, and a bare bool("false")
-        # would silently be True.
-        path = write_options(tmp_path)
-
-        monkeypatch.setenv("XIAOMI_CAMERA_ENABLE_AUDIO", "false")
-        assert load_options(path, supervised=False).enable_audio is False
-
-        monkeypatch.setenv("XIAOMI_CAMERA_ENABLE_AUDIO", "true")
-        assert load_options(path, supervised=False).enable_audio is True
+        assert load_options(path, supervised=False).rtsp_username == "from-env"
 
 
 class TestTheImageSaysWhatItWasBuiltFrom:
@@ -265,48 +242,6 @@ class TestTheImageSaysWhatItWasBuiltFrom:
         assert "build_ref()" in source
 
 
-class TestTranscodeQuality:
-    def test_it_is_read_from_the_options_file(self, tmp_path: Path) -> None:
-        path = write_options(tmp_path, transcode_quality="sharp")
-        assert (
-            load_options(path, supervised=True).transcode_quality
-            is TranscodeQuality.SHARP
-        )
-
-    def test_its_values_do_not_collide_with_the_camera_setting(self) -> None:
-        """Two settings on one screen must not share a word for different things.
-
-        `video_quality` asks the camera for `low` or `high`; this one says how
-        finely the add-on re-encodes whatever arrives. A `high` in both would
-        read as one choice offered twice, and the two are independent -- a 4K
-        camera can be re-encoded coarsely, and a small one almost losslessly.
-        """
-        camera = {quality.value for quality in VideoQuality}
-        transcode = {quality.value for quality in TranscodeQuality}
-        assert not (camera & transcode)
-
-    def test_a_file_written_by_an_older_version_still_starts(
-        self, tmp_path: Path
-    ) -> None:
-        """The key is simply absent there, and absent has to mean unchanged.
-
-        Supervisor keeps the options a user saved, not the schema they were
-        saved against, so every added setting meets files that predate it.
-        """
-        path = write_options(tmp_path)
-        assert (
-            load_options(path, supervised=True).transcode_quality
-            is TranscodeQuality.STANDARD
-        )
-
-    def test_an_unknown_value_names_the_setting_and_the_choices(
-        self, tmp_path: Path
-    ) -> None:
-        path = write_options(tmp_path, transcode_quality="ludicrous")
-        with pytest.raises(ValueError, match="transcode_quality must be one of"):
-            load_options(path, supervised=True)
-
-
 class TestTheAddOnDeclaresEverySetting:
     """A setting has to exist in three places, and nothing links them.
 
@@ -316,24 +251,11 @@ class TestTheAddOnDeclaresEverySetting:
     quietly: unschema'd it cannot be typed, undefaulted it is dropped on read,
     unoffered it never appears. This project has shipped a setting that was
     threaded everywhere except the one place that assigned it.
-
-    `video_quality`, `enable_audio` and `transcode_quality` are edited on the
-    add-on's own page since 2.0, but they are still declared in all three
-    places, and that is what this asserts. Supervisor writes `options.json`
-    from `config.yaml`'s `options` block: a key absent from it may never be
-    written at all, and the one read that migrates a 1.4.0 value into the new
-    settings store happens once and can never be repeated. Dropping the
-    declaration early would reset those users to factory settings silently and
-    permanently -- so the declaration stays until every install has been
-    through 2.0.
     """
 
     @staticmethod
     def _addon() -> dict:
-        import yaml
-
-        path = Path(__file__).resolve().parent.parent / "addon" / "config.yaml"
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
+        return yaml.safe_load((_ADDON_DIR / "config.yaml").read_text(encoding="utf-8"))
 
     def test_every_setting_has_a_starting_value(self) -> None:
         assert set(config._DEFAULTS) == set(self._addon()["options"])
@@ -342,34 +264,41 @@ class TestTheAddOnDeclaresEverySetting:
         assert set(config._DEFAULTS) == set(self._addon()["schema"])
 
 
-class TestSeedingFromPre2_0Options:
-    """The settings store adopts 1.4.0's global values exactly once.
+def test_the_moved_options_are_gone() -> None:
+    """A major version does not carry compatibility settings. There is no
+    defaults record to seed any more either, so the migration they existed
+    for has nothing left to do."""
+    addon = TestTheAddOnDeclaresEverySetting._addon()
+    for key in ("video_quality", "transcode_quality", "enable_audio"):
+        assert key not in addon["options"]
+        assert key not in addon["schema"]
+        assert key not in config._DEFAULTS
 
-    After that the add-on page owns picture size, audio and transcode
-    quality, and the add-on configuration is no longer consulted for them --
-    seeding must not clobber a choice the user has since made on the page.
+
+def test_no_translation_still_says_moved() -> None:
+    for name in ("en.yaml", "zh-Hans.yaml"):
+        text = (_ADDON_DIR / "translations" / name).read_text(encoding="utf-8")
+        assert "(moved)" not in text
+        assert "已迁移" not in text
+
+
+def test_an_options_file_carrying_the_retired_keys_still_loads(
+    tmp_path: Path,
+) -> None:
+    """An upgrading 1.4.0 install still has these in `options.json` until
+
+    Supervisor rewrites it. Whatever Supervisor's own tolerance for keys
+    outside the schema turns out to be, the add-on's own reader must not
+    choke on them: they load cleanly and are simply not consulted.
     """
-
-    def test_a_1_4_0_options_file_seeds_the_new_defaults(self, tmp_path: Path) -> None:
-        options_file = write_options(
-            tmp_path,
-            video_quality="high",
-            enable_audio=True,
-            transcode_quality="sharp",
-        )
-        options = load_options(options_file, supervised=False)
-        store = SettingsStore(tmp_path / "settings.json")
-        assert store.seed_from_options(options) is True
-        assert store.defaults.quality is VideoQuality.HIGH
-        assert store.defaults.audio is True
-        assert store.defaults.transcode_quality is TranscodeQuality.SHARP
-
-    def test_seeding_runs_once_and_never_overwrites_a_users_later_choice(
-        self, tmp_path: Path
-    ) -> None:
-        path = tmp_path / "settings.json"
-        store = SettingsStore(path)
-        store.set_defaults(quality=VideoQuality.LOW)
-        options = load_options(tmp_path / "absent.json", supervised=False)
-        assert store.seed_from_options(options) is False
-        assert SettingsStore(path).defaults.quality is VideoQuality.LOW
+    path = write_options(
+        tmp_path,
+        video_quality="high",
+        transcode_quality="sharp",
+        enable_audio=True,
+    )
+    options = load_options(path, supervised=True)
+    assert options.access_mode is AccessMode.LOCAL
+    assert not hasattr(options, "video_quality")
+    assert not hasattr(options, "transcode_quality")
+    assert not hasattr(options, "enable_audio")
