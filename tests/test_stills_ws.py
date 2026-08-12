@@ -25,6 +25,8 @@ import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from bridge.api import BridgeApi
+from bridge.config import AccessMode, Options
+from bridge.settings import SettingsStore
 from bridge.stills import StillsError
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
@@ -310,5 +312,93 @@ class TestACameraSwitchedOffWhileWatchedIsNamed:
             async with client.ws_connect("/api/preview/42/ws") as ws:
                 message = await asyncio.wait_for(ws.receive(), timeout=2)
                 assert message.json()["reason"] == "no_video"
+        finally:
+            await client.close()
+
+
+class TestASettingsChangeTellsOpenPreviewsItIsReloading:
+    """The measured cause of "the preview never comes back after a settings
+    change" (docs/superpowers/findings/2026-08-12-preview-restart.md).
+
+    `_set_camera_settings` drops and reopens a camera's session whenever
+    quality, audio or path changes. On real hardware the published stream
+    took on the order of ten seconds to recover once that reload finished --
+    and until this fix, an open preview socket learned nothing about it: it
+    waited out the still decoder's own twenty-second first-frame timeout and
+    only then reported the generic `no_video`, a reason the page used to
+    treat as permanent. Telling the socket `reloading` the moment the reload
+    starts removes both the twenty-second silence and the permanent failure.
+    """
+
+    async def test_it_notifies_the_open_socket_before_reloading(self, tmp_path) -> None:
+        previews = _Previews([])  # never sends a frame; only the notify matters here
+
+        class _Camera:
+            did = "42"
+
+        class _Registry:
+            def get(self, did: str) -> object | None:
+                return _Camera() if did == "42" else None
+
+            def power_state(self, did: str) -> bool | None:
+                return True
+
+            async def async_read_power_state(self, did: str) -> bool | None:
+                return True
+
+        class _Sessions:
+            def __init__(self) -> None:
+                self.reloaded: list[str] = []
+
+            def session_for(self, info: object) -> object:
+                return object()
+
+            async def async_reload(self, did: str) -> None:
+                self.reloaded.append(did)
+
+        sessions = _Sessions()
+
+        async def refresh_callback(*, explicit: bool = False) -> None:
+            return None
+
+        options = Options(
+            access_mode=AccessMode.LOCAL,
+            rtsp_username="",
+            rtsp_password="",
+            log_level="info",
+            web_password="",
+            supervised=False,
+        )
+        api = BridgeApi(
+            account=None,
+            registry_provider=_Registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=refresh_callback,
+            options=options,
+            previews=previews,
+            settings_store=SettingsStore(tmp_path / "settings.json"),
+        )
+
+        app = web.Application()
+        app.router.add_get("/api/preview/{did}/ws", api._preview_ws)
+        app.router.add_put("/api/cameras/{did}/settings", api._set_camera_settings)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                response = await client.put(
+                    "/api/cameras/42/settings", json={"quality": "high"}
+                )
+                assert response.status == 200
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.type is WSMsgType.TEXT
+                assert message.json() == {
+                    "type": "unavailable",
+                    "reason": "reloading",
+                }
+            # The reload itself still happened -- the notify is additional,
+            # not a replacement for reopening the session.
+            assert sessions.reloaded == ["42"]
         finally:
             await client.close()

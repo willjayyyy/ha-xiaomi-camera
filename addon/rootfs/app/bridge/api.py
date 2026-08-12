@@ -30,7 +30,7 @@ import contextlib
 import ipaddress
 import logging
 import secrets
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import TYPE_CHECKING, Any
 
 import av.error
@@ -187,6 +187,14 @@ class BridgeApi:
         # recently touched address can be evicted once `_MAX_TRACKED_ADDRESSES`
         # is reached -- see that constant for why a cap exists at all.
         self._login_failures: OrderedDict[str, int] = OrderedDict()
+        # Open preview sockets, keyed by the camera they show. Consulted only
+        # by `_set_camera_settings`, which needs to reach every viewer of a
+        # camera whose session it is about to tear down and reopen -- without
+        # this they would just go quiet until the still decoder's own
+        # twenty-second first-frame timeout turned the silence into
+        # `no_video` (see `stills.py`'s `_FIRST_FRAME_TIMEOUT` and
+        # `docs/superpowers/findings/2026-08-12-preview-restart.md`).
+        self._preview_sockets: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
 
     # ------------------------------------------------------------------
     # Server lifetime
@@ -748,10 +756,37 @@ class BridgeApi:
             # changing means reopening that camera's session -- and only
             # this camera's.
             _LOGGER.info("reloading session %s for changed %s", did, sorted(changes))
+            # Told immediately, before the reload even starts: the add-on
+            # knows it is about to interrupt this camera's stream, so a
+            # viewer should hear that from it rather than deduce it from
+            # silence. See `_notify_reloading`.
+            await self._notify_reloading(did)
             await sessions.async_reload(did)
             _LOGGER.info("session %s reloaded", did)
         await self._refresh_callback(explicit=True)
         return web.json_response({"ok": True})
+
+    async def _notify_reloading(self, did: str) -> None:
+        """Tell every open preview socket for *did* its session is reloading.
+
+        A settings change that touches quality, audio or path drops and
+        reopens the camera's session, which interrupts the RTSP stream that
+        feeds a preview's decoder. Left alone, an open socket would just go
+        quiet until the decoder's own first-frame timeout turned the silence
+        into a generic `no_video` -- twenty seconds after a change the add-on
+        itself caused, and a message the page used to treat as permanent.
+        Saying `reloading` up front removes both problems: it is immediate,
+        and the page knows it is temporary.
+
+        Each socket is closed right after, rather than left to notice on its
+        own -- the page reconnects on a transient reason, and a socket left
+        open here would otherwise sit waiting for pictures a torn-down
+        session cannot yet produce.
+        """
+        for ws in list(self._preview_sockets.get(did, ())):
+            with contextlib.suppress(ConnectionResetError):
+                await ws.send_json({"type": "unavailable", "reason": "reloading"})
+                await ws.close()
 
     async def _preview_ws(self, request: web.Request) -> web.WebSocketResponse:
         """Pictures from one camera, over one connection.
@@ -794,6 +829,14 @@ class BridgeApi:
             await ws.send_json({"type": "unavailable", "reason": "switched_off"})
             await ws.close()
             return ws
+
+        # Registered so `_notify_reloading` can reach this socket if a
+        # settings change reloads this camera's session while it is open.
+        # Removed unconditionally below -- both a clean close and one this
+        # handler ends itself (`send_pictures`'s `finally`) must stop
+        # tracking it, or a closed socket would linger here forever.
+        sockets = self._preview_sockets[did]
+        sockets.add(ws)
 
         async def send_pictures() -> None:
             """Each picture, named by the last one sent.
@@ -849,6 +892,9 @@ class BridgeApi:
             sending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await sending
+            sockets.discard(ws)
+            if not sockets:
+                self._preview_sockets.pop(did, None)
         return ws
 
     async def _login(self, request: web.Request) -> web.Response:

@@ -1607,13 +1607,18 @@ function wireCopy(container) {
 }
 
 //: Consecutive reconnects tolerated before a preview gives up and offers a
-//: retry. A single drop is routine: the add-on restarts, or a camera's
-//: session is still coming up.
-const PREVIEW_MAX_FAILURES = 4;
+//: retry. A session reopening after a settings change takes several
+//: seconds, and the old budget of four tries a second apart expired inside
+//: that window -- the preview then said it had failed while the add-on was
+//: still coming back.
+const PREVIEW_MAX_FAILURES = 6;
 
-//: Before reconnecting. Only after a failure -- a healthy connection is never
-//: reopened, so nothing paces the pictures but the stream itself.
-const PREVIEW_RETRY_MS = 1000;
+//: Backoff, not a fixed pace: 0.5s, 1s, 2s, 4s, 8s, 8s -- about 24 seconds in
+//: total, which covers a session reopen without hammering a camera that is
+//: genuinely gone. Only paces reconnects after a failure -- a healthy
+//: connection is never reopened, so nothing paces the pictures but the
+//: stream itself.
+const PREVIEW_BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 8000];
 
 /**
  * The socket address for a path, from the address this page was served on.
@@ -1707,6 +1712,15 @@ function startPreview(cam) {
   // add-on can add reasons without this page having to know them first.
   const REASONS = { switched_off: "cameraOffHint" };
 
+  // Reasons that mean "not yet" rather than "never". These reconnect instead
+  // of settling, because settling puts a retry button in front of a viewer
+  // whose picture was about to come back on its own -- `reloading` is the
+  // add-on saying it just interrupted this camera's own stream, and
+  // `no_video` is what a slow reload looks like if a viewer connects during
+  // one without ever having been told (see `_notify_reloading` in
+  // `bridge/api.py`, which exists to make that the less common case).
+  const TRANSIENT = new Set(["reloading", "no_video"]);
+
   // The card's state was read once, when the list was fetched. A camera
   // switched off since then leaves it reading "Ready" over a picture that
   // stopped -- so the reason that explains the picture corrects the label
@@ -1754,7 +1768,7 @@ function startPreview(cam) {
   const fail = () => {
     failures += 1;
     if (failures < PREVIEW_MAX_FAILURES) {
-      session.timer = setTimeout(connect, PREVIEW_RETRY_MS);
+      session.timer = setTimeout(connect, PREVIEW_BACKOFF_MS[failures - 1]);
       return;
     }
     settle(t("previewFailed"));
@@ -1780,6 +1794,7 @@ function startPreview(cam) {
       }
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
+      if (TRANSIENT.has(message.reason)) { socket.close(); return; }
       restate(message.reason);
       settle(t(REASONS[message.reason] || "previewFailed"));
     });
