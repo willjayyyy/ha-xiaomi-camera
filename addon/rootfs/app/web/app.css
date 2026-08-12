@@ -276,6 +276,21 @@
 
   .hint { color: var(--ink-2); font-size: .88rem; margin: 10px 0 0; }
 
+  /* ---- Compatibility sign-in form ----------------------------------------
+     The fields inside the M5 panel. The global `input` rule styles the
+     boxes (which is why every field here is `type="text"` or `password` --
+     a bare `<input>` without a type keeps the browser's native box); this
+     adds the label-above-input layout, and the captcha image's own box. */
+  .compat-field { display: block; margin: 0 0 var(--s4); }
+  .compat-field > span {
+    display: block; margin-bottom: var(--s2);
+    font-size: .82rem; font-weight: 500; color: var(--ink-2);
+  }
+  .compat-captcha {
+    display: block; width: 100%; max-width: 300px; margin: 0 auto var(--s4);
+    border-radius: var(--r-ctl); background: var(--sunken);
+  }
+
   .section-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
   .section-head h2 {
     font-size: .82rem; font-weight: 600; letter-spacing: .06em;
@@ -296,6 +311,10 @@
     flex: none; width: 36px; height: 36px; border-radius: var(--r-pill); padding: 0;
     background: var(--sunken); color: var(--ink-2); position: relative;
     display: flex; align-items: center; justify-content: center; cursor: pointer;
+    /* `border: 0` where `.icon-btn` gets it too: a button without it keeps
+       the browser's default border, which is drawn in the system palette and
+       never follows this page's dark-mode tokens. */
+    border: 0;
     transition: color .15s ease, background .15s ease;
   }
   /* Visual size 36, touch target 44 -- the gap is padded out invisibly. */
@@ -351,18 +370,27 @@
   .ctl-btn svg { width: 14px; height: 14px; fill: currentColor; }
 
   /* ---- Settings row ---------------------------------------------------
-     The component this page is mostly made of: a label, its current value,
-     a chevron if there is a choice behind it. The value answers the label,
-     so it stays quieter than it. Inset to the label -- Mi Home's most
-     recognisable list detail -- rather than run wall to wall. */
+     Two shapes share the name. A *static* row (the defaults and camera
+     sheets) is a label, its resolved value, and the `.seg` control with
+     every choice shown beneath it -- always expanded, never behind a
+     toggle. A *nav* row (the account sheet's compatibility-mode entry) is
+     the same label and value plus a chevron, and is a button. The value
+     answers the label, so it stays quieter than it. Inset to the label --
+     Mi Home's most recognisable list detail -- rather than run wall to
+     wall. */
   .setting-row + .setting-row { border-top: 1px solid var(--hairline); margin-left: var(--s4); }
-  .setting-row + .setting-row .setting-row-btn { margin-left: calc(var(--s4) * -1); padding-left: var(--s4); }
+  .setting-row + .setting-row .setting-row-btn,
+  .setting-row + .setting-row .setting-row-head,
+  .setting-row + .setting-row .setting-choices { margin-left: calc(var(--s4) * -1); }
   .setting-row-btn {
     display: flex; align-items: center; width: 100%; min-height: 56px;
-    padding: 0; margin: 0; border: 0; background: none; cursor: pointer;
+    padding: 0 var(--s4); margin: 0; border: 0; background: none; cursor: pointer;
     font: inherit; color: inherit; text-align: left; text-decoration: none;
   }
-  .setting-row-btn[data-static] { cursor: default; }
+  .setting-row-head {
+    display: flex; align-items: center; gap: var(--s3);
+    min-height: 56px; padding: 0 var(--s4);
+  }
   .setting-label { font-size: .95rem; color: var(--ink-1); flex: none; }
   .setting-value {
     flex: 1; min-width: 0;
@@ -371,11 +399,8 @@
   }
   .setting-chevron {
     margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
-    transition: transform .15s ease;
   }
-  .setting-row-btn[aria-expanded="true"] .setting-chevron { transform: rotate(90deg); }
-  .setting-choices { padding: 2px 0 16px; }
-  .setting-choices[hidden] { display: none; }
+  .setting-choices { padding: 0 var(--s4) var(--s4); }
   .setting-group-label {
     display: block; font-size: .74rem; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--ink-2); margin: 20px 0 10px;
@@ -402,10 +427,12 @@
     transition: border-color .15s ease, background .15s ease, color .15s ease;
   }
   .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
-  /* The option actually in effect while "Follow default" is what is pressed
-     -- an outline, not a fill, so it reads as information rather than as a
-     second selected state competing with the real one. */
-  .seg button.current { border-color: var(--accent); }
+  /* Inside a settings row the options read as a list, so their labels are
+     left-aligned rather than centred in equal thirds -- "Follow default
+     (HD)" is much longer than "SD", and a centred label in an equal-width
+     button wraps awkwardly. The chip keeps centred labels: its options are
+     short pills, where centring is the point. */
+  .setting-choices .seg button { text-align: left; }
 
   /* ---- Preference chip --------------------------------------------------
      This viewer's own frame rate / detail preferences, floating on the
@@ -418,11 +445,16 @@
     color: #fff; font-size: 12px; cursor: pointer;
   }
   .chip-panel {
-    position: absolute; top: var(--s7); right: 0; min-width: 200px;
+    position: absolute; top: var(--s7); right: 0;
+    width: max-content; min-width: 200px; max-width: min(300px, calc(100vw - 40px));
     background: var(--surface); border-radius: var(--r-ctl);
     box-shadow: var(--lift); padding: var(--s3);
   }
   .chip-panel[hidden] { display: none; }
+  /* The chip's options size to their own labels rather than stretching to
+     equal thirds: "Camera's rate" is much longer than "2", and an
+     equal-flex row would squash the long label until it wrapped. */
+  .chip-panel .seg button { flex: 0 1 auto; }
   .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 var(--s1); }
   .chip-label:first-child { margin-top: 0; }
   /* Gated on a real pointer, same reasoning as `.preview .controls` above:

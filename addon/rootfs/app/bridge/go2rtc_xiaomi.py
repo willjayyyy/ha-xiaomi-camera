@@ -92,17 +92,25 @@ async def _parse_sign_in_failure(response: aiohttp.ClientResponse) -> SignInResu
     """The next-step fields from a 401 body, or a bare failure if it cannot
     be read. go2rtc's own bug, a proxy in between, or a future format change
     could all hand back something that is not the JSON object documented --
-    none of that should turn into an exception this deep into a login."""
+    none of that should turn into an exception this deep into a login.
+
+    The keys are lowercase, matching go2rtc's `LoginError` JSON tags in
+    `pkg/xiaomi/cloud.go` (`json:"captcha,omitempty"` etc.) -- verified from
+    the v1.9.14 source, not guessed from the Go struct's field names. The
+    struct fields are `Captcha`/`VerifyPhone`/`VerifyEmail`, and a version
+    that read those capitalized names silently dropped every captcha and
+    verification target go2rtc sent, which is how a captcha-gated login
+    came back to the page as a bare `{"captcha": null, ...}`."""
     try:
         body: Any = await response.json(content_type=None)
         if not isinstance(body, dict):
             raise TypeError(f"expected an object, got {type(body).__name__}")
-        captcha = body.get("Captcha")
+        captcha = body.get("captcha")
         return SignInResult(
             ok=False,
             captcha=base64.b64decode(captcha) if captcha else None,
-            verify_phone=body.get("VerifyPhone"),
-            verify_email=body.get("VerifyEmail"),
+            verify_phone=body.get("verify_phone"),
+            verify_email=body.get("verify_email"),
         )
     except (ValueError, TypeError) as err:
         # Covers a non-JSON body (`json.JSONDecodeError`, a `ValueError`

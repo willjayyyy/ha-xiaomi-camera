@@ -40,8 +40,6 @@ const I18N = {
     compatTitle: "Compatibility mode",
     compatEnabled: "Enabled", compatNotEnabled: "Not enabled",
     compatWhy: "Compatibility mode reaches cameras a different way and needs your Xiaomi account password. It is separate from the sign-in you already completed, and stores a long-lived credential.",
-    compatEnableHint: "Turn it on from the settings of a camera that needs it.",
-    compatCredit: "Compatibility mode is built on the open-source project go2rtc",
     compatConnect: "Connect with compatibility mode",
     compatCannotRemove: "Stays until the add-on is uninstalled -- which clears its other data too.",
     compatNoCameras: "No cameras yet.",
@@ -49,8 +47,8 @@ const I18N = {
     compatCaptchaLabel: "Captcha",
     compatCodeLabel: "Verification code",
     compatCodeSentTo: "Code sent to",
+    compatNoStep: "Xiaomi did not return a verification step. Try again.",
     account: "Account", password: "Password",
-    openConfig: "Open configuration",
     reloading: "Reconnecting",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
     finish: "Finish sign-in", cancel: "Cancel",
@@ -89,12 +87,9 @@ const I18N = {
     settingsSaveFailed: "Could not save that setting.",
     pathSwitchWarning: "Changing the connection rebuilds this camera's stream -- anything watching it now, including this preview, HomeKit and a recorder, reconnects.",
     switchConnection: "Switch",
-    // Add-on link ------------------------------------------------------------
-    addonHeading: "Add-on",
     // Camera card controls --------------------------------------------------
     play: "Play", stop: "Stop", enlarge: "Enlarge picture", close: "Close",
     settingsButton: "Settings",
-    tapToView: "Tap to view",
     notSupported: "Not supported", limitedSupport: "Limited",
   },
   zh: {
@@ -123,8 +118,6 @@ const I18N = {
     compatTitle: "兼容模式",
     compatEnabled: "已启用", compatNotEnabled: "未启用",
     compatWhy: "兼容模式用另一种方式连接摄像头，需要你的小米账号密码。这与你已完成的授权是分开的，会保存一个长期凭据。",
-    compatEnableHint: "请在需要它的摄像头设置里开启。",
-    compatCredit: "兼容模式基于开源项目 go2rtc",
     compatConnect: "用兼容模式连接",
     compatCannotRemove: "会一直保留，直到卸载这个加载项 —— 卸载会连同其他数据一并清空。",
     compatNoCameras: "暂无摄像头。",
@@ -132,8 +125,8 @@ const I18N = {
     compatCaptchaLabel: "图形验证码",
     compatCodeLabel: "验证码",
     compatCodeSentTo: "验证码已发送至",
+    compatNoStep: "小米没有返回验证步骤，请重试。",
     account: "账号", password: "密码",
-    openConfig: "打开配置",
     reloading: "正在重连",
     connect: "连接小米账号", disconnect: "断开连接",
     finish: "完成登录", cancel: "取消",
@@ -172,12 +165,9 @@ const I18N = {
     settingsSaveFailed: "设置未能保存。",
     pathSwitchWarning: "切换连接方式会重建这台摄像头的流，正在观看的一切都会重连，包括这个预览、HomeKit 和录像。",
     switchConnection: "切换",
-    // Add-on link ------------------------------------------------------------
-    addonHeading: "加载项",
     // Camera card controls --------------------------------------------------
     play: "播放", stop: "停止", enlarge: "放大画面", close: "关闭",
     settingsButton: "设置",
-    tapToView: "点击查看",
     notSupported: "不支持", limitedSupport: "有限支持",
   },
 };
@@ -451,22 +441,17 @@ function savePrefs(did, prefs) {
 }
 
 /**
- * `current` marks which option is actually in effect right now, independent
- * of `selected` (which option is pressed). The two agree everywhere except a
- * camera's sheet on a field following the default: there, "Follow default"
- * is `selected` -- it is the choice that is active, and the one another tap
- * would change -- while the concrete option matching the resolved value gets
- * `current`, so the expanded control still answers "what am I getting"
- * rather than only "what did I choose here". Outside the sheet the two
- * arguments are always the same value, and `current` marks nothing extra.
+ * Two to four options, all shown at once -- see the `.seg` CSS comment.
+ * `selected` is the option that is pressed; nothing else is marked, because
+ * on this page every control sits where its resolved value is already
+ * readable (the row's value line, or the chip's label) without needing a
+ * second marker that says the same thing twice.
  */
-function segment(kind, choices, selected, current = selected) {
+function segment(kind, choices, selected) {
   return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label, disabled }) => {
-    const isCurrent = String(value) === String(current) && String(value) !== String(selected);
     return `<button type="button" data-value="${escapeHtml(value)}" `
       + `aria-pressed="${String(value) === String(selected)}"`
-      + `${disabled ? ` disabled title="${escapeHtml(t(disabled))}"` : ""}`
-      + `${isCurrent ? ' class="current"' : ""}>${escapeHtml(label)}</button>`;
+      + `${disabled ? ` disabled title="${escapeHtml(t(disabled))}"` : ""}>${escapeHtml(label)}</button>`;
   }).join("")}</div>`;
 }
 
@@ -571,8 +556,10 @@ const SETTINGS_FIELDS = [
 const FOLLOW_DEFAULT = "__follow__";
 
 /**
- * One settings row: a label, its current value, and -- once opened -- a
- * `.seg` control offering every choice. `allowFollow` prepends "Follow
+ * One settings row: a label, its current value, and the `.seg` control with
+ * every choice shown beneath it -- always expanded rather than behind a
+ * toggle, so the options are one tap away and the row never hides the very
+ * thing this sheet is opened to change. `allowFollow` prepends "Follow
  * default" and is what turns this same row into the one a camera's sheet
  * uses; `rawValue === null` is what "follow default" looks like coming back.
  *
@@ -580,9 +567,8 @@ const FOLLOW_DEFAULT = "__follow__";
  * `settings` on the camera payload, resolved server-side, never recomputed
  * here. It defaults to `rawValue` itself, which is a no-op everywhere except
  * a sheet row following the default: there the two differ, and the row's
- * collapsed value still reads "Follow default" (the copy discipline this
- * page uses throughout), but the expanded control marks the concrete option
- * actually in effect -- see `segment`'s `current` parameter.
+ * value line reads "Follow default (<resolved value>)" so the actual value
+ * is visible even though no option in the control is marked selected.
  */
 function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = rawValue } = {}) {
   const choices = [
@@ -592,19 +578,18 @@ function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = 
   const followingDefault = allowFollow && rawValue === null;
   const selected = followingDefault ? FOLLOW_DEFAULT : String(rawValue);
   // Following the default reads "Follow default (<resolved value>)", not a
-  // bare "Follow default" -- collapsed, that label is the one thing this
-  // page is opened to learn, and "Follow default" alone does not say it.
+  // bare "Follow default" -- that value line is the one thing this sheet is
+  // opened to learn, and "Follow default" alone does not say it.
   const resolvedLabel = field.choices().find((c) => c.value === String(resolvedValue))?.label ?? "";
   const valueLabel = followingDefault
     ? `${t("followDefault")}${lang === "zh" ? `（${resolvedLabel}）` : ` (${resolvedLabel})`}`
     : (choices.find((c) => c.value === selected)?.label ?? "");
   return `<div class="setting-row" data-field="${escapeHtml(field.key)}">
-    <button type="button" class="setting-row-btn" aria-expanded="false">
+    <div class="setting-row-head">
       <span class="setting-label">${escapeHtml(t(field.labelKey))}</span>
       <span class="setting-value" data-value>${escapeHtml(valueLabel)}</span>
-      <span class="setting-chevron" aria-hidden="true">›</span>
-    </button>
-    <div class="setting-choices" hidden>${segment(field.key, choices, selected, String(resolvedValue))}</div>
+    </div>
+    <div class="setting-choices">${segment(field.key, choices, selected)}</div>
   </div>`;
 }
 
@@ -618,37 +603,30 @@ function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = 
  */
 function wireSettingRows(container, onChoose) {
   container.addEventListener("click", (event) => {
-    const toggle = event.target.closest(".setting-row-btn");
-    if (toggle && !event.target.closest(".seg")) {
-      const panel = toggle.closest(".setting-row").querySelector(".setting-choices");
-      const opening = panel.hidden;
-      closeSettingRows(container);
-      panel.hidden = !opening;
-      toggle.setAttribute("aria-expanded", String(opening));
-      return;
-    }
-
     const choice = event.target.closest(".seg button");
     if (!choice) return;
     const row = choice.closest(".setting-row");
     const field = SETTINGS_FIELDS.find((f) => f.key === row.dataset.field) || row._field;
-    const value = choice.dataset.value === FOLLOW_DEFAULT ? null : field.parse(choice.dataset.value);
+    const following = choice.dataset.value === FOLLOW_DEFAULT;
+    const value = following ? null : field.parse(choice.dataset.value);
 
     for (const sibling of choice.parentElement.children) {
       sibling.setAttribute("aria-pressed", String(sibling === choice));
     }
-    row.querySelector("[data-value]").textContent = choice.textContent;
-    row.querySelector(".setting-row-btn").setAttribute("aria-expanded", "false");
-    row.querySelector(".setting-choices").hidden = true;
+    // A choice that follows the default names the resolved value too, so the
+    // line reads "Follow default (HD)" the moment it is tapped rather than
+    // waiting for a re-render. Read from `defaults` -- the value the camera
+    // is being resolved to, and the same one `applyCameraOverride` writes
+    // into `camera.settings` for the `null` case.
+    let label = choice.textContent;
+    if (following && defaults?.[field.key] != null) {
+      const resolvedLabel = field.choices()
+        .find((c) => c.value === String(defaults[field.key]))?.label ?? "";
+      label = `${t("followDefault")}${lang === "zh" ? `（${resolvedLabel}）` : ` (${resolvedLabel})`}`;
+    }
+    row.querySelector("[data-value]").textContent = label;
 
     onChoose(row.dataset.field, value);
-  });
-}
-
-function closeSettingRows(container) {
-  container.querySelectorAll(".setting-choices").forEach((panel) => {
-    panel.hidden = true;
-    panel.previousElementSibling?.setAttribute("aria-expanded", "false");
   });
 }
 
@@ -832,7 +810,16 @@ function renderAccountSheetBody(body) {
     </div>`;
   body.querySelector("#link-btn")?.addEventListener("click", openAccountFlow);
   body.querySelector("#unlink-btn")?.addEventListener("click", unlinkAccount);
-  body.querySelector("#compat-row").addEventListener("click", openCompatManage);
+  // One entry for compatibility mode, wherever the page reaches it from:
+  // signed in, the account sheet's row opens the management view; not signed
+  // in, it opens the same sign-in panel a blocked camera's action button
+  // opens -- there is exactly one login form on the page, and no second
+  // "how do I enable this" screen to get lost in. See `openCompatManage`'s
+  // docstring for why the enabled half stays a separate view.
+  body.querySelector("#compat-row").addEventListener("click", () => {
+    if (addonInfo?.compat_ready) openCompatManage();
+    else openCompatSignIn(null);
+  });
 }
 
 //: Called after anything that can change what M1 or M3 show in the
@@ -924,36 +911,30 @@ async function unlinkAccount() {
 }
 
 /**
- * M6: manage compatibility mode, opened from M1's compatibility-mode row.
+ * M6: manage compatibility mode, opened from M1's compatibility-mode row
+ * when a credential already exists. Which cameras are using it, and the one
+ * honest fact about the credential itself: the service compatibility mode
+ * is built on has sign-in and list only -- no sign-out -- so `DELETE
+ * /api/compat` answers `501 not_supported`, and this screen offers no button
+ * that would fail; it states the limitation instead.
  *
- * Not-enabled half: the explanation, and where to actually turn it on. No
- * sign-in form here: enabling it from a settings screen is the unanchored
- * choice this design moved away from. The credential is only ever entered
- * from a specific camera that cannot be reached without it, so that is the
- * only place it is asked for -- see `openCompatSignIn`.
- *
- * Enabled half: which cameras are using it, and the one honest fact about
- * the credential itself. The service compatibility mode is built on has
- * sign-in and list only -- no sign-out -- so `DELETE /api/compat` answers
- * `501 not_supported`, and this screen offers no button that would fail; it
- * states the limitation instead.
+ * When no credential exists the same row opens the sign-in panel directly
+ * (`openCompatSignIn`) -- one login form on the page, never a second
+ * explanation screen to get lost in. That is why the not-enabled half that
+ * used to live here is gone.
  */
 function openCompatManage() {
   sheetKind = "compat";
   openOverlay(t("compatTitle"), "", (body) => {
     const using = cameras.filter((c) => c.settings?.path === "compat");
-    body.innerHTML = addonInfo?.compat_ready
-      ? `
-        <span class="setting-group-label">${escapeHtml(t("compatTitle"))}</span>
-        <div class="row">
-          <span class="status ok"><span class="dot"></span>${escapeHtml(t("compatEnabled"))}</span>
-        </div>
-        <p class="hint">${escapeHtml(t("compatCannotRemove"))}</p>
-        <span class="setting-group-label">${escapeHtml(t("camerasHeading"))}</span>
-        <div class="settings-list">${using.length ? using.map(nameRowHtml).join("") : emptyRowHtml("compatNoCameras")}</div>`
-      : `
-        <p class="hint">${escapeHtml(t("compatWhy"))}</p>
-        <p class="hint">${escapeHtml(t("compatEnableHint"))}</p>`;
+    body.innerHTML = `
+      <span class="setting-group-label">${escapeHtml(t("compatTitle"))}</span>
+      <div class="row">
+        <span class="status ok"><span class="dot"></span>${escapeHtml(t("compatEnabled"))}</span>
+      </div>
+      <p class="hint">${escapeHtml(t("compatCannotRemove"))}</p>
+      <span class="setting-group-label">${escapeHtml(t("camerasHeading"))}</span>
+      <div class="settings-list">${using.length ? using.map(nameRowHtml).join("") : emptyRowHtml("compatNoCameras")}</div>`;
   }, () => { sheetKind = null; });
 }
 
@@ -984,28 +965,8 @@ function openSettingsSheet() {
 function renderSettingsSheetBody(body) {
   body.innerHTML = `
     <span class="setting-group-label">${escapeHtml(t("defaultsHeading"))}</span>
-    <div class="settings-list" id="defaults-rows"></div>
-    ${addonInfo?.slug ? `
-    <span class="setting-group-label">${escapeHtml(t("addonHeading"))}</span>
-    <div class="settings-list">
-      <div class="setting-row">
-        <button type="button" class="setting-row-btn" id="open-config-btn">
-          <span class="setting-label">${escapeHtml(t("openConfig"))}</span>
-          <span class="setting-chevron" aria-hidden="true">›</span>
-        </button>
-      </div>
-    </div>` : ""}`;
+    <div class="settings-list" id="defaults-rows"></div>`;
   renderDefaultsRows();
-  body.querySelector("#open-config-btn")?.addEventListener("click", () => {
-    // `window.top`, not this frame: ingress renders the page inside an
-    // iframe, and a same-frame navigation would nest Home Assistant inside
-    // itself instead of replacing it. The slug comes from `/api/info` --
-    // Home Assistant prefixes it with the repository the add-on was
-    // installed from, so the bare slug in `config.yaml` 404s on every real
-    // install; this is why the row is omitted entirely rather than built
-    // from that bare name when `addonInfo.slug` is `null`.
-    window.top.location = `/hassio/addon/${addonInfo.slug}/config`;
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,12 +1048,11 @@ function pathRowHtml(camera) {
   // people opening this from the Home Assistant app).
   const reasons = choices.filter((c) => c.disabled).map((c) => t(c.disabled));
   return `<div class="setting-row" data-field="path">
-    <button type="button" class="setting-row-btn" aria-expanded="false">
+    <div class="setting-row-head">
       <span class="setting-label">${escapeHtml(t("pathRow"))}</span>
       <span class="setting-value" data-value>${escapeHtml(valueLabel)}</span>
-      <span class="setting-chevron" aria-hidden="true">›</span>
-    </button>
-    <div class="setting-choices" hidden data-path-panel>
+    </div>
+    <div class="setting-choices" data-path-panel>
       ${segment("path", choices, selected)}
       ${reasons.map((reason) => `<p class="hint">${escapeHtml(reason)}</p>`).join("")}
     </div>
@@ -1108,13 +1068,7 @@ function pathRowHtml(camera) {
  */
 function wirePathRow(row, did) {
   if (!row) return;
-  const toggle = row.querySelector(".setting-row-btn");
   const panel = row.querySelector("[data-path-panel]");
-  toggle.addEventListener("click", () => {
-    const opening = panel.hidden;
-    panel.hidden = !opening;
-    toggle.setAttribute("aria-expanded", String(opening));
-  });
   panel.addEventListener("click", (event) => {
     const choice = event.target.closest(".seg button");
     if (!choice || choice.disabled || choice.getAttribute("aria-pressed") === "true") return;
@@ -1292,16 +1246,20 @@ function previewIdleHtml(c) {
   if (blocked) {
     // The third case's reason is the add-on's own `stream_error` text, not
     // a translation key -- there is nothing to look up, it is already the
-    // words to show.
+    // words to show. Only cases that are real faults get the warning
+    // triangle; "not signed in" is a setup step, not one (see `blocker`).
     const why = blocked.text ?? t(blocked.reason);
     return `<div class="blocked">
-      <span class="blocked-icon" aria-hidden="true">${ICONS.warn}</span>
+      ${blocked.icon ? `<span class="blocked-icon" aria-hidden="true">${ICONS.warn}</span>` : ""}
       <span class="blocked-why">${escapeHtml(why)}</span>
       ${blocked.action ? `<button type="button" class="blocked-action" data-${blocked.action}>${escapeHtml(t(blocked.label))}</button>` : ""}
     </div>`;
   }
-  return `<div class="placeholder">${escapeHtml(t("tapToView"))}</div>
-    ${prefChipHtml(c)}
+  // The play button is the whole invitation -- the "tap to view" line it
+  // used to sit on is gone, because a text under an icon is a text behind
+  // an icon: the triangle already says it, and the card reads cleaner for
+  // it.
+  return `${prefChipHtml(c)}
     <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>`;
 }
 
@@ -1324,7 +1282,7 @@ function previewIdleHtml(c) {
  *    just has not been switched to it yet, so there is nothing to sign in
  *    to.
  * 3. No resolved path, and compatibility mode is not signed in -- the only
- *    case that opens M4.
+ *    case that opens the sign-in panel (M5).
  */
 function blocker(c) {
   // `publishable`, not `c.settings` -- the add-on answers that question once
@@ -1335,14 +1293,19 @@ function blocker(c) {
     if (!c.stream_error) return null;
     return {
       text: c.stream_error,
+      icon: true,
       action: c.paths.official === null ? "path-official" : null,
       label: "switchToOfficial",
     };
   }
   if (c.paths.compat === null) {
-    return { reason: "pathOfficialUnsupported", action: "path-compat", label: "compatConnect" };
+    return { reason: "pathOfficialUnsupported", icon: true, action: "path-compat", label: "compatConnect" };
   }
-  return { reason: "pathCompatNoAuth", action: "compat-signin", label: "compatConnect" };
+  // Not signed in is a setup step, not a fault: the camera is usable the
+  // moment the user signs in, so it gets no warning triangle. The other two
+  // blocked states -- a stream that will not build, a model the official
+  // path refuses -- are real limitations and keep theirs.
+  return { reason: "pathCompatNoAuth", icon: false, action: "compat-signin", label: "compatConnect" };
 }
 
 /**
@@ -1409,16 +1372,22 @@ async function switchCameraPath(did, path) {
 }
 
 /**
- * M4: compatibility mode's sign-in panel, entered only from a blocked
- * camera's action button -- there is no other way in, see the module
- * comment on `openCompatManage` below. `did` is the camera that sent the
- * viewer here; on success that camera is put on compatibility mode
- * immediately (`onCompatSignedIn`), because agreeing to sign in for a
- * specific camera and then having to go and switch it too is a step nobody
- * would understand the purpose of.
+ * M5: compatibility mode's sign-in panel, entered from a blocked camera's
+ * action button or -- when no credential exists yet -- from the account
+ * sheet's compatibility-mode row. `did` is the camera that sent the viewer
+ * here, or `null` for the account-sheet entry. On success a camera that
+ * asked is put on compatibility mode immediately (`onCompatSignedIn`),
+ * because agreeing to sign in for a specific camera and then having to go
+ * and switch it too is a step nobody would understand the purpose of.
  */
 function openCompatSignIn(did) {
-  openOverlay(t("compatTitle"), "", (body) => renderCompatSignInStep(body, did, "password"));
+  sheetKind = "compat";
+  openOverlay(
+    t("compatTitle"),
+    "",
+    (body) => renderCompatSignInStep(body, did, "password"),
+    () => { sheetKind = null; }
+  );
 }
 
 //: One field set per sign-in step. Which step comes next is read from the
@@ -1428,36 +1397,49 @@ function openCompatSignIn(did) {
 function compatStepFieldsHtml(step, extra) {
   if (step === "captcha") {
     return `
-      ${extra.captcha ? `<img alt="${escapeHtml(t("compatCaptchaLabel"))}" style="max-width:100%" src="data:image/png;base64,${extra.captcha}">` : ""}
-      <label>${escapeHtml(t("compatCaptchaLabel"))}<input name="captcha" autocomplete="off" required></label>`;
+      ${extra.captcha ? `<img class="compat-captcha" alt="${escapeHtml(t("compatCaptchaLabel"))}" src="data:image/png;base64,${escapeHtml(extra.captcha)}">` : ""}
+      <label class="compat-field">
+        <span>${escapeHtml(t("compatCaptchaLabel"))}</span>
+        <input name="captcha" type="text" autocomplete="off" required>
+      </label>`;
   }
   if (step === "verify") {
     return `
-      <p class="hint">${escapeHtml(t("compatCodeSentTo"))} ${escapeHtml(extra.verifyTarget || "")}</p>
-      <label>${escapeHtml(t("compatCodeLabel"))}<input name="verify" inputmode="numeric" autocomplete="one-time-code" required></label>`;
+      <p class="hint">${escapeHtml(t("compatCodeSentTo"))} <strong>${escapeHtml(extra.verifyTarget || "")}</strong></p>
+      <label class="compat-field">
+        <span>${escapeHtml(t("compatCodeLabel"))}</span>
+        <input name="verify" type="text" inputmode="numeric" autocomplete="one-time-code" required>
+      </label>`;
   }
   return `
-    <label>${escapeHtml(t("account"))}<input name="username" autocomplete="username" required></label>
-    <label>${escapeHtml(t("password"))}<input name="password" type="password" autocomplete="current-password" required></label>`;
+    <label class="compat-field">
+      <span>${escapeHtml(t("account"))}</span>
+      <input name="username" type="text" autocomplete="username" required>
+    </label>
+    <label class="compat-field">
+      <span>${escapeHtml(t("password"))}</span>
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>`;
 }
 
 /**
  * Render one step of the sign-in form and wire its submit forward.
- * `compatWhy` and the credit line are the only explanatory prose this whole
- * interface permits -- see the module docstring on `openCompatManage`.
+ * `compatWhy` is the only explanatory prose this interface permits -- the
+ * go2rtc credit line that used to sit under the form was removed, because it
+ * tells a user nothing they can act on and the troubleshooting path that
+ * needs the name lives in the logs and the README instead.
  */
 function renderCompatSignInStep(body, did, step, extra = {}) {
   body.innerHTML = `
     <p class="hint">${escapeHtml(t("compatWhy"))}</p>
-    <form data-compat-form>
+    <form class="compat-form" data-compat-form>
       ${compatStepFieldsHtml(step, extra)}
       <p class="signin-error" data-error hidden></p>
       <div class="row">
         <button type="button" class="ghost" data-cancel>${escapeHtml(t("cancel"))}</button>
         <button type="submit" class="primary">${escapeHtml(t("signIn"))}</button>
       </div>
-    </form>
-    <p class="hint">${escapeHtml(t("compatCredit"))}</p>`;
+    </form>`;
   body.querySelector("[data-cancel]").addEventListener("click", closeOverlay);
   body.querySelector("[data-compat-form]").addEventListener("submit", (event) => {
     event.preventDefault();
@@ -1469,9 +1451,12 @@ function renderCompatSignInStep(body, did, step, extra = {}) {
  * Carry one step of the sign-in conversation to `/api/compat/signin`, and
  * act on whatever comes back:
  *
- * - `200`: done -- put this camera on compatibility mode (`onCompatSignedIn`).
+ * - `200`: done -- finish the sign-in (`onCompatSignedIn`).
  * - `401` naming a captcha or a verification target: re-render this same
  *   panel on the next step was asked for.
+ * - `401` naming neither: go2rtc's empty `LoginError` -- the next step could
+ *   not be generated, so the panel says to try again rather than dumping the
+ *   bare JSON.
  * - `409 sign_in_busy`: another sign-in is already running -- a
  *   half-finished one is held in a single shared slot, so a second at the
  *   same time would corrupt both. Its own named message, not folded into
@@ -1506,8 +1491,21 @@ async function submitCompatStep(body, did, step, formData) {
       if (next.captcha) { renderCompatSignInStep(body, did, "captcha", { captcha: next.captcha }); return; }
       const verifyTarget = next.verify_phone || next.verify_email;
       if (verifyTarget) { renderCompatSignInStep(body, did, "verify", { verifyTarget }); return; }
+      // A 401 that names no next step: go2rtc's empty `LoginError`, most
+      // often a captcha image that came back empty. Not "the password is
+      // wrong" (that is a 5xx upstream, 502 through the bridge) -- it means
+      // the next step could not be generated, and the only useful answer is
+      // to try again.
+      errorEl.textContent = t("compatNoStep");
+      errorEl.hidden = false;
+      return;
     }
-    throw new Error(text);
+    // A 502 from the bridge carries `{"error": "..."}`; showing the JSON
+    // wrapper to someone mid-login is noise. The message is already redacted
+    // server-side -- this only unwraps it.
+    let message = text;
+    try { message = JSON.parse(text).error || text; } catch { /* not JSON -- keep the raw text */ }
+    throw new Error(message);
   } catch (err) {
     errorEl.textContent = t("signInFailed") + (err.message || "");
     errorEl.hidden = false;
@@ -1517,12 +1515,29 @@ async function submitCompatStep(body, did, step, formData) {
 }
 
 /**
- * Sign-in finished: close the panel and put the camera that sent the viewer
- * here onto compatibility mode, then reload so its card starts publishing.
+ * Sign-in finished: close the panel and, when a specific camera sent the
+ * viewer here, put that camera onto compatibility mode and reload so its
+ * card starts publishing. A sign-in entered from the account sheet (no
+ * `did`) has no camera to switch -- it reloads so the compat path is
+ * offered everywhere it now can be, and lands back on the account sheet
+ * with its row reading "enabled".
  */
 async function onCompatSignedIn(did) {
   closeOverlay();
-  await switchCameraPath(did, "compat");
+  // `compat_ready` just changed, and `/api/info` -- which the account
+  // sheet's row reads to show "enabled" -- was last fetched at start-up.
+  // Refreshed before either ending below, so a sheet opened right after
+  // reads the truth rather than the pre-sign-in answer.
+  await loadInfo();
+  if (did) {
+    await switchCameraPath(did, "compat");
+  } else {
+    // Entered from the account sheet with no camera in mind: reload so the
+    // compat path is offered everywhere it now can be, then land back on the
+    // account sheet with its row reading "enabled".
+    await loadCameras();
+    openAccountSheet();
+  }
 }
 
 /**
@@ -1843,7 +1858,12 @@ function resetPreview(box) {
   stopPreview(box);
   box._failed = false;
   box.removeAttribute("data-playing");
-  box.innerHTML = `<div class="placeholder">${escapeHtml(t("tapToView"))}</div>
+  // The same idle markup `previewIdleHtml` renders, so a stopped preview
+  // looks exactly like a freshly loaded one -- including the preference
+  // chip, which used to vanish on stop and only come back on a reload.
+  const cam = box.closest(".cam");
+  const camera = cameras.find((c) => c.did === cam?.dataset.did);
+  box.innerHTML = `${camera ? prefChipHtml(camera) : ""}
     <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>`;
 }
 

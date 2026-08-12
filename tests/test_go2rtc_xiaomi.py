@@ -8,6 +8,7 @@ those behind this add-on's own password.
 from __future__ import annotations
 
 import asyncio
+import base64
 
 import pytest
 from aiohttp import web
@@ -141,11 +142,25 @@ async def test_password_step_posts_a_form_not_json(go2rtc):
 
 
 async def test_a_401_names_the_next_step(go2rtc):
-    go2rtc.reply(401, {"VerifyPhone": "138****5678"})
+    """The keys are lowercase -- go2rtc's `LoginError` JSON tags in
+    `pkg/xiaomi/cloud.go`, not the Go struct's capitalized field names. The
+    capitalized spelling once read every captcha and verification target as
+    absent, and a captcha-gated login came back to the page as a bare
+    `{"captcha": null, ...}`."""
+    go2rtc.reply(401, {"verify_phone": "138****5678"})
     result = await sign_in("password", username="u", password="p")
     assert result.ok is False
     assert result.verify_phone == "138****5678"
     assert result.captcha is None
+
+
+async def test_a_captcha_comes_back_decoded(go2rtc):
+    go2rtc.reply(401, {"captcha": base64.b64encode(b"png-bytes").decode()})
+    result = await sign_in("password", username="u", password="p")
+    assert result.ok is False
+    assert result.captcha == b"png-bytes"
+    assert result.verify_phone is None
+    assert result.verify_email is None
 
 
 async def test_two_sign_ins_at_once_are_refused(go2rtc):
@@ -248,8 +263,8 @@ async def test_a_401_body_that_is_a_list_fails_without_raising(go2rtc):
 
 
 async def test_a_401_body_with_a_malformed_captcha_fails_without_raising(go2rtc):
-    """Bad base64 padding in `Captcha` must not surface as `binascii.Error`."""
-    go2rtc.reply(401, {"Captcha": "!!!not-base64!!!"})
+    """Bad base64 padding in `captcha` must not surface as `binascii.Error`."""
+    go2rtc.reply(401, {"captcha": "!!!not-base64!!!"})
     result = await sign_in("password", username="u", password="p")
     assert result == (False, None, None, None)
 

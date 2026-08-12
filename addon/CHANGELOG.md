@@ -10,6 +10,9 @@
 - The three video settings that had moved are gone from the configuration.
 - Picture quality and sound go back to their defaults on upgrade; set them
   again on the add-on's page.
+- Compatibility-mode sign-in now walks through Xiaomi's picture captcha and
+  phone or email verification codes, where it used to fail with a raw error.
+- Camera settings show every choice without tapping each row open.
 
 ### 中文
 
@@ -19,6 +22,8 @@
 - 修复：改过画面质量之后预览不再出图。
 - 加载项配置里那三个已经迁移走的设置删掉了。
 - 升级后画面质量和声音会回到默认值，请到加载项页面上重新设置一次。
+- 兼容模式登录现在能走小米的图形验证码和短信/邮箱验证流程，之前会报一个看不懂的错误。
+- 摄像头设置会直接显示全部选项，不用再逐行点开。
 
 ## 1.4.0
 

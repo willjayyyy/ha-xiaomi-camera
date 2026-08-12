@@ -220,18 +220,18 @@ def test_the_account_card_moved_behind_the_header_buttons():
 
 def test_only_compat_mode_screens_carry_explanatory_prose():
     """Copy is labels, not explanations -- state is never carried by a
-    sentence. `compatWhy`, `compatEnableHint` and `compatCannotRemove` are
-    the restated rule's three named exceptions, and all belong to
-    compatibility mode's own screens (M1's account sheet, M6).
-    `compatCannotRemove` is M6's enabled half stating, in an actionable
-    sentence rather than a bare "cannot be removed here", what is true now
-    (the credential stays) and what removes it (uninstalling the add-on --
-    verified against Supervisor's own `App.unload`/`uninstall`, which always
-    clears `path_data` regardless of the "keep config" option). Scoped to M1
-    and M3 (the sheets this task built, plus the gear that sits beside M1)
-    -- M2 is the pre-existing OAuth flow, moved here verbatim per the brief,
-    and its own onboarding copy (`step2`, `privacyNote`, ...) predates this
-    rule and is out of scope.
+    sentence. `compatCannotRemove` is the one remaining exception on M1 and
+    M3: M6's enabled half stating, in an actionable sentence rather than a
+    bare "cannot be removed here", what is true now (the credential stays)
+    and what removes it (uninstalling the add-on -- verified against
+    Supervisor's own `App.unload`/`uninstall`, which always clears
+    `path_data` regardless of the "keep config" option). `compatWhy` still
+    exists, but now only on the sign-in panel (`renderCompatSignInStep`),
+    and the not-enabled explanation screen (`compatEnableHint`) was retired
+    along with the screen that carried it. Scoped to M1 and M3 -- M2 is the
+    pre-existing OAuth flow, moved here verbatim per the brief, and its own
+    onboarding copy (`step2`, `privacyNote`, ...) predates this rule and is
+    out of scope.
     """
     js = JS.read_text()
     functions = (
@@ -248,7 +248,7 @@ def test_only_compat_mode_screens_carry_explanatory_prose():
     #: sentence does.
     SENTENCE_LENGTH = 30
     prose = {key for key in keys if len(values.get(key, "")) > SENTENCE_LENGTH}
-    allowed = {"compatWhy", "compatEnableHint", "compatCannotRemove"}
+    allowed = {"compatCannotRemove"}
     assert prose == allowed, (
         f"unexpected explanatory prose on M1/M3: {sorted(prose - allowed)}"
     )
@@ -279,10 +279,16 @@ def test_the_retired_words_appear_nowhere():
             assert word not in text, f"{source.name} still says {word}"
 
 
-def test_go2rtc_is_named_only_where_it_should_be():
-    """Not hidden -- someone troubleshooting needs the word -- but not
-    scattered either. One line in the sign-in panel is the whole budget."""
-    assert JS.read_text().count("go2rtc") <= 2  # the en and zh strings
+def test_go2rtc_is_not_named_in_user_facing_copy():
+    """The service compatibility mode is built on is not named to users --
+    the sign-in panel's credit line was removed, so the word now appears
+    only in logs, docs and code comments, where someone troubleshooting
+    actually looks for it. Checked against the translation table, which is
+    where every user-visible string lives; comments are free to name the
+    upstream, and the module this page drives is `go2rtc_xiaomi` itself."""
+    js = JS.read_text()
+    values = re.findall(r'^\s{4}\w+: "([^"]*)"', js, re.M)
+    assert not any("go2rtc" in value for value in values)
 
 
 def test_the_sign_in_page_can_change_language():
@@ -348,14 +354,16 @@ def test_the_connection_row_always_shows_both_options_with_their_reasons():
     assert "camera.paths.official" in row and "camera.paths.compat" in row
 
 
-def test_collapsed_follow_default_rows_show_the_resolved_value():
+def test_follow_default_rows_show_the_resolved_value():
     """A row reading a bare "Follow default" does not say what the camera is
-    actually getting. `resolvedValue` already reaches `settingRowHtml` --
-    this checks the collapsed label is actually built from it, not only the
-    expanded control's `current` marker."""
+    actually getting. The value line is built from `resolvedValue` through
+    `resolvedLabel` -- so a row following the default names the value the
+    camera will actually get, even though no option is marked selected."""
     js = JS.read_text()
     body = _function_body(js, "settingRowHtml")
-    assert body.count("resolvedValue") >= 2
+    assert body.count("resolvedValue") >= 1
+    assert "resolvedLabel" in body
+    assert "valueLabel" in body
 
 
 def test_the_connection_row_reads_the_backends_resolved_path():
@@ -382,10 +390,13 @@ def test_switching_connection_confirms_inside_the_sheet():
 
 def test_the_chip_is_not_on_a_card_that_cannot_play():
     """The preview-preference chip only makes sense over a picture that can
-    actually play -- a blocked card has no picture for it to change."""
+    actually play -- a blocked card has no picture for it to change. (The
+    playable branch no longer carries a "tap to view" placeholder line: the
+    play button is the whole invitation, and the text used to sit behind
+    the button, overlapping it.)"""
     js = JS.read_text()
     idle = js.split("function previewIdleHtml", 1)[1].split("\n}", 1)[0]
-    blocked, playable = idle.split('return `<div class="placeholder"', 1)
+    blocked, playable = idle.split('return `<div class="blocked"', 1)
     assert "prefChipHtml" not in blocked
     assert "prefChipHtml" in playable
 
