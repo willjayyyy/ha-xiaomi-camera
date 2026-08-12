@@ -638,11 +638,13 @@ function closeSettingRows(container) {
   });
 }
 
-//: Fields not stored by the add-on: shown in the sheet's own group, wired
-//: through the same row component, but resolved through `SETTINGS_FIELDS`
-//: only for the three the add-on owns. Both are consulted by
-//: `wireSettingRows`'s click handler above via `row._field`, set at render
-//: time for these two rows since they have no place in `SETTINGS_FIELDS`.
+//: Fields not stored by the add-on: rendered by `prefChipHtml` in the pill
+//: floating on the picture, not in the camera sheet -- these two change
+//: only the pictures this browser is being sent, so they live where that is
+//: visible rather than among settings that change the camera for every
+//: consumer. Built through the same `field()`/`segment()` components as
+//: `SETTINGS_FIELDS`, but resolved through `SETTINGS_FIELDS` itself only for
+//: the three the add-on owns.
 function previewFpsField(camera) {
   return field("fps", "prefFps", (raw) => Number(raw), () =>
     fpsChoices(camera).map((c) => ({ value: String(c.value), label: c.label })));
@@ -965,8 +967,11 @@ function renderSettingsSheetBody(body) {
 }
 
 // ---------------------------------------------------------------------------
-// The camera sheet -- one camera's overrides, plus this viewer's own
-// preview preferences underneath, in their own group.
+// The camera sheet -- one camera's own overrides, the settings that change
+// what every consumer of this camera gets. This viewer's own preview
+// preferences (frame rate, detail) are deliberately not here: they float on
+// the picture itself, in the pill `prefChipHtml` builds -- see its own
+// comment for why.
 // ---------------------------------------------------------------------------
 
 //: The camera whose sheet is open, if any -- read by `applyDefaultChange` so
