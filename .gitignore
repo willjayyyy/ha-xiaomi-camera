@@ -3,6 +3,9 @@
 .idea/
 .vscode/
 
+# Node (the add-on web UI's Svelte build)
+node_modules/
+
 # Python
 __pycache__/
 *.pyc

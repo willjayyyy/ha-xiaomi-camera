@@ -1,0 +1,14 @@
+{
+  "name": "xiaomi-camera-bridge-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "svelte": "^5.56.8",
+    "vite": "^8.2.1"
+  }
+}

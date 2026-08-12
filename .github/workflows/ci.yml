@@ -2,11 +2,32 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/*"]
   pull_request:
   workflow_dispatch:
 
 jobs:
+  # The add-on ships a pre-built web UI (`addon/rootfs/app/web`); a change to
+  # the Svelte source that forgets to rebuild would sail into the image with
+  # CI green (the image build only compares versions, never hashes source).
+  # Building here and diffing the committed output makes that a failure
+  # instead.
+  web-build:
+    name: Web build is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install and build
+        run: |
+          cd addon/web
+          npm ci
+          npm run build
+      - name: Committed output must match the fresh build
+        run: git diff --exit-code addon/rootfs/app/web
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
