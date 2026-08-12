@@ -126,7 +126,11 @@ class Bridge:
         that changes its keyframe interval -- firmware does this when the
         resolution or the scene changes -- is judged on what it sends now.
         `None` while nothing is running or nothing has been measured, which
-        callers must read as "unknown" rather than as "often".
+        callers must read as "unknown" rather than as "often" -- and equally
+        for a camera on compatibility mode, which has no vendor session to
+        measure and never will. `session_for` refuses those by raising, and
+        this is a hint read while opening a preview: it must answer "unknown"
+        rather than take the preview down with it.
         """
         sessions = self._sessions
         registry = self._registry
@@ -135,7 +139,11 @@ class Bridge:
         info = registry.get(did)
         if info is None:
             return None
-        return sessions.session_for(info).stats.keyframe_interval
+        try:
+            session = sessions.session_for(info)
+        except ValueError:
+            return None
+        return session.stats.keyframe_interval
 
     async def async_start(self) -> None:
         await self._api.async_start()

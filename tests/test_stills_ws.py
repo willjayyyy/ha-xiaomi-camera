@@ -78,6 +78,9 @@ def _api(previews, *, powered_on: bool | None = True, switch=None) -> BridgeApi:
         def get(self, did: str) -> object | None:
             return _Camera() if did == "42" else None
 
+        def is_publishable(self, did: str) -> bool:
+            return did == "42"
+
         def power_state(self, did: str) -> bool | None:
             return switch["powered_on"] if switch else powered_on
 
@@ -351,6 +354,9 @@ class TestASettingsChangeTellsOpenPreviewsItIsReloading:
             def get(self, did: str) -> object | None:
                 return _Camera(did) if did in self._dids else None
 
+            def is_publishable(self, did: str) -> bool:
+                return did in self._dids
+
             def power_state(self, did: str) -> bool | None:
                 return True
 
@@ -421,5 +427,76 @@ class TestASettingsChangeTellsOpenPreviewsItIsReloading:
             # The reload itself still happened -- the notify is additional,
             # not a replacement for reopening the session.
             assert sessions.reloaded == ["42"]
+        finally:
+            await client.close()
+
+
+class TestACompatibilityModeCameraCanBePreviewed:
+    """The preview is gated on the camera being publishable, not on a vendor
+    session existing.
+
+    Pictures come from the add-on's own published RTSP stream (`Stills` reads
+    `Restreamer.internal_rtsp_url`), which go2rtc serves under the same name
+    whichever path fills it. `SessionManager` speaks only the vendor SDK, so
+    gating here on one made every compatibility-mode camera unpreviewable --
+    a 404 for a model the vendor library refuses (it has no `MIoTCameraInfo`
+    at all) and an uncaught 500 for a supported one switched over (its
+    `session_for` raises). Confirming the compatibility mode you just set up
+    is the whole reason the preview is there.
+    """
+
+    @staticmethod
+    def _api_for_compat(previews: _Previews) -> BridgeApi:
+        class _Registry:
+            def get(self, did: str) -> object | None:
+                # A model the vendor library refuses is absent from the
+                # vendor camera list -- there is no session object to hand
+                # out and never will be.
+                return None
+
+            def is_publishable(self, did: str) -> bool:
+                return did == "42"
+
+            def power_state(self, did: str) -> bool | None:
+                return True
+
+            async def async_read_power_state(self, did: str) -> bool | None:
+                return True
+
+        class _Sessions:
+            def session_for(self, info: object) -> object:
+                raise ValueError("not on the Xiaomi official path")
+
+        return BridgeApi(
+            account=None,
+            registry_provider=_Registry,
+            sessions_provider=_Sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=previews,
+        )
+
+    async def test_it_sends_pictures(self) -> None:
+        previews = _Previews([_JPEG])
+        client = await _client(self._api_for_compat(previews))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.type is WSMsgType.BINARY
+                assert message.data == _JPEG
+        finally:
+            await client.close()
+
+    async def test_a_camera_that_cannot_be_published_is_still_refused(self) -> None:
+        """Widening the gate must not open it to a camera with no path at
+        all -- there is no stream behind its name for ffmpeg to read."""
+        previews = _Previews([_JPEG])
+        client = await _client(self._api_for_compat(previews))
+        try:
+            with pytest.raises(Exception) as caught:
+                async with client.ws_connect("/api/preview/99/ws"):
+                    pass
+            assert "404" in str(caught.value)
         finally:
             await client.close()

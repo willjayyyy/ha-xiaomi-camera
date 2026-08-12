@@ -446,8 +446,13 @@ class BridgeApi:
 
     async def _snapshot(self, request: web.Request) -> web.StreamResponse:
         did = request.match_info["did"]
-        session = self._session_for(did)
-        if session is None:
+        # Gated on the camera being publishable, not on a vendor session
+        # existing: this picture is decoded from the add-on's own published
+        # RTSP stream (see `Stills`), which go2rtc serves under the same name
+        # on either path. Home Assistant fetches this for the entity picture,
+        # so gating it on the vendor SDK left every compatibility-mode camera
+        # permanently blank.
+        if not self._publishable(did):
             raise web.HTTPNotFound(text=f"unknown camera {did}")
         # Asked before anything is started, and only for a definite "off":
         # such a camera answers every call and sends nothing, so waiting for a
@@ -822,8 +827,13 @@ class BridgeApi:
         applies to it only when it next reconnects.
         """
         did = request.match_info["did"]
-        if self._session_for(did) is None:
-            _LOGGER.warning("preview ws refused: no session for %s", did)
+        # Publishable, not "has a vendor session" -- see `_snapshot` for why
+        # the two are different questions and why only the first one is this
+        # one. A compatibility-mode camera has no vendor session and never
+        # will, and refusing its preview left the user with no way at all to
+        # confirm that compatibility mode had worked.
+        if not self._publishable(did):
+            _LOGGER.warning("preview ws refused: %s cannot be published", did)
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
@@ -1090,6 +1100,14 @@ class BridgeApi:
         if registry is None:
             return None
         return registry.power_state(did)
+
+    def _publishable(self, did: str) -> bool:
+        """Whether this camera may be streamed -- delegated to the registry,
+        which owns the one answer (see `CameraRegistry.is_publishable`)."""
+        registry: CameraRegistry | None = self._registry_provider()
+        if registry is None:
+            return False
+        return registry.is_publishable(did)
 
     def _session_for(self, did: str):
         registry: CameraRegistry | None = self._registry_provider()

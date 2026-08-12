@@ -195,3 +195,26 @@ async def test_compat_urls_are_fetched_only_when_a_camera_needs_them(
 
     assert calls == ["cn"]
 
+
+async def test_the_keyframe_hint_is_unknown_for_a_camera_off_the_official_path() -> (
+    None
+):
+    """`Stills` reads this while opening a preview, so it must degrade rather
+    than raise.
+
+    `SessionManager.session_for` refuses anything not on the official path by
+    raising -- there is no vendor session to measure a compatibility-mode
+    camera's keyframe interval with, and there never will be. "Unknown" is a
+    value this hint already has and callers already handle; an exception here
+    would take down the preview it was being opened for.
+    """
+
+    class _RefusingSessions:
+        def session_for(self, info):
+            raise ValueError("not on the Xiaomi official path")
+
+    bridge = _bridge_with(_FakeRegistry(), _FakeRestreamer(), _FakeSettings())
+    bridge._sessions = _RefusingSessions()
+    bridge._registry = SimpleNamespace(get=lambda did: SimpleNamespace(did=did))
+
+    assert bridge._keyframe_interval("aaa") is None

@@ -213,6 +213,27 @@ class CameraRegistry:
     def get(self, did: str) -> MIoTCameraInfo | None:
         return self._cameras.get(did)
 
+    def is_publishable(self, did: str) -> bool:
+        """Whether this camera may be streamed at all, asked by did.
+
+        The same question :attr:`CameraDescription.publishable` answers, off
+        the same :meth:`_path_for`, for callers that hold a did and no
+        description -- the preview socket and the snapshot endpoint, whose
+        pictures come from this add-on's own published RTSP stream and so
+        exist on either path.
+
+        Those two used to gate on a vendor session existing instead, which is
+        a narrower question with a different answer: :class:`SessionManager`
+        speaks only the vendor SDK, so every compatibility-mode camera failed
+        it -- a refused model with a 404 and a supported one switched to
+        compatibility mode with an uncaught 500 on a blank entity picture.
+        ``False`` for a did that is not on the account at all, which is what
+        callers turn into their "unknown camera" answer.
+        """
+        if did not in self._all_devices and did not in self._cameras:
+            return False
+        return self._path_for(did) is not None
+
     def power_state(self, did: str) -> bool | None:
         """This camera's lens switch as of the last refresh.
 

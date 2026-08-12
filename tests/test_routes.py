@@ -119,19 +119,30 @@ class _Camera:
     """Stands in for `CameraDescription` -- only what `_cameras` reads.
 
     `support` defaults to `"full"`, matching every existing test's
-    assumption of a working camera; `publishable` is derived from it exactly
-    as the real `CameraDescription.publishable` is, so a double built with
-    `support="unsupported"` behaves like a refused camera on both the
+    assumption of a working camera; `publishable` is derived from `path`
+    exactly as the real `CameraDescription.publishable` is, so a double built
+    with `support="unsupported"` behaves like a refused camera on both the
     filtering path and the JSON body.
+
+    `path` is separable from `support` because the real thing separates them:
+    a refused model the user put on compatibility mode is `unsupported` and
+    publishable at once, which is the whole point of that mode.
     """
 
-    def __init__(self, did: str, support: str = "full") -> None:
+    _NO_PATH = object()
+
+    def __init__(self, did: str, support: str = "full", path=_NO_PATH) -> None:
         self.did = did
         self.support = support
+        self.path = (
+            (VideoPath.OFFICIAL if support == "full" else None)
+            if path is self._NO_PATH
+            else path
+        )
 
     @property
     def publishable(self) -> bool:
-        return self.support == "full"
+        return self.path is not None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -166,6 +177,10 @@ class _Registry:
 
     def get(self, did: str) -> _Camera | None:
         return self._cameras.get(did)
+
+    def is_publishable(self, did: str) -> bool:
+        camera = self._cameras.get(did)
+        return camera is not None and camera.publishable
 
     def power_state(self, did: str) -> bool | None:
         return True
@@ -765,3 +780,67 @@ async def test_the_attempted_password_is_never_logged(
     message = failure_records[0].getMessage()
     assert "127.0.0.1" in message
     assert "1 failed attempt" in message
+
+
+# ----------------------------------------------------------------------
+# The snapshot endpoint on a compatibility-mode camera.
+#
+# Home Assistant fetches `/api/snapshot/<did>` for the entity picture, so a
+# camera that cannot answer it is permanently blank in the interface. The
+# picture is decoded from the add-on's own published RTSP stream, which
+# exists on either path -- but the endpoint used to demand a vendor session,
+# which no compatibility-mode camera has: a refused model got a 404 and a
+# supported one switched over got an uncaught 500.
+# ----------------------------------------------------------------------
+
+
+class _Previews:
+    """Stands in for `Stills` -- one still, no decoder."""
+
+    def __init__(self) -> None:
+        self.asked: list[str] = []
+
+    async def async_still(self, did: str, max_age: float | None = None) -> bytes:
+        self.asked.append(did)
+        return b"\xff\xd8jpeg\xff\xd9"
+
+
+@pytest.fixture
+async def _snapshot_client(tmp_path: Path):
+    """The control listener -- the one Home Assistant reads -- whose `bbb` is
+    a refused model parked on compatibility mode: `support="unsupported"`,
+    and publishable all the same."""
+    api = _build_bridge(
+        tmp_path,
+        extra=[
+            _Camera("bbb", support="unsupported", path=VideoPath.COMPAT),
+            _Camera("ccc", support="unsupported"),
+        ],
+    )
+    previews = _Previews()
+    api._previews = previews
+    client = TestClient(TestServer(api.build_control_app()))
+    await client.start_server()
+    try:
+        yield client, previews
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_a_compatibility_mode_camera_has_a_snapshot(_snapshot_client):
+    client, previews = _snapshot_client
+    response = await client.get("/api/snapshot/bbb")
+    assert response.status == 200
+    assert response.content_type == "image/jpeg"
+    assert previews.asked == ["bbb"]
+
+
+@pytest.mark.asyncio
+async def test_a_camera_with_no_path_has_no_snapshot(_snapshot_client):
+    """Widening the gate to "publishable" must not widen it to everything:
+    a camera with no resolved path has no published stream to decode."""
+    client, previews = _snapshot_client
+    response = await client.get("/api/snapshot/ccc")
+    assert response.status == 404
+    assert previews.asked == []
