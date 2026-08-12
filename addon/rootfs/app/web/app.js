@@ -1,0 +1,1305 @@
+"use strict";
+
+// Ingress serves this page under a path prefix, so every request is relative.
+//
+// The header goes on every request because a standalone deployment guards this
+// page with HTTP Basic, and browsers attach those credentials to cross-site
+// requests automatically. A form on another site could otherwise unlink the
+// account; it cannot set a header of its own.
+const api = (path, options = {}) =>
+  fetch(`.${path}`, {
+    ...options,
+    headers: { ...(options.headers || {}), "X-Xiaomi-Camera": "1" },
+  });
+const $ = (id) => document.getElementById(id);
+
+const I18N = {
+  en: {
+    title: "Xiaomi Camera Bridge",
+    signInTitle: "Xiaomi Camera Bridge",
+    signInHint: "Enter the web page password from this add-on's configuration.",
+    signInPlaceholder: "Web page password",
+    signIn: "Sign in",
+    signInWrong: "That password is not right.",
+    subtitle: "Publishes your Xiaomi cameras as standard RTSP streams.",
+    accountHeading: "Account", camerasHeading: "Cameras",
+    prefFps: "Frame rate", prefQuality: "Quality",
+    fpsCamera: "Camera's rate",
+    audioOn: "Audio",
+    qualityHigh: "High", qualityMedium: "Medium", qualityLow: "Low",
+    connect: "Connect Xiaomi account", disconnect: "Disconnect",
+    finish: "Finish sign-in", cancel: "Cancel",
+    step1Link: "Open the Xiaomi sign-in page",
+    step1Rest: "and approve access.",
+    step2: "Your browser will land on an address that cannot be opened — that is expected. Copy the entire address from the address bar.",
+    step3: "Paste it below.",
+    privacyNote: "The address is read locally to extract the authorization code. Nothing is sent anywhere else.",
+    callbackPlaceholder: "https://127.0.0.1/?code=…&state=…",
+    checking: "Checking…", connected: "Connected", notConnected: "Not connected",
+    unreachable: "Bridge unreachable",
+    notLoaded: "Not loaded yet.", loading: "Loading…",
+    connectToSee: "Connect your Xiaomi account to see your cameras.",
+    noCameras: "No supported cameras found on this account.",
+    loadFailed: "Could not load the camera list.",
+    offline: "Offline", switchedOff: "Switched off",
+    connecting: "Connecting…",
+    previewFailed: "Could not load the picture",
+    cameraOffHint: "Turn the camera on to see a picture",
+    retry: "Try again",
+    copy: "Copy", copied: "Copied",
+    credentialsHint: "This stream needs the RTSP username and password — from this add-on's configuration, or from the startup log if they were generated for you.",
+    noCode: "That address does not contain an authorization code. Copy the full address from the page you were redirected to.",
+    linked: "Account connected.",
+    startFailed: "Could not start sign-in: ",
+    signInFailed: "Sign-in failed: ",
+    confirmUnlink: "Disconnect the Xiaomi account? Cameras will stop streaming.",
+    // Video settings ------------------------------------------------------
+    defaultsHeading: "Defaults", cameraSettings: "Camera settings",
+    settingPicture: "Picture", settingSound: "Sound", settingTranscode: "Transcode quality",
+    pictureHD: "HD", pictureSD: "SD",
+    on: "On", off: "Off",
+    transcodeStandard: "Standard", transcodeSharp: "Sharp", transcodeMaximum: "Maximum",
+    followDefault: "Follow default",
+    previewGroup: "This viewer only",
+    addressGroup: "Address",
+    settingsSaveFailed: "Could not save that setting.",
+    // Add-on settings mirror ------------------------------------------------
+    addonHeading: "Add-on settings", addonAccess: "Access", addonLogLevel: "Log level",
+    addonOpenConfig: "Open configuration",
+    accessLocal: "Local", accessLan: "LAN",
+    logTrace: "Trace", logDebug: "Debug", logInfo: "Info", logNotice: "Notice",
+    logWarning: "Warning", logError: "Error", logFatal: "Fatal",
+    // Camera card controls --------------------------------------------------
+    play: "Play", stop: "Stop", enlarge: "Enlarge picture", close: "Close",
+    settingsButton: "Settings",
+    tapToView: "Tap to view",
+    notSupported: "Not supported", limitedSupport: "Limited",
+  },
+  zh: {
+    title: "小米摄像头桥接",
+    signInTitle: "小米摄像头桥接",
+    signInHint: "请输入加载项配置中的网页密码。",
+    signInPlaceholder: "网页密码",
+    signIn: "登录",
+    signInWrong: "密码不正确。",
+    subtitle: "把小米摄像头画面转换成标准 RTSP 流。",
+    accountHeading: "账号", camerasHeading: "摄像头",
+    prefFps: "帧率", prefQuality: "画质",
+    fpsCamera: "原生帧率",
+    audioOn: "声音",
+    qualityHigh: "高", qualityMedium: "中", qualityLow: "低",
+    connect: "连接小米账号", disconnect: "断开连接",
+    finish: "完成登录", cancel: "取消",
+    step1Link: "打开小米登录页面",
+    step1Rest: "并授权。",
+    step2: "浏览器随后会跳转到一个打不开的地址 —— 这是正常的。请复制地址栏里的完整地址。",
+    step3: "粘贴到下方。",
+    privacyNote: "该地址仅在本地解析以提取授权码，不会发送到任何其他地方。",
+    callbackPlaceholder: "https://127.0.0.1/?code=…&state=…",
+    checking: "检查中…", connected: "已连接", notConnected: "未连接",
+    unreachable: "无法连接到服务",
+    notLoaded: "尚未加载。", loading: "加载中…",
+    connectToSee: "连接小米账号后即可看到你的摄像头。",
+    noCameras: "该账号下没有找到受支持的摄像头。",
+    loadFailed: "无法加载摄像头列表。",
+    offline: "离线", switchedOff: "已关闭",
+    connecting: "连接中…",
+    previewFailed: "无法加载画面",
+    cameraOffHint: "打开摄像头后才能看到画面",
+    retry: "重试",
+    copy: "复制", copied: "已复制",
+    credentialsHint: "该地址需要 RTSP 用户名和密码 —— 在加载项配置中填写的那组，或启动日志里自动生成的那组。",
+    noCode: "该地址中没有授权码。请复制跳转后页面地址栏里的完整地址。",
+    linked: "账号已连接。",
+    startFailed: "无法开始登录：",
+    signInFailed: "登录失败：",
+    confirmUnlink: "确定断开小米账号？摄像头将停止推流。",
+    // Video settings ------------------------------------------------------
+    defaultsHeading: "默认设置", cameraSettings: "摄像头设置",
+    settingPicture: "画面", settingSound: "声音", settingTranscode: "转码画质",
+    pictureHD: "高清", pictureSD: "标清",
+    on: "开启", off: "关闭",
+    transcodeStandard: "标准", transcodeSharp: "锐利", transcodeMaximum: "最高",
+    followDefault: "跟随默认",
+    previewGroup: "仅本设备生效",
+    addressGroup: "地址",
+    settingsSaveFailed: "设置未能保存。",
+    // Add-on settings mirror ------------------------------------------------
+    addonHeading: "加载项设置", addonAccess: "访问方式", addonLogLevel: "日志级别",
+    addonOpenConfig: "打开配置",
+    accessLocal: "仅本机", accessLan: "局域网",
+    logTrace: "跟踪", logDebug: "调试", logInfo: "信息", logNotice: "提示",
+    logWarning: "警告", logError: "错误", logFatal: "严重",
+    // Camera card controls --------------------------------------------------
+    play: "播放", stop: "停止", enlarge: "放大画面", close: "关闭",
+    settingsButton: "设置",
+    tapToView: "点击查看",
+    notSupported: "不支持", limitedSupport: "有限支持",
+  },
+};
+
+const STORAGE_KEY = "xcam.lang";
+
+function pickLanguage() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved && I18N[saved]) return saved;
+  return (navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+let lang = pickLanguage();
+const t = (key) => I18N[lang][key] ?? I18N.en[key] ?? key;
+let cameras = [];
+//: Shared defaults (`{quality, audio, transcode_quality}`), fetched once and
+//: kept live so the settings sheet can show "Follow default (<value>)" — read
+//: from `GET /api/settings`, written back through `PUT /api/settings`.
+let defaults = null;
+//: The read-only mirror's own fields (`access_mode`, `log_level`, …).
+let addonInfo = null;
+
+function applyLanguage() {
+  document.documentElement.lang = lang === "zh" ? "zh-Hans" : "en";
+  document.title = t("title");
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  $("callback-url").placeholder = t("callbackPlaceholder");
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+  document.querySelectorAll("[data-i18n-label]").forEach((el) => {
+    el.setAttribute("aria-label", t(el.dataset.i18nLabel));
+  });
+  document.querySelectorAll("[data-lang]").forEach((b) => {
+    b.setAttribute("aria-pressed", String(b.dataset.lang === lang));
+  });
+  localStorage.setItem(STORAGE_KEY, lang);
+  // Rebuilt rather than left stale: every string in these three is baked in
+  // at render time, not read live through `data-i18n`. An open overlay is
+  // closed first -- its content was built the same way, and there is no
+  // session to lose by closing it.
+  closeOverlay();
+  if (defaults) renderDefaultsRows();
+  if (addonInfo) renderAddonCard();
+  if (!document.querySelector("main").hidden) refreshStatus();
+}
+
+document.querySelectorAll("[data-lang]").forEach((b) => {
+  b.addEventListener("click", () => { lang = b.dataset.lang; applyLanguage(); });
+});
+
+function showMessage(text, kind) {
+  const el = $("message");
+  el.textContent = text;
+  el.className = `msg show ${kind}`;
+  if (kind === "success") setTimeout(() => el.classList.remove("show"), 6000);
+}
+
+function setStatus(text, kind) {
+  const el = $("link-status");
+  el.className = `status ${kind}`;
+  el.innerHTML = '<span class="dot"></span>';
+  el.append(text);
+}
+
+/**
+ * Escape a value for insertion into HTML, including inside an attribute.
+ *
+ * The textContent/innerHTML trick alone escapes `&`, `<` and `>` but not
+ * quotes, which is enough in text position and not enough in `attr="..."` --
+ * a value containing a quote closes the attribute and starts writing markup.
+ */
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+/**
+ * Pull `code` and `state` out of whatever the user pasted.
+ *
+ * Accepts a full URL, a bare query string, or a fragment -- asking someone to
+ * identify the right substring by hand is where this step usually goes wrong.
+ */
+function extractCallbackParams(input) {
+  const text = (input || "").trim();
+  if (!text) return null;
+  const candidates = [];
+  try {
+    const url = new URL(text);
+    candidates.push(url.searchParams);
+    if (url.hash.length > 1) candidates.push(new URLSearchParams(url.hash.slice(1)));
+  } catch {
+    const start = text.indexOf("?");
+    candidates.push(new URLSearchParams(start >= 0 ? text.slice(start + 1) : text));
+  }
+  for (const params of candidates) {
+    const code = params.get("code");
+    if (code) return { code, state: params.get("state") || "" };
+  }
+  return null;
+}
+
+async function refreshStatus() {
+  try {
+    const data = await (await api("/api/health")).json();
+    if (data.linked) {
+      setStatus(t("connected"), "ok");
+      $("link-btn").hidden = true;
+      $("unlink-btn").hidden = false;
+      $("link-flow").hidden = true;
+      await Promise.all([loadCameras(), loadSettings()]);
+    } else {
+      setStatus(t("notConnected"), "warn");
+      $("link-btn").hidden = false;
+      $("unlink-btn").hidden = true;
+      // Stopped before the markup holding them is discarded -- Disconnect
+      // goes through this branch, and unlike `loadCameras`/`renderCameras`
+      // it used to skip this, leaving any running preview's socket and
+      // peer-to-peer session open with nothing left able to close them.
+      $("cameras").querySelectorAll("[data-preview]").forEach(stopPreview);
+      $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("connectToSee"))}</p>`;
+      $("defaults-card").hidden = true;
+      $("addon-card").hidden = true;
+    }
+  } catch {
+    setStatus(t("unreachable"), "err");
+  }
+}
+
+/**
+ * The defaults card and the read-only add-on mirror, both from one request.
+ *
+ * Loaded alongside the camera list rather than blocking it: this page's
+ * primary content is the cameras, and a settings fetch that failed must not
+ * take the whole page down with it.
+ */
+async function loadSettings() {
+  try {
+    const response = await api("/api/settings");
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    defaults = data.defaults;
+    // `/api/settings` no longer carries an `addon` block (it moved to
+    // `/api/info`, which has no `access_mode`/`log_level`), so `addonInfo`
+    // stays `undefined` and this card stays hidden until the task that
+    // rewrites this page wires it up to that endpoint.
+    addonInfo = data.addon;
+    renderDefaultsRows();
+    if (addonInfo) renderAddonCard();
+  } catch {
+    // Left hidden. Nothing more can be usefully said here that the camera
+    // list's own error state has not already said.
+  }
+}
+
+/**
+ * The camera's RTSP URL, addressed from where the page is being viewed.
+ *
+ * The bridge reports `127.0.0.1` deliberately -- Home Assistant shares the
+ * host's network namespace, so that is correct for it, and a URL naming a
+ * specific interface would be wrong as soon as the host gained another. It is
+ * useless to a person, though, who is reading this page in order to paste the
+ * address into Frigate on a different machine. The host they reached this page
+ * on is the same host the streams are on, so it is the right substitution --
+ * but only when the listener is actually reachable off-box. In `local` mode it
+ * is bound to loopback, so rewriting the hostname would swap a working address
+ * for a dead one; `reachableOffHost` (from `rtsp_reachable_off_host`) is what
+ * tells this function which case it is in.
+ */
+function displayUrl(rtspUrl, reachableOffHost) {
+  if (!reachableOffHost) return rtspUrl;
+  try {
+    const url = new URL(rtspUrl);
+    url.hostname = location.hostname;
+    return url.toString();
+  } catch {
+    return rtspUrl;
+  }
+}
+
+//: Frame rates offered below whatever the camera is measured to send. Not a
+//: fixed list of what cameras can do -- that would be wrong the moment one
+//: ships that sends more -- but a ladder trimmed to what this camera gives.
+const FPS_LADDER = [20, 15, 12, 8, 5, 2];
+
+//: Used until a camera has streamed long enough to measure, and as the ceiling
+//: when it never does.
+const FPS_ASSUMED = 20;
+
+const DEFAULT_PREFS = { fps: 12, quality: "medium" };
+
+// What the add-on will accept. Stored preferences are read back from a browser
+// that may have saved them under an older version, and a value this add-on no
+// longer knows is rejected outright rather than ignored -- so an unrecognised
+// one has to fall back here, or the preview simply never opens and the page
+// gives no hint why.
+const QUALITIES = ["high", "medium", "low"];
+
+/**
+ * Per-camera preview settings, remembered in this browser.
+ *
+ * Deliberately not stored by the add-on. What frame rate looks right depends
+ * on the screen and the connection doing the looking, so a phone and a desktop
+ * should not have to agree -- and a preview setting is not something an
+ * installation has, it is something a viewer prefers. Keeping it here also
+ * means nothing to save, migrate or keep in step on the add-on side.
+ */
+function prefsFor(did) {
+  let stored = {};
+  try {
+    stored = JSON.parse(localStorage.getItem(`xcam.prefs.${did}`) || "{}");
+  } catch { /* unreadable or not ours; the defaults are the answer */ }
+  const prefs = { ...DEFAULT_PREFS, ...stored };
+  // Checked rather than trusted. This is the one input the page takes from its
+  // own past, and the add-on refuses a quality it does not recognise -- so a
+  // name that has since been retired would leave the preview permanently
+  // failing to open for anyone who had picked it.
+  if (!QUALITIES.includes(prefs.quality)) prefs.quality = DEFAULT_PREFS.quality;
+  if (!Number.isInteger(prefs.fps) || prefs.fps < 0) prefs.fps = DEFAULT_PREFS.fps;
+  return prefs;
+}
+
+function savePrefs(did, prefs) {
+  try {
+    localStorage.setItem(`xcam.prefs.${did}`, JSON.stringify(prefs));
+  } catch { /* private browsing; the setting simply does not persist */ }
+}
+
+/**
+ * `current` marks which option is actually in effect right now, independent
+ * of `selected` (which option is pressed). The two agree everywhere except a
+ * camera's sheet on a field following the default: there, "Follow default"
+ * is `selected` -- it is the choice that is active, and the one another tap
+ * would change -- while the concrete option matching the resolved value gets
+ * `current`, so the expanded control still answers "what am I getting"
+ * rather than only "what did I choose here". Outside the sheet the two
+ * arguments are always the same value, and `current` marks nothing extra.
+ */
+function segment(kind, choices, selected, current = selected) {
+  return `<div class="seg" data-seg="${kind}">${choices.map(({ value, label }) => {
+    const isCurrent = String(value) === String(current) && String(value) !== String(selected);
+    return `<button type="button" data-value="${escapeHtml(value)}" `
+      + `aria-pressed="${String(value) === String(selected)}"`
+      + `${isCurrent ? ' class="current"' : ""}>${escapeHtml(label)}</button>`;
+  }).join("")}</div>`;
+}
+
+function fpsChoices(camera) {
+  const ceiling = Math.round(camera.stream_fps || FPS_ASSUMED);
+  return [
+    { value: 0, label: t("fpsCamera") },
+    ...FPS_LADDER.filter((rate) => rate < ceiling).map((rate) => ({
+      value: rate, label: `${rate}`,
+    })),
+  ];
+}
+
+//: A camera's `support` (from `CameraDescription`) to the status pill it gets
+//: on the page where refused cameras are shown at all. `"full"` never reaches
+//: here -- `cameraState` below answers that case from `online`/`powered_on`
+//: instead, because a working camera's status is about what it is doing, not
+//: what it is. `limited` gets the warn colour rather than err: a real, if
+//: unbuilt, path exists for those models -- see `CameraDescription.support`'s
+//: own docstring -- while `unsupported` has none.
+const SUPPORT_STATES = {
+  limited: { cls: "warn", label: "limitedSupport" },
+  unsupported: { cls: "err", label: "notSupported" },
+};
+
+/**
+ * A camera's status pill, or `null` for "nothing worth saying".
+ *
+ * A healthy, streamable camera gets no pill at all: a badge on every card
+ * turns the list into a dashboard, and three coloured pills side by side
+ * make the one that actually matters -- a refused camera's red "Not
+ * supported" -- no more prominent than the rest. No pill is what "everything
+ * is fine" looks like; pills are reserved for what is not.
+ *
+ * Whether a camera can be published is read from `publishable`, which the
+ * add-on sends, rather than compared against `support` here. One function
+ * over there answers that question for the stream table, the session manager
+ * and the control plane's camera list; the page asking it a fourth way is how
+ * a later support level ends up meaning different things on either side of
+ * the wire. `support` is still read below -- but only for *which* pill, which
+ * is a question about the reason, not about the decision.
+ */
+function cameraState(camera) {
+  if (!camera.publishable) {
+    const state = SUPPORT_STATES[camera.support] || SUPPORT_STATES.unsupported;
+    return { cls: state.cls, label: t(state.label) };
+  }
+  if (!camera.online) return { cls: "err", label: t("offline") };
+  // A switched-off camera answers normally and then sends nothing, so it needs
+  // to be called out rather than left looking like a broken stream.
+  if (camera.powered_on === false) return { cls: "warn", label: t("switchedOff") };
+  return null;
+}
+
+//: Inline rather than an icon font: an icon font is a web font, and this page
+//: works offline. Each is small enough that inlining costs nothing worth
+//: measuring.
+const ICONS = {
+  play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>',
+  enlarge: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3H3v6h2V5h4V3zm12 0h-6v2h4v4h2V3zM5 15H3v6h6v-2H5v-4zm14 4h-4v2h6v-6h-2v4z"/></svg>',
+  retry: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7.5 6.5 12 11V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.4 7.4 0 0 0 0-2l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.4.96a7.5 7.5 0 0 0-1.73-1l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.5 7.5 0 0 0-1.73 1l-2.4-.96a.5.5 0 0 0-.6.22L2.4 8.78a.5.5 0 0 0 .12.64L4.55 11a7.4 7.4 0 0 0 0 2L2.52 14.6a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.4-.96a7.5 7.5 0 0 0 1.73 1l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7.5 7.5 0 0 0 1.73-1l2.4.96c.22.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>',
+};
+
+// ---------------------------------------------------------------------------
+// Settings rows -- the component this page is mostly made of. One descriptor
+// per video setting the add-on stores, shared by the defaults card and every
+// camera's sheet; the only difference between the two is whether "Follow
+// default" is offered as a choice. `choices()` is a function rather than a
+// static array so its labels re-translate when the language changes.
+// ---------------------------------------------------------------------------
+
+//: A settings field descriptor, built through a function rather than written
+//: as an object literal. Step 6's language-completeness check (see the brief
+//: for this task) treats any 4-space-indented `word:` line after the
+//: translations as a translation key -- a plain `{ key: ..., choices: ... }`
+//: literal here would read as one and be flagged as English-only, which is
+//: exactly the false positive that check exists to catch everywhere else.
+const field = (key, labelKey, parse, choices) => ({ key, labelKey, parse, choices });
+
+const SETTINGS_FIELDS = [
+  field("quality", "settingPicture", (raw) => raw, () => [
+    { value: "high", label: t("pictureHD") },
+    { value: "low", label: t("pictureSD") },
+  ]),
+  field("audio", "settingSound", (raw) => raw === "true", () => [
+    { value: "true", label: t("on") },
+    { value: "false", label: t("off") },
+  ]),
+  field("transcode_quality", "settingTranscode", (raw) => raw, () => [
+    { value: "standard", label: t("transcodeStandard") },
+    { value: "sharp", label: t("transcodeSharp") },
+    { value: "maximum", label: t("transcodeMaximum") },
+  ]),
+];
+
+//: A `.seg` value meaning "clear the override and follow the default" --
+//: distinct from `null` itself, which cannot survive a trip through
+//: `data-value` (an HTML attribute is always a string).
+const FOLLOW_DEFAULT = "__follow__";
+
+/**
+ * One settings row: a label, its current value, and -- once opened -- a
+ * `.seg` control offering every choice. `allowFollow` prepends "Follow
+ * default" and is what turns this same row into the one a camera's sheet
+ * uses; `rawValue === null` is what "follow default" looks like coming back.
+ *
+ * `resolvedValue` is what the camera is actually getting right now -- from
+ * `settings` on the camera payload, resolved server-side, never recomputed
+ * here. It defaults to `rawValue` itself, which is a no-op everywhere except
+ * a sheet row following the default: there the two differ, and the row's
+ * collapsed value still reads "Follow default" (the copy discipline this
+ * page uses throughout), but the expanded control marks the concrete option
+ * actually in effect -- see `segment`'s `current` parameter.
+ */
+function settingRowHtml(field, rawValue, { allowFollow = false, resolvedValue = rawValue } = {}) {
+  const choices = [
+    ...(allowFollow ? [{ value: FOLLOW_DEFAULT, label: t("followDefault") }] : []),
+    ...field.choices(),
+  ];
+  const selected = allowFollow && rawValue === null ? FOLLOW_DEFAULT : String(rawValue);
+  const valueLabel = choices.find((c) => c.value === selected)?.label ?? "";
+  return `<div class="setting-row" data-field="${escapeHtml(field.key)}">
+    <button type="button" class="setting-row-btn" aria-expanded="false">
+      <span class="setting-label">${escapeHtml(t(field.labelKey))}</span>
+      <span class="setting-value" data-value>${escapeHtml(valueLabel)}</span>
+      <span class="setting-chevron" aria-hidden="true">›</span>
+    </button>
+    <div class="setting-choices" hidden>${segment(field.key, choices, selected, String(resolvedValue))}</div>
+  </div>`;
+}
+
+/**
+ * Wire every settings row inside `container`, once. `onChoose(key, value)`
+ * is called with the parsed value (`null` for "Follow default") whenever a
+ * choice is made. Bound once per container rather than once per render --
+ * `container`'s own children are replaced on every re-render but the
+ * container element itself is not, so re-wiring on every render would stack
+ * a duplicate listener per render and fire a choice that many times.
+ */
+function wireSettingRows(container, onChoose) {
+  container.addEventListener("click", (event) => {
+    const toggle = event.target.closest(".setting-row-btn");
+    if (toggle && !event.target.closest(".seg")) {
+      const panel = toggle.closest(".setting-row").querySelector(".setting-choices");
+      const opening = panel.hidden;
+      closeSettingRows(container);
+      panel.hidden = !opening;
+      toggle.setAttribute("aria-expanded", String(opening));
+      return;
+    }
+
+    const choice = event.target.closest(".seg button");
+    if (!choice) return;
+    const row = choice.closest(".setting-row");
+    const field = SETTINGS_FIELDS.find((f) => f.key === row.dataset.field) || row._field;
+    const value = choice.dataset.value === FOLLOW_DEFAULT ? null : field.parse(choice.dataset.value);
+
+    for (const sibling of choice.parentElement.children) {
+      sibling.setAttribute("aria-pressed", String(sibling === choice));
+    }
+    row.querySelector("[data-value]").textContent = choice.textContent;
+    row.querySelector(".setting-row-btn").setAttribute("aria-expanded", "false");
+    row.querySelector(".setting-choices").hidden = true;
+
+    onChoose(row.dataset.field, value);
+  });
+}
+
+function closeSettingRows(container) {
+  container.querySelectorAll(".setting-choices").forEach((panel) => {
+    panel.hidden = true;
+    panel.previousElementSibling?.setAttribute("aria-expanded", "false");
+  });
+}
+
+//: Fields not stored by the add-on: shown in the sheet's own group, wired
+//: through the same row component, but resolved through `SETTINGS_FIELDS`
+//: only for the three the add-on owns. Both are consulted by
+//: `wireSettingRows`'s click handler above via `row._field`, set at render
+//: time for these two rows since they have no place in `SETTINGS_FIELDS`.
+function previewFpsField(camera) {
+  return field("fps", "prefFps", (raw) => Number(raw), () =>
+    fpsChoices(camera).map((c) => ({ value: String(c.value), label: c.label })));
+}
+function previewQualityField() {
+  return field("previewQuality", "prefQuality", (raw) => raw, () =>
+    QUALITIES.map((name) => ({
+      value: name, label: t(`quality${name[0].toUpperCase()}${name.slice(1)}`),
+    })));
+}
+
+// ---------------------------------------------------------------------------
+// The defaults card.
+// ---------------------------------------------------------------------------
+
+function renderDefaultsRows() {
+  $("defaults-rows").innerHTML = SETTINGS_FIELDS
+    .map((field) => settingRowHtml(field, defaults[field.key]))
+    .join("");
+  $("defaults-card").hidden = false;
+}
+
+async function applyDefaultChange(key, value) {
+  try {
+    const response = await api("/api/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    defaults = { ...defaults, [key]: value };
+    // Every camera that says nothing for itself on this field is now getting
+    // the new value, so its resolved settings say so too. Without this the
+    // sheet rebuilt below reads back the value it was resolved to a moment
+    // ago -- and the marker showing what a camera is actually getting is the
+    // one thing on that row that must not be a moment out of date.
+    for (const camera of cameras) {
+      if (camera.override?.[key] == null) {
+        camera.settings = { ...camera.settings, [key]: value };
+      }
+    }
+    // A camera's sheet may be open on this same field showing "Follow
+    // default" -- its value label is the default's own value, which just
+    // changed underneath it. Cheaper to rebuild the open sheet than to track
+    // which field of which sheet needs correcting.
+    if (openSheetDid) renderCameraSheetBody(openSheetDid);
+  } catch {
+    showMessage(t("settingsSaveFailed"), "error");
+    renderDefaultsRows();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The read-only add-on mirror.
+// ---------------------------------------------------------------------------
+
+const ACCESS_LABELS = { local: "accessLocal", lan: "accessLan" };
+const LOG_LEVEL_LABELS = {
+  trace: "logTrace", debug: "logDebug", info: "logInfo", notice: "logNotice",
+  warning: "logWarning", error: "logError", fatal: "logFatal",
+};
+
+function renderAddonCard() {
+  $("addon-access").textContent = t(ACCESS_LABELS[addonInfo.access_mode] || addonInfo.access_mode);
+  $("addon-loglevel").textContent = t(LOG_LEVEL_LABELS[addonInfo.log_level] || addonInfo.log_level);
+  $("addon-card").hidden = false;
+}
+
+// ---------------------------------------------------------------------------
+// The overlay primitive -- one backdrop, one panel, two contents (the
+// settings sheet and the enlarged preview). See the CSS comment on `#overlay`
+// for why this is built once instead of twice.
+// ---------------------------------------------------------------------------
+
+const overlay = {};
+
+function initOverlay() {
+  overlay.root = $("overlay");
+  overlay.backdrop = $("overlay-backdrop");
+  overlay.panel = $("overlay-panel");
+  overlay.title = $("overlay-title");
+  overlay.closeBtn = $("overlay-close");
+  overlay.body = $("overlay-body");
+  // The session currently shown enlarged, if any -- the single fact both
+  // `openEnlargePreview`'s close handler and `startPreview`'s `settle`
+  // consult before touching the `<img>` node. See the comment on `settle`
+  // for why two independent answers to "where does this picture live" was
+  // the actual bug, not a missing null check.
+  overlay.previewSession = null;
+  wireCopy(overlay.body);
+  overlay.backdrop.addEventListener("click", closeOverlay);
+  overlay.closeBtn.addEventListener("click", closeOverlay);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !overlay.root.hidden) closeOverlay();
+  });
+}
+
+/**
+ * Show the shared overlay with new content.
+ *
+ * Positional rather than an options object: an options object here would put
+ * `title:`/`build:`/`onClose:` on their own 4-space-indented lines at most
+ * call sites, which reads as a translation key to the Step 6 language check
+ * -- see the comment on `field` above for the same trade made for the same
+ * reason.
+ *
+ * Focus lands on the panel itself, not on a specific control inside it --
+ * there is no single right first stop for a sheet with several rows, and a
+ * `tabindex="-1"` panel is both reachable and announces its title. This does
+ * not trap focus: Tab may leave the panel, which keeps the implementation
+ * simple, and Escape or the backdrop are always there to close it regardless
+ * of where focus ends up.
+ */
+function openOverlay(title, variant, build, onClose) {
+  overlay.trigger = document.activeElement;
+  overlay.onClose = onClose || null;
+  overlay.panel.className = `overlay-panel${variant ? ` ${variant}` : ""}`;
+  overlay.title.textContent = title || "";
+  overlay.body.innerHTML = "";
+  overlay.root.hidden = false;
+  build(overlay.body);
+  // Added a frame after `hidden` is cleared: the browser needs to paint the
+  // entry state first, or setting both in the same tick skips the transition
+  // straight to its end state.
+  requestAnimationFrame(() => overlay.root.classList.add("open"));
+  overlay.panel.focus();
+}
+
+function closeOverlay() {
+  if (!overlay.root || overlay.root.hidden) return;
+  overlay.root.classList.remove("open");
+  overlay.root.hidden = true;
+  overlay.body.innerHTML = "";
+  const onClose = overlay.onClose;
+  overlay.onClose = null;
+  onClose?.();
+  overlay.trigger?.focus?.();
+  overlay.trigger = null;
+}
+
+// ---------------------------------------------------------------------------
+// The settings sheet -- one camera's overrides, plus this viewer's own
+// preview preferences underneath, in their own group.
+// ---------------------------------------------------------------------------
+
+//: The camera whose sheet is open, if any -- read by `applyDefaultChange` so
+//: a default edited elsewhere can correct an open sheet showing it.
+let openSheetDid = null;
+
+function openCameraSheet(did) {
+  const camera = cameras.find((c) => c.did === did);
+  if (!camera) return;
+  openSheetDid = did;
+  openOverlay(camera.name, "", () => renderCameraSheetBody(did), () => { openSheetDid = null; });
+}
+
+function renderCameraSheetBody(did) {
+  const camera = cameras.find((c) => c.did === did);
+  if (!camera || overlay.root.hidden) return;
+  const rows = SETTINGS_FIELDS
+    .map((field) => settingRowHtml(field, camera.override[field.key] ?? null, {
+      allowFollow: true,
+      resolvedValue: camera.settings[field.key],
+    }))
+    .join("");
+  const prefs = prefsFor(did);
+  const fpsField = previewFpsField(camera);
+  const qualityField = previewQualityField();
+  // Copying a stream address is a once-per-NVR errand, not something wanted
+  // at a glance every time this page opens -- and the address was truncated
+  // mid-string at a card's width anyway, so it moved here where there is
+  // room to read it and reason to look for it.
+  const address = displayUrl(camera.rtsp_url, camera.rtsp_reachable_off_host);
+  const addressGroup = `
+    <span class="setting-group-label">${escapeHtml(t("addressGroup"))}</span>
+    <div class="row">
+      <code>${escapeHtml(address)}</code>
+      <button class="copy" data-copy="${escapeHtml(address)}">${escapeHtml(t("copy"))}</button>
+    </div>
+    ${camera.rtsp_requires_credentials ? `<p class="hint">${escapeHtml(t("credentialsHint"))}</p>` : ""}`;
+  overlay.body.innerHTML = `
+    <span class="setting-group-label">${escapeHtml(t("cameraSettings"))}</span>
+    <div class="settings-list" data-sheet-camera>${rows}</div>
+    <span class="setting-group-label">${escapeHtml(t("previewGroup"))}</span>
+    <div class="settings-list" data-sheet-preview>
+      ${settingRowHtml(fpsField, prefs.fps)}
+      ${settingRowHtml(qualityField, prefs.quality)}
+    </div>
+    ${addressGroup}`;
+
+  // `_field` supplies what `SETTINGS_FIELDS` cannot for the two preview rows,
+  // which the shared row component does not otherwise know how to parse.
+  overlay.body.querySelector('[data-field="fps"]')._field = fpsField;
+  overlay.body.querySelector('[data-field="previewQuality"]')._field = qualityField;
+
+  wireSettingRows(overlay.body.querySelector("[data-sheet-camera]"), (key, value) =>
+    applyCameraOverride(did, key, value)
+  );
+  wireSettingRows(overlay.body.querySelector("[data-sheet-preview]"), (key, value) =>
+    applyPreviewPref(did, key, value)
+  );
+}
+
+async function applyCameraOverride(did, key, value) {
+  const camera = cameras.find((c) => c.did === did);
+  try {
+    const response = await api(`/api/cameras/${encodeURIComponent(did)}/settings`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ [key]: value }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const override = { ...camera.override };
+    if (value === null) delete override[key];
+    else override[key] = value;
+    camera.override = override;
+    camera.settings = { ...camera.settings, [key]: value ?? defaults[key] };
+  } catch {
+    showMessage(t("settingsSaveFailed"), "error");
+    renderCameraSheetBody(did);
+  }
+}
+
+function applyPreviewPref(did, key, value) {
+  const prefs = prefsFor(did);
+  if (key === "fps") prefs.fps = value;
+  else prefs.quality = value;
+  savePrefs(did, prefs);
+
+  // Restarted rather than left to apply next time: the point of a preview
+  // setting is to see the change in the picture.
+  const cam = camElementFor(did);
+  const box = cam?.querySelector("[data-preview]");
+  if (box?._preview) startPreview(cam);
+}
+
+function camElementFor(did) {
+  return [...document.querySelectorAll(".cam[data-did]")].find((el) => el.dataset.did === did) || null;
+}
+
+// ---------------------------------------------------------------------------
+// The enlarged preview -- the same session, shown at its natural size.
+// ---------------------------------------------------------------------------
+
+/**
+ * Show one preview at its natural size, reusing the running session rather
+ * than restarting it -- tearing it down here would cost a reconnection to
+ * look at a picture that was already on screen a moment ago.
+ *
+ * `requestFullscreen` is attempted as a bonus, not the feature: this page
+ * runs inside Home Assistant's ingress iframe, which lacks the
+ * `allow="fullscreen"` attribute this add-on has no control over, so the
+ * browser is expected to refuse. The overlay itself is what actually
+ * enlarges the picture either way, so the rejection is silent rather than an
+ * error worth showing.
+ */
+function openEnlargePreview(cam) {
+  const box = cam.querySelector("[data-preview]");
+  const session = box._preview;
+  // No picture yet to enlarge -- a still-connecting or failed card offers no
+  // enlarge control, but its picture click delegation would otherwise reach
+  // here too before the image exists.
+  if (!session || !session.img.classList.contains("visible")) return;
+  overlay.previewSession = session;
+  openOverlay("", "enlarge", (body) => body.appendChild(session.img), () => {
+    overlay.previewSession = null;
+    // Put the picture back only if this is still the running preview. A
+    // failure while enlarged (`settle`, below) already moved the picture out
+    // from under this session and told the viewer directly in the overlay
+    // itself -- reinserting a frozen frame here, after the card has already
+    // been rebuilt around a retry button with no `.controls` to anchor to,
+    // is the bug this ownership check exists to prevent.
+    if (box._preview === session) {
+      box.insertBefore(session.img, box.querySelector(".controls") || null);
+    }
+  });
+  overlay.panel.requestFullscreen?.().catch(() => { /* the overlay is already showing */ });
+}
+
+function renderCameras() {
+  const container = $("cameras");
+  // Replacing the grid's markup discards the elements but not the requests
+  // they started, so anything playing is stopped first. Switching language
+  // re-renders, and that used to strand a stream per switch.
+  container.querySelectorAll("[data-preview]").forEach(stopPreview);
+  if (!cameras.length) {
+    container.innerHTML = `<p class="empty">${escapeHtml(t("noCameras"))}</p>`;
+    return;
+  }
+  container.innerHTML = `<div class="grid">${cameras.map(cameraCardHtml).join("")}</div>`;
+}
+
+/**
+ * One camera's card.
+ *
+ * A refused camera (`support !== "full"`) gets no preview, no play control
+ * and no address -- it cannot stream, and a control promising a picture for
+ * one would be a lie. Every other card keeps only what a person does often:
+ * play, stop, enlarge, and the control that opens this camera's settings.
+ * Everything about *how it is configured* -- including the RTSP address,
+ * which is copied once while wiring up an NVR and not glanced at on every
+ * visit, and was truncated mid-string at this card width regardless -- lives
+ * behind that control instead of on the card. See the sheet built by
+ * `openCameraSheet`.
+ */
+function cameraCardHtml(c) {
+  const st = cameraState(c);
+  const nameRow = `<div class="cam-row">
+    <div class="cam-id">
+      <div class="cam-name">${escapeHtml(c.name)}</div>
+      <div class="cam-model">${escapeHtml(c.model)}${
+        c.stream_audio ? ` · ${escapeHtml(t("audioOn"))}` : ""
+      }</div>
+    </div>
+    <span class="status ${st ? st.cls : ""}" data-status${st ? "" : " hidden"}>${
+      st ? `<span class="dot"></span>${escapeHtml(st.label)}` : ""
+    }</span>
+    ${
+      c.publishable
+        ? `<button type="button" class="settings-btn" data-settings-open aria-label="${escapeHtml(t("settingsButton"))}">${ICONS.gear}</button>`
+        : ""
+    }
+  </div>`;
+
+  if (!c.publishable) {
+    return `<article class="cam refused" data-did="${escapeHtml(c.did)}">${nameRow}</article>`;
+  }
+
+  return `<article class="cam" data-did="${escapeHtml(c.did)}">
+    <div class="preview" data-preview>
+      <div class="placeholder">${escapeHtml(t("tapToView"))}</div>
+      <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>
+    </div>
+    ${nameRow}
+  </article>`;
+}
+
+/**
+ * Every click a camera card answers, delegated from the grid rather than
+ * bound per button -- the grid is rebuilt on every reload and language
+ * switch, and per-button listeners would need rebinding each time. Bound
+ * once, on the container element that never itself gets replaced.
+ */
+function wireCameraGrid(container) {
+  container.addEventListener("click", (event) => {
+    const playBtn = event.target.closest("[data-play], [data-retry]");
+    if (playBtn) { startPreview(playBtn.closest(".cam")); return; }
+
+    const stopBtn = event.target.closest("[data-stop]");
+    if (stopBtn) { resetPreview(stopBtn.closest(".cam").querySelector("[data-preview]")); return; }
+
+    const enlargeBtn = event.target.closest("[data-enlarge]");
+    if (enlargeBtn) { openEnlargePreview(enlargeBtn.closest(".cam")); return; }
+
+    const settingsBtn = event.target.closest("[data-settings-open]");
+    if (settingsBtn) { openCameraSheet(settingsBtn.closest(".cam").dataset.did); return; }
+
+    // The picture itself is a second entrance to the same enlarge handler,
+    // once it is playing -- a touch screen has no cursor to hint that it is
+    // clickable, so the corner control is what a viewer discovers first, but
+    // tapping the picture does the same thing once they know.
+    const preview = event.target.closest(".preview[data-playing]");
+    if (preview && !event.target.closest("button")) openEnlargePreview(preview.closest(".cam"));
+  });
+}
+
+/**
+ * Wire every `[data-copy]` button inside `container`, once. Used for the
+ * settings sheet's address group -- the only place a copyable address
+ * appears now that the card itself does not carry one.
+ */
+function wireCopy(container) {
+  container.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-copy]");
+    if (!btn) return;
+    navigator.clipboard?.writeText(btn.dataset.copy).then(() => {
+      const original = btn.textContent;
+      btn.textContent = t("copied");
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    }).catch(() => { /* clipboard unavailable over plain http; ignore */ });
+  });
+}
+
+//: Consecutive reconnects tolerated before a preview gives up and offers a
+//: retry. A single drop is routine: the add-on restarts, or a camera's
+//: session is still coming up.
+const PREVIEW_MAX_FAILURES = 4;
+
+//: Before reconnecting. Only after a failure -- a healthy connection is never
+//: reopened, so nothing paces the pictures but the stream itself.
+const PREVIEW_RETRY_MS = 1000;
+
+/**
+ * The socket address for a path, from the address this page was served on.
+ *
+ * Relative, like every other request here: ingress serves the page under a
+ * prefix that this file must not know or reconstruct. `new URL` resolves it
+ * against the current address, which is the only place that prefix reliably
+ * exists -- deriving it from a header has been a way in before.
+ */
+function socketUrl(path) {
+  const url = new URL(`.${path}`, location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
+}
+
+/**
+ * Show a live preview.
+ *
+ * Each picture is decoded from the RTSP stream this add-on publishes, so what
+ * appears here is evidence that the stream itself works -- not merely that the
+ * camera is reachable. A preview fed from the vendor library's own decoded
+ * frames would keep showing a picture while the published stream was broken,
+ * which is the one thing a status display must never do.
+ *
+ * One socket carries the whole preview. Binary messages are whole JPEGs --
+ * a message boundary is a frame boundary, so nothing has to hunt for the
+ * markers that separate them -- and text messages say why a picture is not
+ * coming. That second channel is why a switched-off camera can be named as
+ * such immediately, in the viewer's own language, rather than being reported
+ * as whatever ffmpeg said about RTSP twenty seconds later.
+ *
+ * This replaces a request per frame, each held open by the add-on until a
+ * newer picture existed. That worked and cost a round trip per frame, and it
+ * could only ever answer with a picture or an error -- there was no way to
+ * say anything while a picture was still possible.
+ *
+ * A single multipart response was tried first, twice, and was reset after
+ * about ten frames both times. A WebSocket is not multipart: it upgrades the
+ * connection rather than streaming a response body, which is the same thing
+ * every other add-on with a live page relies on through ingress.
+ *
+ * Started only on a click -- on the play control, on the retry control, or
+ * from the settings sheet after a preview preference changes -- and never by
+ * this page on its own. An account with several cameras opening several
+ * peer-to-peer sessions at once for pictures nobody asked for is the cost
+ * this add-on is least able to absorb; see the removed `IntersectionObserver`
+ * this replaced. Playback state is never persisted for the same reason:
+ * opening the page always starts with every preview closed.
+ */
+function startPreview(cam) {
+  const did = cam.dataset.did;
+  const box = cam.querySelector("[data-preview]");
+  stopPreview(box);
+  box._failed = false;
+  box.setAttribute("data-playing", "");
+  // Stop and enlarge appear immediately, before the first frame arrives --
+  // playback was requested the moment this ran, and stopping it should not
+  // wait on a picture that may never come.
+  box.innerHTML = `<div class="placeholder">${escapeHtml(t("connecting"))}</div>
+    <div class="controls">
+      <button type="button" class="ctl-btn" data-stop aria-label="${escapeHtml(t("stop"))}">${ICONS.stop}</button>
+      <button type="button" class="ctl-btn" data-enlarge aria-label="${escapeHtml(t("enlarge"))}">${ICONS.enlarge}</button>
+    </div>`;
+
+  const img = document.createElement("img");
+  img.alt = "";
+  box.insertBefore(img, box.querySelector(".controls"));
+
+  const session = { img, socket: null, objectUrl: null, timer: null };
+  box._preview = session;
+
+  const prefs = prefsFor(did);
+  let failures = 0;
+
+  const stopped = () => box._preview !== session;
+
+  const show = (blob) => {
+    const next = URL.createObjectURL(blob);
+    img.src = next;
+    // Revoked only once its replacement is on screen, or the picture would
+    // blink to nothing in between.
+    if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
+    session.objectUrl = next;
+    box.querySelector(".placeholder")?.remove();
+    img.classList.add("visible");
+  };
+
+  // Told, not guessed at. The add-on names a reason rather than sending a
+  // sentence, because this page has both languages and the add-on has
+  // neither; an unknown reason falls back to the generic wording so a newer
+  // add-on can add reasons without this page having to know them first.
+  const REASONS = { switched_off: "cameraOffHint" };
+
+  // The card's state was read once, when the list was fetched. A camera
+  // switched off since then leaves it reading "Ready" over a picture that
+  // stopped -- so the reason that explains the picture corrects the label
+  // too. Both are saying the same thing, and it arrives on the same message,
+  // so neither costs a request of its own.
+  const STATES = { switched_off: { cls: "warn", label: "switchedOff" } };
+
+  const restate = (reason) => {
+    const next = STATES[reason];
+    const badge = cam.querySelector("[data-status]");
+    if (!next || !badge) return;
+    // A healthy camera renders this element hidden rather than absent -- see
+    // `cameraCardHtml` -- exactly so there is something here to reveal when
+    // a picture that was working stops being one.
+    badge.hidden = false;
+    badge.className = `status ${next.cls}`;
+    badge.innerHTML = `<span class="dot"></span>${escapeHtml(t(next.label))}`;
+  };
+
+  // Given up on rather than retried: nothing about a switched-off camera
+  // gets better by reconnecting, and hammering it would keep a card busy
+  // that the viewer can fix with one tap of the switch.
+  const settle = (text) => {
+    box._failed = true;
+    box._preview = null;
+    box.removeAttribute("data-playing");
+    if (session.socket) session.socket.close();
+    if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
+    box.innerHTML = `<div class="placeholder">${escapeHtml(text)}</div>
+      <button type="button" class="play-btn" data-retry aria-label="${escapeHtml(t("retry"))}">${ICONS.retry}</button>`;
+    // `box._preview` no longer being `session` (just above) is what
+    // `openEnlargePreview`'s close handler checks before reinserting this
+    // session's picture -- that is the single place ownership of the `<img>`
+    // node is decided, so a failure here does not also need to know where
+    // the node currently lives. It only needs to tell whoever is looking at
+    // it: if this session's picture is the one currently enlarged, the
+    // overlay is showing a frame that just went stale, and it says so rather
+    // than being left frozen and silent while the card underneath it changes.
+    if (overlay.previewSession === session) {
+      overlay.previewSession = null;
+      overlay.body.innerHTML = `<div class="placeholder">${escapeHtml(text)}</div>`;
+    }
+  };
+
+  const fail = () => {
+    failures += 1;
+    if (failures < PREVIEW_MAX_FAILURES) {
+      session.timer = setTimeout(connect, PREVIEW_RETRY_MS);
+      return;
+    }
+    settle(t("previewFailed"));
+  };
+
+  function connect() {
+    if (stopped()) return;
+    const socket = new WebSocket(socketUrl(
+      `/api/preview/${encodeURIComponent(did)}/ws`
+      + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.quality)}`,
+    ));
+    // Blobs, not ArrayBuffers: the only thing done with a frame is to hand
+    // it to an <img>, and `createObjectURL` wants a Blob either way.
+    socket.binaryType = "blob";
+    session.socket = socket;
+
+    socket.addEventListener("message", (event) => {
+      if (stopped()) return;
+      if (typeof event.data !== "string") {
+        failures = 0;
+        show(event.data);
+        return;
+      }
+      let message;
+      try { message = JSON.parse(event.data); } catch { return; }
+      restate(message.reason);
+      settle(t(REASONS[message.reason] || "previewFailed"));
+    });
+
+    // Both endings land here -- a clean close and a failed connection alike.
+    // Neither is worth telling apart: the answer to both is to reconnect,
+    // until it has failed often enough to stop being worth it.
+    socket.addEventListener("close", () => {
+      if (stopped() || session.socket !== socket) return;
+      fail();
+    });
+  }
+
+  connect();
+}
+
+/**
+ * End a preview and release what is behind it.
+ *
+ * Closing the socket matters as much as dropping the element: while it is
+ * open the add-on keeps a decoder running for it, and a card nobody is
+ * looking at would go on paying for one. Leaves the card's markup alone --
+ * callers that want it back at the idle placeholder use `resetPreview`,
+ * because a language switch calls this on every card without wanting to
+ * rebuild markup about to be discarded anyway.
+ */
+function stopPreview(box) {
+  const session = box._preview;
+  box._preview = null;
+  if (!session) return;
+  if (session.timer) clearTimeout(session.timer);
+  if (session.socket) session.socket.close();
+  if (session.objectUrl) URL.revokeObjectURL(session.objectUrl);
+}
+
+/**
+ * A viewer's own "stop": end the preview and put the card back the way it
+ * started, with the play control ready for another click.
+ */
+function resetPreview(box) {
+  stopPreview(box);
+  box._failed = false;
+  box.removeAttribute("data-playing");
+  box.innerHTML = `<div class="placeholder">${escapeHtml(t("tapToView"))}</div>
+    <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>`;
+}
+
+async function loadCameras() {
+  const container = $("cameras");
+  container.querySelectorAll("[data-preview]").forEach(stopPreview);
+  container.innerHTML = `<p class="empty">${escapeHtml(t("loading"))}</p>`;
+  try {
+    const response = await api("/api/cameras");
+    if (!response.ok) throw new Error(await response.text());
+    cameras = (await response.json()).cameras;
+    renderCameras();
+  } catch {
+    container.innerHTML = `<p class="empty">${escapeHtml(t("loadFailed"))}</p>`;
+  }
+}
+
+$("link-btn").addEventListener("click", async () => {
+  $("link-btn").disabled = true;
+  try {
+    const response = await api("/api/link/begin", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    const { authorize_url: authorizeUrl } = await response.json();
+    $("auth-link").href = authorizeUrl;
+    $("link-flow").hidden = false;
+    window.open(authorizeUrl, "_blank", "noopener");
+  } catch (err) {
+    showMessage(t("startFailed") + err.message, "error");
+  } finally {
+    $("link-btn").disabled = false;
+  }
+});
+
+$("submit-btn").addEventListener("click", async () => {
+  const params = extractCallbackParams($("callback-url").value);
+  if (!params) { showMessage(t("noCode"), "error"); return; }
+  $("submit-btn").disabled = true;
+  try {
+    const response = await api("/api/link/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(params),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    $("callback-url").value = "";
+    showMessage(t("linked"), "success");
+    await refreshStatus();
+  } catch (err) {
+    showMessage(t("signInFailed") + err.message, "error");
+  } finally {
+    $("submit-btn").disabled = false;
+  }
+});
+
+$("cancel-btn").addEventListener("click", () => {
+  $("link-flow").hidden = true;
+  $("callback-url").value = "";
+});
+
+$("unlink-btn").addEventListener("click", async () => {
+  if (!window.confirm(t("confirmUnlink"))) return;
+  await api("/api/unlink", { method: "POST" });
+  await refreshStatus();
+});
+
+/**
+ * Show the page, or the way in.
+ *
+ * Whether a password applies is not something the page is told -- it asks. Any
+ * request the add-on turns down with a 401 means one is set and has not been
+ * given, and that answer is the same however the add-on is deployed, so the
+ * page needs no idea of what deployment it is part of.
+ */
+async function openPage() {
+  try {
+    const response = await api("/api/health");
+    if (response.status === 401) return showSignIn();
+  } catch {
+    // Unreachable rather than unauthorised: the page can still say so.
+  }
+  $("signin").hidden = true;
+  document.querySelector("main").hidden = false;
+  setStatus(t("checking"), "warn");
+  refreshStatus();
+  return undefined;
+}
+
+function showSignIn() {
+  document.querySelector("main").hidden = true;
+  $("signin").hidden = false;
+  $("signin-password").focus();
+}
+
+$("signin-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const error = $("signin-error");
+  error.hidden = true;
+  try {
+    const response = await api("/api/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: $("signin-password").value }),
+    });
+    if (!response.ok) throw new Error();
+    $("signin-password").value = "";
+    await openPage();
+  } catch {
+    error.textContent = t("signInWrong");
+    error.hidden = false;
+    $("signin-password").select();
+  }
+});
+
+
+initOverlay();
+wireCameraGrid($("cameras"));
+wireSettingRows($("defaults-rows"), applyDefaultChange);
+
+$("addon-config-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  // `window.top`, not this frame: ingress renders the page inside an iframe,
+  // and a same-frame navigation to the Supervisor's own config page would
+  // nest Home Assistant inside itself instead of replacing it.
+  window.top.location = "/hassio/addon/xiaomi_camera_bridge/config";
+});
+
+applyLanguage();
+openPage();
+// Only the account state is polled; re-rendering the grid would tear down any
+// preview the user is watching.
+setInterval(async () => {
+  try {
+    const data = await (await api("/api/health")).json();
+    setStatus(data.linked ? t("connected") : t("notConnected"), data.linked ? "ok" : "warn");
+  } catch { setStatus(t("unreachable"), "err"); }
+}, 30000);

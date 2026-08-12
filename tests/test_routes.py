@@ -33,7 +33,11 @@ if importlib.util.find_spec("pytest_socket") is not None:
 
 _APP = Path(__file__).resolve().parent.parent / "addon" / "rootfs" / "app"
 _API = (_APP / "bridge" / "api.py").read_text(encoding="utf-8")
-_PAGE = (_APP / "web" / "index.html").read_text(encoding="utf-8")
+# The markup and the behaviour that requests things live in separate files
+# since the page was split; a request address can drift in either one.
+_PAGE = (_APP / "web" / "index.html").read_text(encoding="utf-8") + (
+    _APP / "web" / "app.js"
+).read_text(encoding="utf-8")
 
 #: `web.get("/api/health", ...)` and friends, per listener. `put` joined the
 #: settings endpoints in a later task; missing it here would make this file

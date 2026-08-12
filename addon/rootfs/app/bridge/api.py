@@ -192,6 +192,8 @@ class BridgeApi:
                 # only when the add-on restarts, unlike `/api/cameras`.
                 web.get("/api/info", self._info),
                 web.get("/", self._index),
+                web.get("/app.css", self._asset),
+                web.get("/app.js", self._asset),
                 web.static("/static", _STATIC_DIR, show_index=False),
             ]
         )
@@ -766,6 +768,21 @@ class BridgeApi:
         # not work.
         return web.FileResponse(
             f"{_STATIC_DIR}/index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
+    async def _asset(self, request: web.Request) -> web.StreamResponse:
+        """The page's own stylesheet and script.
+
+        Served beside the page rather than under `/static` so the page can
+        reference them relatively -- ingress serves it under a prefix this
+        file must not know or reconstruct.
+        """
+        name = request.path.lstrip("/")
+        if name not in {"app.css", "app.js"}:
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            f"{_STATIC_DIR}/{name}",
             headers={"Cache-Control": "no-cache, must-revalidate"},
         )
 
