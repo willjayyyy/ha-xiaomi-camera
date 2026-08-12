@@ -371,6 +371,36 @@ async def test_null_clears_an_override_rather_than_setting_it(client):
 
 
 @pytest.mark.asyncio
+async def test_a_camera_can_switch_its_connection_path(bridge, client):
+    """The bug this covers: `PUT .../settings {"path": "compat"}` used to
+    return 200 and write nothing -- the connection row offered a choice
+    that silently did not take.
+    """
+    response = await client.put("/api/cameras/aaa/settings", json={"path": "compat"})
+    assert response.status == 200
+    body = await (await client.get("/api/cameras")).json()
+    row = next(c for c in body["cameras"] if c["did"] == "aaa")
+    assert row["override"]["path"] == "compat"
+    assert row["settings"]["path"] == "compat"
+    # Which implementation serves a camera is only decided when its session
+    # opens (`SessionManager.session_for`), so a path change must reopen the
+    # session the same way a quality or audio change already does -- there
+    # is no separate go2rtc stream URL to touch.
+    assert bridge._sessions_provider().reloaded == ["aaa"]
+
+
+@pytest.mark.asyncio
+async def test_a_global_default_cannot_name_a_path(client):
+    """A default for `path` would be meaningless -- which paths a camera can
+    use depends on its own model and on whether the compatibility-mode
+    credential exists. Refused by name, not silently dropped.
+    """
+    response = await client.put("/api/settings", json={"path": "compat"})
+    assert response.status == 400
+    assert "path" in (await response.text())
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_value_is_rejected_by_name(client):
     response = await client.put("/api/settings", json={"quality": "ultra"})
     assert response.status == 400

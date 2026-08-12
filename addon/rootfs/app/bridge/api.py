@@ -38,7 +38,7 @@ from .config import Options, TranscodeQuality, VideoQuality
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
 from .framing import MediaKind
 from .mux import StreamMuxer
-from .paths import available_paths
+from .paths import VideoPath, available_paths
 from .redact import safe_error
 from .settings import Defaults, Resolved, SettingsStore
 from .stills import QUALITIES, Stills, StillsError
@@ -587,7 +587,7 @@ class BridgeApi:
     async def _set_defaults(self, request: web.Request) -> web.Response:
         body = await _json_body(request)
         try:
-            changes = _settings_changes(body)
+            changes = _settings_changes(body, per_camera=False)
         except ValueError as err:
             return web.json_response({"error": str(err)}, status=400)
         self._settings_store.set_defaults(**changes)
@@ -601,15 +601,25 @@ class BridgeApi:
         did = request.match_info["did"]
         body = await _json_body(request)
         try:
-            changes = _settings_changes(body, allow_clear=True)
+            changes = _settings_changes(body, per_camera=True)
         except ValueError as err:
             return web.json_response({"error": str(err)}, status=400)
-        session_affecting = {"quality", "audio"} & set(changes)
+        # `path` belongs here too: `SessionManager.session_for` decides which
+        # implementation serves a camera -- today only `VideoPath.OFFICIAL`,
+        # by raising for anything else -- from the same `resolver` callback
+        # quality and audio are read through, at the same moment: when a
+        # session opens. Dropping the cached session is what forces that
+        # decision to be remade, exactly as it already does for the other
+        # two; there is no separate go2rtc stream URL to touch, since go2rtc
+        # always pulls this camera from this bridge's own `/api/stream/{did}`
+        # regardless of which path serves it.
+        session_affecting = {"quality", "audio", "path"} & set(changes)
         self._settings_store.set_override(did, **changes)
         sessions: SessionManager | None = self._sessions_provider()
         if session_affecting and sessions is not None:
-            # Picture size and audio are negotiated when the peer-to-peer
-            # session opens, so this camera's session is reopened -- and only
+            # Picture size, audio and which implementation serves the camera
+            # are all only decided when its session opens, so any of them
+            # changing means reopening that camera's session -- and only
             # this camera's.
             _LOGGER.info("reloading session %s for changed %s", did, sorted(changes))
             await sessions.async_reload(did)
@@ -863,8 +873,24 @@ def _settings_dict(settings: Defaults | Resolved | None) -> dict[str, object] | 
     return result
 
 
-def _settings_changes(body: dict, *, allow_clear: bool = False) -> dict:
+def _settings_changes(body: dict, *, per_camera: bool = False) -> dict:
     """Validated settings from a request body.
+
+    ``per_camera`` is the one distinction between this function's two
+    callers, `/api/settings` (defaults) and `/api/cameras/{did}/settings`
+    (one camera) -- not two independently-set flags, because "may this
+    write clear a field back to following the default" and "may this write
+    name a path" have always moved together: both are true for a per-camera
+    write and false for a defaults write, and nothing about either question
+    can be answered without knowing which endpoint is asking.
+
+    `path` is refused outright, by name, on a defaults write -- never
+    silently dropped. A global default for it would be meaningless: which
+    paths a camera can use depends on its own model and on whether the
+    compatibility-mode credential exists (see `settings.py`'s module
+    docstring), and a dropped key here is exactly how the connection row
+    in the settings sheet shipped as a control that accepted a choice and
+    did nothing with it.
 
     Names the setting and the accepted values in the error. A bare enum
     ValueError names neither, which leaves someone who sent `"ultra"` with
@@ -879,7 +905,7 @@ def _settings_changes(body: dict, *, allow_clear: bool = False) -> dict:
         if key not in body:
             continue
         raw = body[key]
-        if raw is None and allow_clear:
+        if raw is None and per_camera:
             changes[key] = None
             continue
         try:
@@ -889,12 +915,29 @@ def _settings_changes(body: dict, *, allow_clear: bool = False) -> dict:
             raise ValueError(f"{key} must be one of {allowed}, not {raw!r}") from None
     if "audio" in body:
         raw = body["audio"]
-        if raw is None and allow_clear:
+        if raw is None and per_camera:
             changes["audio"] = None
         elif isinstance(raw, bool):
             changes["audio"] = raw
         else:
             raise ValueError(f"audio must be true or false, not {raw!r}")
+    if "path" in body:
+        if not per_camera:
+            raise ValueError(
+                "path has no default -- set it on the camera itself, "
+                "not on /api/settings"
+            )
+        raw = body["path"]
+        if raw is None:
+            changes["path"] = None
+        else:
+            try:
+                changes["path"] = VideoPath(raw)
+            except ValueError:
+                allowed = ", ".join(member.value for member in VideoPath)
+                raise ValueError(
+                    f"path must be one of {allowed}, not {raw!r}"
+                ) from None
     return changes
 
 
