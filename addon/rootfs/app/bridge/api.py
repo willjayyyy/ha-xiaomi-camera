@@ -572,7 +572,9 @@ class BridgeApi:
             # Picture size and audio are negotiated when the peer-to-peer
             # session opens, so this camera's session is reopened -- and only
             # this camera's.
+            _LOGGER.info("reloading session %s for changed %s", did, sorted(changes))
             await sessions.async_reload(did)
+            _LOGGER.info("session %s reloaded", did)
         await self._refresh_callback(explicit=True)
         return web.json_response({"ok": True})
 
@@ -594,6 +596,7 @@ class BridgeApi:
         """
         did = request.match_info["did"]
         if self._session_for(did) is None:
+            _LOGGER.warning("preview ws refused: no session for %s", did)
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
@@ -632,6 +635,7 @@ class BridgeApi:
                     )
                     await ws.send_bytes(image)
             except StillsError as err:
+                _LOGGER.warning("preview %s ended: %s", did, safe_error(err))
                 # Asked again rather than recalled: the case worth naming is a
                 # camera switched off since the list was last read, and the
                 # remembered value is by definition the one from before that.
