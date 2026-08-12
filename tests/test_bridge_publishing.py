@@ -218,3 +218,36 @@ async def test_the_keyframe_hint_is_unknown_for_a_camera_off_the_official_path()
     bridge._registry = SimpleNamespace(get=lambda did: SimpleNamespace(did=did))
 
     assert bridge._keyframe_interval("aaa") is None
+
+
+async def test_a_go2rtc_failure_does_not_fail_the_refresh(monkeypatch) -> None:
+    """`async_refresh` is the callback behind every settings write, and those
+    writes commit before it runs.
+
+    `all_device_urls` raises on any go2rtc error, so letting it out turns a
+    committed change into a 500: a camera switched to compatibility mode
+    during a go2rtc hiccup would be switched *and* reported as failed. With
+    no addresses the affected cameras report `stream_error` instead, which is
+    the state that exists for exactly this.
+    """
+    from bridge import go2rtc_xiaomi
+
+    async def _boom(region: str) -> dict[str, str]:
+        raise RuntimeError("go2rtc says no")
+
+    monkeypatch.setattr(go2rtc_xiaomi, "all_device_urls", _boom)
+
+    class _AllCompat(_FakeSettings):
+        def resolved_for(self, did, *, support, compat_ready):
+            self.compat_ready_seen.append(compat_ready)
+            return SimpleNamespace(path=VideoPath.COMPAT)
+
+    restreamer = _FakeRestreamer()
+    bridge = _bridge_with(_FakeRegistry(), restreamer, _AllCompat())
+    bridge._account.cloud_server = "cn"
+
+    await bridge.async_refresh()
+
+    # The publish still happened, with no addresses -- `build_config` turns
+    # that into a per-camera `stream_error` rather than a lost refresh.
+    assert restreamer.applied is not None

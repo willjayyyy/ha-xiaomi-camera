@@ -260,11 +260,29 @@ class Bridge:
             settings is not None and settings.path is VideoPath.COMPAT
             for settings in resolved.values()
         )
-        compat_urls = (
-            await go2rtc_xiaomi.all_device_urls(self._account.cloud_server)
-            if needs_compat
-            else {}
-        )
+        compat_urls: dict[str, str] = {}
+        if needs_compat:
+            try:
+                compat_urls = await go2rtc_xiaomi.all_device_urls(
+                    self._account.cloud_server
+                )
+            except Exception as err:
+                # Never allowed to fail the caller. This is the refresh
+                # callback behind every settings write -- `_link_complete`,
+                # `_unlink`, `_compat_signin`, `_set_camera_settings` -- and
+                # those writes have already committed by the time this runs,
+                # so raising here answers 500 for a change that was made:
+                # switching a camera to compatibility mode during a go2rtc
+                # hiccup would persist and report failure at once. Continuing
+                # with no addresses leaves the affected cameras reporting
+                # `stream_error`, which is precisely the state that exists
+                # for "publishable, but no reachable source right now".
+                _LOGGER.error(
+                    "Could not read compatibility-mode addresses from go2rtc; "
+                    "affected cameras will report a stream error until the "
+                    "next refresh: %s",
+                    safe_error(err),
+                )
         await self._restreamer.async_apply(
             resolved,
             compat_urls=compat_urls,
