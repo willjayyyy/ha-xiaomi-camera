@@ -198,6 +198,18 @@ class TestEnvironmentOverrides:
         assert load_options(path, supervised=False).rtsp_username == "from-env"
 
 
+def test_a_file_written_by_an_older_version_still_starts(tmp_path: Path) -> None:
+    """The key is simply absent there, and absent has to mean unchanged.
+
+    Supervisor keeps the options a user saved, not the schema they were
+    saved against, so every added setting meets files that predate it.
+    """
+    payload = {"access_mode": "local", "rtsp_username": "", "rtsp_password": ""}
+    path = tmp_path / "options.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert load_options(path, supervised=True).log_level == "info"
+
+
 class TestTheImageSaysWhatItWasBuiltFrom:
     """A version number cannot identify a build, and was relied on to.
 
