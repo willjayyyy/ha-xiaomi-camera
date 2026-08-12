@@ -282,3 +282,23 @@ def test_the_sign_in_page_can_change_language():
     html = HTML.read_text()
     signin = html.split('<section id="signin"', 1)[1].split("</section>", 1)[0]
     assert 'data-lang="en"' in signin and 'data-lang="zh"' in signin
+
+
+def test_no_card_drops_its_preview_area():
+    """缺陷 10: a card with no preview collapsed to one row and stood a head
+    shorter than its neighbours."""
+    js = JS.read_text()
+    card = js.split("function cameraCardHtml", 1)[1].split("\n}", 1)[0]
+    # One return, not a short-circuit for refused cameras.
+    assert card.count("return `<article") == 1
+
+
+def test_the_play_triangle_is_not_nudged():
+    """缺陷 5: the path is already drawn right of centre, so a margin here
+    shifts it twice."""
+    assert "margin-left: 3px" not in CSS.read_text()
+
+
+def test_the_picture_is_not_a_second_way_to_enlarge():
+    """缺陷 8: tapping the picture enlarged it as well as the control."""
+    assert ".preview[data-playing]" not in JS.read_text()

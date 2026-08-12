@@ -239,6 +239,21 @@
     color: #8b929c; font-size: .85rem; line-height: 1.5;
     text-align: center; padding: 0 22px; max-width: 100%;
   }
+  /* What a camera with no usable path shows in place of a picture, in the
+     same box a working camera's picture would occupy -- see the comment on
+     `.preview` above for why every card keeps this box regardless. */
+  .blocked {
+    display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+    padding: 0 22px; text-align: center; color: #8b929c;
+  }
+  .blocked-icon { color: var(--warn); }
+  .blocked-icon svg { width: 22px; height: 22px; fill: currentColor; }
+  .blocked-why { font-size: .85rem; line-height: 1.5; }
+  .blocked-action {
+    margin-top: var(--s1); font: inherit; font-size: .82rem; font-weight: 500;
+    padding: var(--s2) var(--s4); border-radius: var(--r-pill); border: 0;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
   code {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem;
     background: var(--sunken); color: var(--ink-2);
@@ -287,11 +302,6 @@
   .settings-btn::after { content: ""; position: absolute; inset: -4px; }
   .settings-btn svg { width: 17px; height: 17px; fill: currentColor; }
   .settings-btn:hover { color: var(--accent); background: var(--accent-wash); }
-  .cam.refused .cam-row { padding: var(--s5) var(--s4); }
-  /* Grid items stretch to the row's tallest card by default -- fine for two
-     full cards with a preview, but a refused card next to one leaves it
-     mostly blank instead of sized to what little it actually has to show. */
-  .cam.refused { align-self: start; }
 
   /* ---- Play control ---------------------------------------------------
      Shown over a placeholder this page drew itself, so it can stay put
@@ -327,7 +337,6 @@
     .preview .controls { opacity: 0; transition: opacity 150ms var(--ease-micro); }
     .preview:hover .controls,
     .preview:focus-within .controls { opacity: 1; }
-    .preview[data-playing] { cursor: zoom-in; }
   }
   .ctl-btn {
     width: var(--s7); height: var(--s7); border: 0; border-radius: var(--r-pill);

@@ -513,6 +513,7 @@ const ICONS = {
   enlarge: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3H3v6h2V5h4V3zm12 0h-6v2h4v4h2V3zM5 15H3v6h6v-2H5v-4zm14 4h-4v2h6v-6h-2v4z"/></svg>',
   retry: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7.5 6.5 12 11V8a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>',
   gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.4 7.4 0 0 0 0-2l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.4.96a7.5 7.5 0 0 0-1.73-1l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54a7.5 7.5 0 0 0-1.73 1l-2.4-.96a.5.5 0 0 0-.6.22L2.4 8.78a.5.5 0 0 0 .12.64L4.55 11a7.4 7.4 0 0 0 0 2L2.52 14.6a.5.5 0 0 0-.12.64l1.92 3.32c.13.22.39.31.6.22l2.4-.96a7.5 7.5 0 0 0 1.73 1l.36 2.54a.5.5 0 0 0 .5.42h3.84a.5.5 0 0 0 .5-.42l.36-2.54a7.5 7.5 0 0 0 1.73-1l2.4.96c.22.09.48 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64L19.4 13zM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7z"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>',
 };
 
 // ---------------------------------------------------------------------------
@@ -1062,12 +1063,11 @@ function camElementFor(did) {
  * than restarting it -- tearing it down here would cost a reconnection to
  * look at a picture that was already on screen a moment ago.
  *
- * `requestFullscreen` is attempted as a bonus, not the feature: this page
- * runs inside Home Assistant's ingress iframe, which lacks the
- * `allow="fullscreen"` attribute this add-on has no control over, so the
- * browser is expected to refuse. The overlay itself is what actually
- * enlarges the picture either way, so the rejection is silent rather than an
- * error worth showing.
+ * The overlay is the only way this page enlarges a picture. It is a modal
+ * sheet, not the browser's fullscreen -- ingress renders this page inside
+ * an iframe that lacks `allow="fullscreen"` anyway, so a real fullscreen
+ * request would be refused, and having both would make "enlarge" answer two
+ * different things depending on which one won.
  */
 function openEnlargePreview(cam) {
   const box = cam.querySelector("[data-preview]");
@@ -1089,7 +1089,6 @@ function openEnlargePreview(cam) {
       box.insertBefore(session.img, box.querySelector(".controls") || null);
     }
   });
-  overlay.panel.requestFullscreen?.().catch(() => { /* the overlay is already showing */ });
 }
 
 function renderCameras() {
@@ -1106,21 +1105,30 @@ function renderCameras() {
 }
 
 /**
- * One camera's card.
+ * One camera's card: a picture area and an identity row, always both.
  *
- * A refused camera (`support !== "full"`) gets no preview, no play control
- * and no address -- it cannot stream, and a control promising a picture for
- * one would be a lie. Every other card keeps only what a person does often:
- * play, stop, enlarge, and the control that opens this camera's settings.
- * Everything about *how it is configured* -- including the RTSP address,
- * which is copied once while wiring up an NVR and not glanced at on every
- * visit, and was truncated mid-string at this card width regardless -- lives
- * behind that control instead of on the card. See the sheet built by
- * `openCameraSheet`.
+ * A camera nothing can reach still gets the picture area, filled with the
+ * reason and the action that would fix it. Dropping the area instead makes
+ * the card a head shorter than its neighbours, which reads as a rendering
+ * fault rather than as a camera that needs attention.
  */
 function cameraCardHtml(c) {
+  return `<article class="cam" data-did="${escapeHtml(c.did)}">
+    <div class="preview" data-preview>${previewIdleHtml(c)}</div>
+    ${cameraRowHtml(c)}
+  </article>`;
+}
+
+/**
+ * The identity row underneath the picture: name, model, status pill, and
+ * the control that opens this camera's settings. Everything about *how it
+ * is configured* -- including the RTSP address, which is copied once while
+ * wiring up an NVR and not glanced at on every visit -- lives behind that
+ * control instead of on the card. See the sheet built by `openCameraSheet`.
+ */
+function cameraRowHtml(c) {
   const st = cameraState(c);
-  const nameRow = `<div class="cam-row">
+  return `<div class="cam-row">
     <div class="cam-id">
       <div class="cam-name">${escapeHtml(c.name)}</div>
       <div class="cam-model">${escapeHtml(c.model)}${
@@ -1136,19 +1144,63 @@ function cameraCardHtml(c) {
         : ""
     }
   </div>`;
-
-  if (!c.publishable) {
-    return `<article class="cam refused" data-did="${escapeHtml(c.did)}">${nameRow}</article>`;
-  }
-
-  return `<article class="cam" data-did="${escapeHtml(c.did)}">
-    <div class="preview" data-preview>
-      <div class="placeholder">${escapeHtml(t("tapToView"))}</div>
-      <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>
-    </div>
-    ${nameRow}
-  </article>`;
 }
+
+/**
+ * What fills the picture area before anything is playing.
+ *
+ * `blocker()` answers "is there a path at all, and if not, why" -- from the
+ * `paths` map the add-on sends, never from the model string. A model is not
+ * a reason; a resolved path is.
+ */
+function previewIdleHtml(c) {
+  const blocked = blocker(c);
+  if (blocked) {
+    return `<div class="blocked">
+      <span class="blocked-icon" aria-hidden="true">${ICONS.warn}</span>
+      <span class="blocked-why">${escapeHtml(t(blocked.reason))}</span>
+      ${blocked.action ? `<button type="button" class="blocked-action" data-${blocked.action}>${escapeHtml(t(blocked.label))}</button>` : ""}
+    </div>`;
+  }
+  return `<div class="placeholder">${escapeHtml(t("tapToView"))}</div>
+    ${prefChipHtml(c)}
+    <button type="button" class="play-btn" data-play aria-label="${escapeHtml(t("play"))}">${ICONS.play}</button>`;
+}
+
+/**
+ * Why this camera cannot show a picture, or `null` if it can.
+ *
+ * Three cases, told apart by the resolved path and the credential rather
+ * than by the model -- a camera the user put on compatibility mode and then
+ * removed the credential from lands here too, and it is not "an unsupported
+ * model".
+ */
+function blocker(c) {
+  if (c.settings) return null;
+  if (c.paths.compat === null) {
+    return { reason: "pathOfficialUnsupported", action: "path-compat", label: "compatConnect" };
+  }
+  return { reason: "pathCompatNoAuth", action: "compat-signin", label: "compatConnect" };
+}
+
+/**
+ * This viewer's own preview preferences, floating on the picture -- a chip
+ * with an expandable panel. Left as an empty stub here: Task D5 builds it,
+ * this task only needs the call site so `previewIdleHtml` never shows it on
+ * a card that cannot play (see the split above).
+ */
+function prefChipHtml(_camera) {
+  return "";
+}
+
+//: Opens the sheet where this camera's connection is switched to
+//: compatibility mode. No-op stub -- Task D4 builds the camera settings
+//: sheet with its connection-path row, which is what this will open.
+function openPathCompatConnect(_did) {}
+
+//: Opens the compatibility-mode sign-in sheet for this camera. No-op stub
+//: -- Task E4 builds M4, the sign-in panel this opens.
+function openCompatSignIn(_did) {}
 
 /**
  * Every click a camera card answers, delegated from the grid rather than
@@ -1170,12 +1222,11 @@ function wireCameraGrid(container) {
     const settingsBtn = event.target.closest("[data-settings-open]");
     if (settingsBtn) { openCameraSheet(settingsBtn.closest(".cam").dataset.did); return; }
 
-    // The picture itself is a second entrance to the same enlarge handler,
-    // once it is playing -- a touch screen has no cursor to hint that it is
-    // clickable, so the corner control is what a viewer discovers first, but
-    // tapping the picture does the same thing once they know.
-    const preview = event.target.closest(".preview[data-playing]");
-    if (preview && !event.target.closest("button")) openEnlargePreview(preview.closest(".cam"));
+    const pathCompatBtn = event.target.closest("[data-path-compat]");
+    if (pathCompatBtn) { openPathCompatConnect(pathCompatBtn.closest(".cam").dataset.did); return; }
+
+    const compatSigninBtn = event.target.closest("[data-compat-signin]");
+    if (compatSigninBtn) { openCompatSignIn(compatSigninBtn.closest(".cam").dataset.did); return; }
   });
 }
 
