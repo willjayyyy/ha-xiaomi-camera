@@ -14,7 +14,13 @@ from pathlib import Path
 import pytest
 import yaml
 from bridge import config
-from bridge.config import AccessMode, Options, load_options
+from bridge.config import (
+    AccessMode,
+    Options,
+    TranscodeQuality,
+    VideoQuality,
+    load_options,
+)
 
 _ADDON_DIR = Path(__file__).resolve().parent.parent / "addon"
 
@@ -276,6 +282,23 @@ class TestTheAddOnDeclaresEverySetting:
         assert set(config._DEFAULTS) == set(self._addon()["schema"])
 
 
+def test_quality_and_transcode_quality_share_no_value() -> None:
+    """Two settings on one form must not offer the same word for two things.
+
+    Both moved off Supervisor's page in 2.0, but they did not stop sitting
+    next to each other: the add-on's own per-camera settings sheet
+    (`addon/rootfs/app/web/app.js`, `SETTINGS_FIELDS`) renders a `quality`
+    row and a `transcode_quality` row in the same list. `quality` asks the
+    camera for `low` or `high`; `transcode_quality` says how finely the
+    add-on re-encodes whatever arrives. If the two ever shared a value, a
+    user would see the same word offered twice in one form, meaning two
+    different things.
+    """
+    picture = {value.value for value in VideoQuality}
+    transcode = {value.value for value in TranscodeQuality}
+    assert not (picture & transcode)
+
+
 def test_the_moved_options_are_gone() -> None:
     """A major version does not carry compatibility settings. There is no
     defaults record to seed any more either, so the migration they existed
@@ -297,11 +320,12 @@ def test_no_translation_still_says_moved() -> None:
 def test_an_options_file_carrying_the_retired_keys_still_loads(
     tmp_path: Path,
 ) -> None:
-    """An upgrading 1.4.0 install still has these in `options.json` until
+    """An upgrading 1.4.0 install still has these in `options.json`.
 
-    Supervisor rewrites it. Whatever Supervisor's own tolerance for keys
-    outside the schema turns out to be, the add-on's own reader must not
-    choke on them: they load cleanly and are simply not consulted.
+    They stay there until Supervisor rewrites it. Whatever Supervisor's own
+    tolerance for keys outside the schema turns out to be, the add-on's own
+    reader must not choke on them: they load cleanly and are simply not
+    consulted.
     """
     path = write_options(
         tmp_path,
