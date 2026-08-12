@@ -22,6 +22,7 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 from bridge.api import BridgeApi
 from bridge.config import AccessMode, Options, TranscodeQuality, VideoQuality
+from bridge.paths import VideoPath
 from bridge.settings import SettingsStore
 
 if importlib.util.find_spec("pytest_socket") is not None:
@@ -330,6 +331,34 @@ async def test_a_camera_carries_both_paths_and_why_each_is_unavailable(client):
     body = await (await client.get("/api/cameras")).json()
     row = next(c for c in body["cameras"] if c["did"] == "aaa")
     assert row["paths"] == {"official": None, "compat": "pathCompatNoAuth"}
+
+
+@pytest.mark.asyncio
+async def test_a_cameras_resolved_path_reaches_the_page_undisguised(bridge, client):
+    """`settings.path` must be the add-on's own answer from `path_for`, not
+    something the page reconstructs from `override`. A camera with no
+    override resolves to `official` (`aaa` is `support="full"`); pinning it
+    to compatibility mode must change what this same field reports, not
+    just what `override` separately says -- the page renders the connection
+    row from `settings.path` alone.
+    """
+    body = await (await client.get("/api/cameras")).json()
+    row = next(c for c in body["cameras"] if c["did"] == "aaa")
+    assert row["settings"]["path"] == "official"
+
+    bridge._settings_store.set_override("aaa", path=VideoPath.COMPAT)
+    body = await (await client.get("/api/cameras")).json()
+    row = next(c for c in body["cameras"] if c["did"] == "aaa")
+    assert row["settings"]["path"] == "compat"
+
+
+@pytest.mark.asyncio
+async def test_the_defaults_payload_carries_no_path(client):
+    """`Defaults` has no path to follow -- `/api/settings` must not invent
+    one, and must not error trying to serialise a field that is not there.
+    """
+    body = await (await client.get("/api/settings")).json()
+    assert "path" not in body["defaults"]
 
 
 @pytest.mark.asyncio

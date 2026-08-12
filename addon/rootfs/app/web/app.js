@@ -1026,7 +1026,12 @@ function renderCameraSheetBody(did) {
  * exists, so a shared value for it would not mean anything.
  */
 function pathRowHtml(camera) {
-  const selected = camera.override.path || "official";
+  // Read from `camera.settings.path`, never reconstructed from `override`:
+  // `path_for` in the add-on is the one place this fact is decided, and a
+  // `||` fallback here would be a second answer to the same question --
+  // right today only because this sheet is unreachable for a camera whose
+  // resolved path is not what the fallback assumes.
+  const selected = camera.settings.path;
   const choices = [
     { value: "official", label: t("pathOfficial"), disabled: camera.paths.official },
     { value: "compat", label: t("pathCompat"), disabled: camera.paths.compat },

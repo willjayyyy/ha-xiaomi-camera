@@ -838,19 +838,29 @@ async def _json_body(request: web.Request) -> dict[str, Any]:
 
 
 def _settings_dict(settings: Defaults | Resolved | None) -> dict[str, object] | None:
-    """`Defaults` and `Resolved` serialised the same way -- they carry the same
-    three fields, and the page has no reason to see them rendered differently.
+    """`Defaults` and `Resolved` serialised the same way for the three fields
+    they share -- the page has no reason to see those rendered differently.
+
+    `path` exists only on `Resolved`: `Defaults` has no path to follow (see
+    `settings.py`'s module docstring), so it is included only when present
+    rather than reported as absent or invented for the defaults card. The
+    page must read it from here, not reconstruct it -- `path_for` in
+    `paths.py` is the one place that fact is decided; a second answer to it
+    is exactly the bug the multi-stream incident in CLAUDE.md was.
 
     `None` passes straight through: a camera with no resolvable path (see
     `SettingsStore.resolved_for`) has no effective settings to show.
     """
     if settings is None:
         return None
-    return {
+    result: dict[str, object] = {
         "quality": settings.quality.value,
         "audio": settings.audio,
         "transcode_quality": settings.transcode_quality.value,
     }
+    if isinstance(settings, Resolved):
+        result["path"] = settings.path.value
+    return result
 
 
 def _settings_changes(body: dict, *, allow_clear: bool = False) -> dict:

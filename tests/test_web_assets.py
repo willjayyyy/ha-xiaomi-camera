@@ -351,6 +351,18 @@ def test_collapsed_follow_default_rows_show_the_resolved_value():
     assert body.count("resolvedValue") >= 2
 
 
+def test_the_connection_row_reads_the_backends_resolved_path():
+    """`path_for` in the add-on is the one place this fact is decided --
+    the page must read `camera.settings.path`, never reconstruct it from
+    `camera.override.path` with a fallback that assumes a value.
+    """
+    js = JS.read_text()
+    row = _function_body(js, "pathRowHtml")
+    assert "camera.settings.path" in row
+    assert "camera.override.path" not in row
+    assert '|| "official"' not in row
+
+
 def test_switching_connection_confirms_inside_the_sheet():
     """Never the browser's `confirm()` -- it cannot be laid out bilingually
     and cannot be tested. `pathSwitchWarning` must exist but must not be
