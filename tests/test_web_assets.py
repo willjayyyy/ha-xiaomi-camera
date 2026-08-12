@@ -189,6 +189,16 @@ def _keys_of(js: str, lang: str) -> set[str]:
     return set(re.findall(r"(?:\A|[{,])\s*(\w+):\s*[\"']", block.group(1)))
 
 
+def _function_body(js: str, name: str) -> str:
+    """A top-level function's own source, from its signature to its own
+    closing brace -- identified as the first line that is exactly `}` at
+    column 0, which every top-level function in this file ends on (inner
+    blocks close indented, never at column 0)."""
+    match = re.search(rf"^function {name}\(.*?\n(.*?)^}}\n", js, re.M | re.S)
+    assert match, f"no top-level function {name} found"
+    return match.group(1)
+
+
 def test_the_page_has_no_defaults_card_and_no_readonly_mirror():
     """The picture-quality default and the read-only add-on mirror both left
     the main page -- the first moved into the gear, the second was retired."""
@@ -205,6 +215,36 @@ def test_the_account_card_moved_behind_the_header_buttons():
     assert 'id="link-flow"' not in body, "the sign-in flow belongs in the sheet"
     assert 'id="account-btn"' in body
     assert 'id="settings-btn"' in body
+
+
+def test_only_compat_mode_screens_carry_explanatory_prose():
+    """Copy is labels, not explanations -- state is never carried by a
+    sentence. `compatWhy` and `compatEnableHint` are the restated rule's two
+    named exceptions, and both belong to compatibility mode's own screens
+    (M1's account sheet, M6). Scoped to M1 and M3 (the sheets this task
+    built, plus the gear that sits beside M1) -- M2 is the pre-existing OAuth
+    flow, moved here verbatim per the brief, and its own onboarding copy
+    (`step2`, `privacyNote`, ...) predates this rule and is out of scope.
+    """
+    js = JS.read_text()
+    functions = (
+        "renderAccountSheetBody",
+        "openCompatManage",
+        "renderSettingsSheetBody",
+    )
+    m1_and_m3 = "".join(_function_body(js, name) for name in functions)
+    keys = set(re.findall(r't\("(\w+)"\)', m1_and_m3))
+    en_block = re.search(r"\ben:\s*{(.*?)\n  }", js, re.S).group(1)
+    values = dict(re.findall(r'(\w+):\s*"([^"]*)"', en_block))
+    #: Long enough that no label, button or status word in the table crosses
+    #: it ("Connect Xiaomi account" is 23 chars), short enough that any real
+    #: sentence does.
+    SENTENCE_LENGTH = 30
+    prose = {key for key in keys if len(values.get(key, "")) > SENTENCE_LENGTH}
+    allowed = {"compatWhy", "compatEnableHint"}
+    assert prose == allowed, (
+        f"unexpected explanatory prose on M1/M3: {sorted(prose - allowed)}"
+    )
 
 
 def test_the_page_body_is_only_header_message_and_grid():

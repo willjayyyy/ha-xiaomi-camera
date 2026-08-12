@@ -293,22 +293,31 @@ async function refreshStatus() {
     if (data.linked) {
       await loadCameras();
     } else {
-      // Stopped before the markup holding them is discarded -- Disconnect
-      // goes through this branch, and unlike `loadCameras`/`renderCameras`
-      // it used to skip this, leaving any running preview's socket and
-      // peer-to-peer session open with nothing left able to close them.
-      $("cameras").querySelectorAll("[data-preview]").forEach(stopPreview);
-      $("cameras").innerHTML = `<div class="empty">
-        <p>${escapeHtml(t("connectToSee"))}</p>
-        <button type="button" class="primary" id="cameras-connect-btn">${escapeHtml(t("connect"))}</button>
-      </div>`;
-      $("cameras-connect-btn").addEventListener("click", openAccountSheet);
+      showNotConnected();
     }
-    refreshAccountSheetIfOpen();
+    refreshOpenSheet();
   } catch {
     accountLinked = false;
     $("cameras").innerHTML = `<p class="empty">${escapeHtml(t("unreachable"))}</p>`;
   }
+}
+
+/**
+ * The camera area's "not connected" empty state -- shown both here (an
+ * explicit refresh, e.g. after Disconnect) and by the background poll below
+ * when it observes the account transitioning from linked to unlinked.
+ */
+function showNotConnected() {
+  // Stopped before the markup holding them is discarded -- Disconnect goes
+  // through this, and unlike `loadCameras`/`renderCameras` it used to skip
+  // this, leaving any running preview's socket and peer-to-peer session
+  // open with nothing left able to close them.
+  $("cameras").querySelectorAll("[data-preview]").forEach(stopPreview);
+  $("cameras").innerHTML = `<div class="empty">
+    <p>${escapeHtml(t("connectToSee"))}</p>
+    <button type="button" class="primary" id="cameras-connect-btn">${escapeHtml(t("connect"))}</button>
+  </div>`;
+  $("cameras-connect-btn").addEventListener("click", openAccountSheet);
 }
 
 /**
@@ -335,6 +344,11 @@ async function loadSettings() {
  * the same reason as `loadSettings`, and independent of it in the other
  * direction too: `compat_ready` is what the account sheet's compatibility
  * row shows even before the Xiaomi account itself is connected.
+ *
+ * Called without being awaited at startup (see the bottom of this file), so
+ * M1 or M3 can already be open by the time this resolves -- `refreshOpenSheet`
+ * corrects whichever one is, the same way `accountLinked` does after the
+ * health poll.
  */
 async function loadInfo() {
   try {
@@ -344,6 +358,7 @@ async function loadInfo() {
   } catch {
     addonInfo = { slug: null, compat_ready: false };
   }
+  refreshOpenSheet();
 }
 
 /**
@@ -793,11 +808,16 @@ function renderAccountSheetBody(body) {
   body.querySelector("#compat-row").addEventListener("click", openCompatManage);
 }
 
-//: Called after anything that can change `accountLinked` in the background
-//: (the health poll below) -- refreshes M1 in place rather than leaving it
-//: stale, without reopening it or touching anything else on screen.
-function refreshAccountSheetIfOpen() {
-  if (sheetKind === "account" && !overlay.root.hidden) renderAccountSheetBody(overlay.body);
+//: Called after anything that can change what M1 or M3 show in the
+//: background -- the health poll (`accountLinked`) and `/api/info` landing
+//: after one of them was already open (`addonInfo`). Refreshes whichever is
+//: currently open in place rather than leaving it stale, without reopening
+//: it or touching anything else on screen. A no-op for every other screen,
+//: including when the overlay is closed.
+function refreshOpenSheet() {
+  if (overlay.root.hidden) return;
+  if (sheetKind === "account") renderAccountSheetBody(overlay.body);
+  else if (sheetKind === "settings") renderSettingsSheetBody(overlay.body);
 }
 
 /**
@@ -870,9 +890,9 @@ async function submitAccountLink() {
 async function unlinkAccount() {
   if (!window.confirm(t("confirmUnlink"))) return;
   await api("/api/unlink", { method: "POST" });
-  // Re-renders M1 in place through `refreshAccountSheetIfOpen` -- no
-  // separate call needed to land back on it, unlike the flow above, because
-  // this action never left it.
+  // Re-renders M1 in place through `refreshOpenSheet` -- no separate call
+  // needed to land back on it, unlike the flow above, because this action
+  // never left it.
   await refreshStatus();
 }
 
@@ -1468,15 +1488,22 @@ applyLanguage();
 loadInfo();
 loadSettings();
 openPage();
-// Only the account state is polled; re-rendering the grid would tear down any
-// preview the user is watching. If M1 happens to be open, it is refreshed in
-// place instead -- see `refreshAccountSheetIfOpen`.
+// Only the account state is polled, and the grid is left alone on every
+// ordinary tick -- re-rendering it would tear down any preview the user is
+// watching. The one exception is a linked-to-unlinked transition: the
+// account genuinely disappeared, so those previews are already dead, and
+// without this the grid would keep showing them as if it had not. Before
+// this task an always-visible badge said "not connected" on its own; now
+// that state lives inside 👤, and this is what still surfaces it when the
+// sheet is not open to show it.
 setInterval(async () => {
+  const wasLinked = accountLinked;
   try {
     const data = await (await api("/api/health")).json();
     accountLinked = data.linked;
   } catch {
     accountLinked = false;
   }
-  refreshAccountSheetIfOpen();
+  if (wasLinked && !accountLinked) showNotConnected();
+  refreshOpenSheet();
 }, 30000);
