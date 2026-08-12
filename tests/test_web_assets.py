@@ -16,10 +16,21 @@ HTML = WEB / "index.html"
 #: come from a var(), or the page grows 14px, 15px and 16px paddings that
 #: nobody chose.
 #:
-#: The base set below is the brief's. Everything after it is a genuine
-#: existing component dimension that this split carried over unchanged from
-#: the pre-split page -- each one added deliberately, one at a time, rather
-#: than by loosening the regex or widening the scale into a range.
+#: The base set below is the brief's -- the spacing scale itself (--s1..--s7)
+#: plus hairline/border widths, none of which can be a var() themselves
+#: without inventing a token for a token's own definition.
+#:
+#: Everything after it is a genuine component dimension that is not a
+#: spacing step and so cannot come from --s1..--s7: an icon's own pixel
+#: size, a diameter chosen for a specific control, a breakpoint, a
+#: max-width. Task C2 rewrote every component this guard used to itemise
+#: (card, camera card, play control, preview controls, settings row,
+#: choosers, status, overlay, focus) to route its spacing through tokens,
+#: which is why this set is now much shorter than the 38 entries it held
+#: before that pass -- each remaining one is annotated with the component it
+#: sizes and why that size is not a spacing multiple. Do not add an entry to
+#: make a new value pass; route it through a token or, if it truly cannot be,
+#: justify it here the same way.
 _SCALE = {
     "0",
     "1px",
@@ -32,31 +43,33 @@ _SCALE = {
     "20px",
     "24px",
     "32px",
-    "5px",  # corner-controls pill padding
-    "6px",  # icon/chip internal gaps and radii
-    "7px",  # status dot diameter
-    "10px",  # one-off spacing carried over from the pre-split page
+    "6px",  # .lang button padding/radius -- not part of C2's component list
+    # One-off spacing carried over from the pre-split page (sign-in heading
+    # margin, overlay sheet's own entry transform, hint/group label
+    # margins) -- not touched by this task.
+    "10px",
     "11px",  # button and code block horizontal padding
     "13px",  # message banner vertical padding
     "14px",  # button/input horizontal padding, icon sizes, row gaps
-    "15px",  # base body font size, close-icon size
+    "15px",  # base body font size, .cam-name font size, close-icon size
     "17px",  # settings-button icon size, message banner padding
-    "18px",  # card border-radius and paddings
+    "18px",  # card heading margin, overlay head/body padding, list margin
     "22px",  # sign-in mark border-radius, button padding, list indent
-    "26px",  # card horizontal padding
     "28px",  # sign-in subtitle margin, header margin-bottom
-    "30px",  # preview control button diameter
     "36px",  # settings-button diameter, sign-in card bottom padding
     "40px",  # overlay width offset, empty-state padding
     "44px",  # sign-in card top padding
-    "48px",  # body bottom padding
-    "52px",  # play button diameter
-    "56px",  # settings row min-height
+    # Body bottom padding, and the play control's own diameter (Mi Home's
+    # size for that control, not a spacing step).
+    "48px",
+    # Settings row min-height -- the touch-target floor plus room for two
+    # rows never to merge under a thumb, not a spacing step.
+    "56px",
     "64px",  # sign-in mark diameter
-    "320px",  # camera grid minimum column width
+    "300px",  # camera grid minimum column width
     "400px",  # sign-in card max-width
     "420px",  # settings sheet max-width
-    "640px",  # mobile layout breakpoint
+    "600px",  # the sheet-becomes-a-drawer breakpoint
     "1080px",  # page container max-width
     "1100px",  # enlarged preview max-width
 }
@@ -99,6 +112,37 @@ def test_every_transition_has_a_reduced_motion_answer():
     assert "@media (prefers-reduced-motion: reduce)" in css
     reduced = css.split("@media (prefers-reduced-motion: reduce)", 1)[1]
     assert "transition: none" in reduced or "transition-duration: .01ms" in reduced
+
+
+def test_settings_row_is_a_touch_target():
+    """44px is the floor; the row itself is 56 so two rows never merge
+    under a thumb."""
+    css = CSS.read_text()
+    assert re.search(r"\.setting-row-btn\s*{[^}]*min-height:\s*56px", css, re.S)
+
+
+def test_separator_starts_at_the_label():
+    """The most recognisable detail in Mi Home's settings lists: the hairline
+    is inset to the label, not run wall to wall."""
+    css = CSS.read_text()
+    assert re.search(r"\.setting-row\s*\+\s*\.setting-row[^}]*margin-left", css, re.S)
+
+
+def test_focus_is_visible_and_only_for_keyboards():
+    css = CSS.read_text()
+    assert ":focus-visible" in css
+    assert re.search(r":focus-visible\s*{[^}]*outline:\s*2px", css, re.S)
+    # A bare :focus rule would paint a ring on every mouse click.
+    assert not re.search(r"[^-]:focus\s*{", css)
+
+
+def test_the_sheet_becomes_a_bottom_drawer_on_small_screens():
+    """This page is opened from the Home Assistant app more often than not,
+    and a centred dialog puts its controls out of thumb reach."""
+    css = CSS.read_text()
+    assert "@media (max-width: 600px)" in css
+    small = css.split("@media (max-width: 600px)", 1)[1]
+    assert "border-radius: var(--r-sheet) var(--r-sheet) 0 0" in small
 
 
 def test_dark_mode_redefines_every_colour_token():
