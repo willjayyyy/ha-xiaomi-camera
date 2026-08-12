@@ -161,3 +161,47 @@ def test_dark_mode_redefines_every_colour_token():
     light = set(re.findall(token, before))
     dark = set(re.findall(token, after))
     assert light - dark == set(), f"not redefined in dark: {sorted(light - dark)}"
+
+
+def test_both_languages_have_the_same_keys():
+    """A string in one language only is not done."""
+    js = JS.read_text()
+    en = _keys_of(js, "en")
+    zh = _keys_of(js, "zh")
+    assert en - zh == set(), f"missing zh: {sorted(en - zh)}"
+    assert zh - en == set(), f"missing en: {sorted(zh - en)}"
+
+
+def _keys_of(js: str, lang: str) -> set[str]:
+    block = re.search(rf"\b{lang}:\s*{{(.*?)\n  }}", js, re.S)
+    assert block, f"no {lang} block in the I18N table"
+    return set(re.findall(r"^\s{4}(\w+):", block.group(1), re.M))
+
+
+def test_the_retired_words_appear_nowhere():
+    """One fact, one name. These are the names this design retired."""
+    retired = [
+        "厂商库",
+        "原生库",
+        "小米官方库",
+        "本地直连",
+        "备用连接",
+        "SDK",
+        "backend",
+    ]
+    for source in (HTML, JS, CSS):
+        text = source.read_text()
+        for word in retired:
+            assert word not in text, f"{source.name} still says {word}"
+
+
+def test_go2rtc_is_named_only_where_it_should_be():
+    """Not hidden -- someone troubleshooting needs the word -- but not
+    scattered either. One line in the sign-in panel is the whole budget."""
+    assert JS.read_text().count("go2rtc") <= 2  # the en and zh strings
+
+
+def test_the_sign_in_page_can_change_language():
+    html = HTML.read_text()
+    signin = html.split('<section id="signin"', 1)[1].split("</section>", 1)[0]
+    assert 'data-lang="en"' in signin and 'data-lang="zh"' in signin

@@ -23,10 +23,26 @@ const I18N = {
     signInWrong: "That password is not right.",
     subtitle: "Publishes your Xiaomi cameras as standard RTSP streams.",
     accountHeading: "Account", camerasHeading: "Cameras",
-    prefFps: "Frame rate", prefQuality: "Quality",
+    accountTitle: "Account", settingsTitle: "Settings",
+    prefFps: "Frame rate", prefDetail: "Detail",
     fpsCamera: "Camera's rate",
     audioOn: "Audio",
-    qualityHigh: "High", qualityMedium: "Medium", qualityLow: "Low",
+    detailHigh: "High", detailMedium: "Medium", detailLow: "Low",
+    // Connection path ---------------------------------------------------
+    pathRow: "Connection",
+    pathOfficial: "Xiaomi official",
+    pathCompat: "Compatibility mode",
+    pathOfficialUnsupported: "Xiaomi doesn't support this model",
+    pathCompatNoAuth: "Compatibility mode not signed in",
+    pathCompatRisky: "This model may not connect",
+    qualityLow: "Standard", qualityHigh: "High",
+    compatTitle: "Compatibility mode",
+    compatWhy: "Compatibility mode reaches cameras a different way and needs your Xiaomi account password. It is separate from the sign-in you already completed, and stores a long-lived credential.",
+    compatCredit: "Compatibility mode is built on the open-source project go2rtc",
+    compatConnect: "Connect with compatibility mode",
+    compatRemove: "Remove credential",
+    openConfig: "Open configuration",
+    reloading: "Reconnecting",
     connect: "Connect Xiaomi account", disconnect: "Disconnect",
     finish: "Finish sign-in", cancel: "Cancel",
     step1Link: "Open the Xiaomi sign-in page",
@@ -55,7 +71,7 @@ const I18N = {
     confirmUnlink: "Disconnect the Xiaomi account? Cameras will stop streaming.",
     // Video settings ------------------------------------------------------
     defaultsHeading: "Defaults", cameraSettings: "Camera settings",
-    settingPicture: "Picture", settingSound: "Sound", settingTranscode: "Transcode quality",
+    settingPicture: "Picture quality", settingSound: "Sound", settingTranscode: "Transcode quality",
     pictureHD: "HD", pictureSD: "SD",
     on: "On", off: "Off",
     transcodeStandard: "Standard", transcodeSharp: "Sharp", transcodeMaximum: "Maximum",
@@ -84,10 +100,26 @@ const I18N = {
     signInWrong: "密码不正确。",
     subtitle: "把小米摄像头画面转换成标准 RTSP 流。",
     accountHeading: "账号", camerasHeading: "摄像头",
-    prefFps: "帧率", prefQuality: "画质",
+    accountTitle: "账号", settingsTitle: "设置",
+    prefFps: "帧率", prefDetail: "清晰度",
     fpsCamera: "原生帧率",
     audioOn: "声音",
-    qualityHigh: "高", qualityMedium: "中", qualityLow: "低",
+    detailHigh: "高", detailMedium: "中", detailLow: "低",
+    // Connection path ---------------------------------------------------
+    pathRow: "连接方式",
+    pathOfficial: "小米官方",
+    pathCompat: "兼容模式",
+    pathOfficialUnsupported: "小米不支持这个型号",
+    pathCompatNoAuth: "兼容模式未登录",
+    pathCompatRisky: "这个型号可能连不上",
+    qualityLow: "标清", qualityHigh: "高清",
+    compatTitle: "兼容模式",
+    compatWhy: "兼容模式用另一种方式连接摄像头，需要你的小米账号密码。这与你已完成的授权是分开的，会保存一个长期凭据。",
+    compatCredit: "兼容模式基于开源项目 go2rtc",
+    compatConnect: "用兼容模式连接",
+    compatRemove: "删除凭据",
+    openConfig: "打开配置",
+    reloading: "正在重连",
     connect: "连接小米账号", disconnect: "断开连接",
     finish: "完成登录", cancel: "取消",
     step1Link: "打开小米登录页面",
@@ -116,7 +148,7 @@ const I18N = {
     confirmUnlink: "确定断开小米账号？摄像头将停止推流。",
     // Video settings ------------------------------------------------------
     defaultsHeading: "默认设置", cameraSettings: "摄像头设置",
-    settingPicture: "画面", settingSound: "声音", settingTranscode: "转码画质",
+    settingPicture: "画面质量", settingSound: "声音", settingTranscode: "转码画质",
     pictureHD: "高清", pictureSD: "标清",
     on: "开启", off: "关闭",
     transcodeStandard: "标准", transcodeSharp: "锐利", transcodeMaximum: "最高",
@@ -183,8 +215,11 @@ function applyLanguage() {
   if (!document.querySelector("main").hidden) refreshStatus();
 }
 
-document.querySelectorAll("[data-lang]").forEach((b) => {
-  b.addEventListener("click", () => { lang = b.dataset.lang; applyLanguage(); });
+// Bound on the document, not on `main`: the sign-in screen is outside it,
+// and someone who cannot read the page cannot sign in to reach the switch.
+document.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-lang]");
+  if (btn) { lang = btn.dataset.lang; applyLanguage(); }
 });
 
 function showMessage(text, kind) {
@@ -329,14 +364,14 @@ const FPS_LADDER = [20, 15, 12, 8, 5, 2];
 //: when it never does.
 const FPS_ASSUMED = 20;
 
-const DEFAULT_PREFS = { fps: 12, quality: "medium" };
+const DEFAULT_PREFS = { fps: 12, detail: "medium" };
 
 // What the add-on will accept. Stored preferences are read back from a browser
 // that may have saved them under an older version, and a value this add-on no
 // longer knows is rejected outright rather than ignored -- so an unrecognised
 // one has to fall back here, or the preview simply never opens and the page
 // gives no hint why.
-const QUALITIES = ["high", "medium", "low"];
+const DETAILS = ["high", "medium", "low"];
 
 /**
  * Per-camera preview settings, remembered in this browser.
@@ -354,10 +389,10 @@ function prefsFor(did) {
   } catch { /* unreadable or not ours; the defaults are the answer */ }
   const prefs = { ...DEFAULT_PREFS, ...stored };
   // Checked rather than trusted. This is the one input the page takes from its
-  // own past, and the add-on refuses a quality it does not recognise -- so a
-  // name that has since been retired would leave the preview permanently
+  // own past, and the add-on refuses a detail level it does not recognise --
+  // so a name that has since been retired would leave the preview permanently
   // failing to open for anyone who had picked it.
-  if (!QUALITIES.includes(prefs.quality)) prefs.quality = DEFAULT_PREFS.quality;
+  if (!DETAILS.includes(prefs.detail)) prefs.detail = DEFAULT_PREFS.detail;
   if (!Number.isInteger(prefs.fps) || prefs.fps < 0) prefs.fps = DEFAULT_PREFS.fps;
   return prefs;
 }
@@ -570,10 +605,10 @@ function previewFpsField(camera) {
   return field("fps", "prefFps", (raw) => Number(raw), () =>
     fpsChoices(camera).map((c) => ({ value: String(c.value), label: c.label })));
 }
-function previewQualityField() {
-  return field("previewQuality", "prefQuality", (raw) => raw, () =>
-    QUALITIES.map((name) => ({
-      value: name, label: t(`quality${name[0].toUpperCase()}${name.slice(1)}`),
+function previewDetailField() {
+  return field("previewDetail", "prefDetail", (raw) => raw, () =>
+    DETAILS.map((name) => ({
+      value: name, label: t(`detail${name[0].toUpperCase()}${name.slice(1)}`),
     })));
 }
 
@@ -733,7 +768,7 @@ function renderCameraSheetBody(did) {
     .join("");
   const prefs = prefsFor(did);
   const fpsField = previewFpsField(camera);
-  const qualityField = previewQualityField();
+  const detailField = previewDetailField();
   // Copying a stream address is a once-per-NVR errand, not something wanted
   // at a glance every time this page opens -- and the address was truncated
   // mid-string at a card's width anyway, so it moved here where there is
@@ -752,14 +787,14 @@ function renderCameraSheetBody(did) {
     <span class="setting-group-label">${escapeHtml(t("previewGroup"))}</span>
     <div class="settings-list" data-sheet-preview>
       ${settingRowHtml(fpsField, prefs.fps)}
-      ${settingRowHtml(qualityField, prefs.quality)}
+      ${settingRowHtml(detailField, prefs.detail)}
     </div>
     ${addressGroup}`;
 
   // `_field` supplies what `SETTINGS_FIELDS` cannot for the two preview rows,
   // which the shared row component does not otherwise know how to parse.
   overlay.body.querySelector('[data-field="fps"]')._field = fpsField;
-  overlay.body.querySelector('[data-field="previewQuality"]')._field = qualityField;
+  overlay.body.querySelector('[data-field="previewDetail"]')._field = detailField;
 
   wireSettingRows(overlay.body.querySelector("[data-sheet-camera]"), (key, value) =>
     applyCameraOverride(did, key, value)
@@ -792,7 +827,7 @@ async function applyCameraOverride(did, key, value) {
 function applyPreviewPref(did, key, value) {
   const prefs = prefsFor(did);
   if (key === "fps") prefs.fps = value;
-  else prefs.quality = value;
+  else prefs.detail = value;
   savePrefs(did, prefs);
 
   // Restarted rather than left to apply next time: the point of a preview
@@ -1107,7 +1142,7 @@ function startPreview(cam) {
     if (stopped()) return;
     const socket = new WebSocket(socketUrl(
       `/api/preview/${encodeURIComponent(did)}/ws`
-      + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.quality)}`,
+      + `?fps=${prefs.fps}&quality=${encodeURIComponent(prefs.detail)}`,
     ));
     // Blobs, not ArrayBuffers: the only thing done with a frame is to hand
     // it to an <img>, and `createObjectURL` wants a Blob either way.
