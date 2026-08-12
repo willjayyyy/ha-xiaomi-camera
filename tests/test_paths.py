@@ -5,7 +5,6 @@ from bridge.paths import (
     VideoPath,
     available_paths,
     path_for,
-    quality_choices_for,
 )
 
 
@@ -35,11 +34,6 @@ def test_an_override_survives_the_credential_being_removed():
     and reports unavailable rather than disappearing.
     """
     assert path_for("limited", VideoPath.COMPAT, compat_ready=False) is VideoPath.COMPAT
-
-
-def test_official_offers_two_qualities_and_compat_offers_three():
-    assert quality_choices_for(VideoPath.OFFICIAL) == (["low", "high"], "low")
-    assert quality_choices_for(VideoPath.COMPAT) == (["auto", "sd", "hd"], "hd")
 
 
 @pytest.mark.parametrize(

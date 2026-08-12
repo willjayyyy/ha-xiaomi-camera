@@ -661,6 +661,7 @@ class TestCamerasEndpointReachability:
             # streamable camera, so it says so explicitly rather than relying
             # on the real `CameraDescription.publishable` derivation.
             publishable=True,
+            support="full",
             as_dict=lambda: {
                 "did": "42",
                 "name": "Cam",

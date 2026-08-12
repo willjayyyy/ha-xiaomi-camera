@@ -291,8 +291,17 @@ class BridgeApi:
                         # default otherwise. Override is only what this
                         # camera says for itself, so the page can show which
                         # fields are following the default versus set here.
+                        # `compat_ready` is hardcoded until compatibility
+                        # mode's account state is wired in (a later task);
+                        # `support` already tells `resolved_for` everything
+                        # it needs for the vendor-supported path this add-on
+                        # currently publishes.
                         "settings": _settings_dict(
-                            self._settings_store.resolved_for(description.did)
+                            self._settings_store.resolved_for(
+                                description.did,
+                                support=description.support,
+                                compat_ready=False,
+                            )
                         ),
                         "override": self._settings_store.override_for(
                             description.did
@@ -783,10 +792,15 @@ async def _json_body(request: web.Request) -> dict[str, Any]:
     return payload
 
 
-def _settings_dict(settings: Defaults | Resolved) -> dict[str, object]:
+def _settings_dict(settings: Defaults | Resolved | None) -> dict[str, object] | None:
     """`Defaults` and `Resolved` serialised the same way -- they carry the same
     three fields, and the page has no reason to see them rendered differently.
+
+    `None` passes straight through: a camera with no resolvable path (see
+    `SettingsStore.resolved_for`) has no effective settings to show.
     """
+    if settings is None:
+        return None
     return {
         "quality": settings.quality.value,
         "audio": settings.audio,

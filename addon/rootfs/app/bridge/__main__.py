@@ -174,8 +174,16 @@ class Bridge:
             # of the process.
             await self._sessions.async_prune({c.did for c in publishable})
         self._settings.prune({c.did for c in publishable})
+        # Every camera reaching this point is fully supported today, so each
+        # one resolves to something -- `compat_ready` is a placeholder until
+        # compatibility mode's account state is wired in.
         await self._restreamer.async_apply(
-            {c.did: self._settings.resolved_for(c.did) for c in publishable},
+            {
+                c.did: self._settings.resolved_for(
+                    c.did, support=c.support, compat_ready=False
+                )
+                for c in publishable
+            },
             explicit=explicit,
         )
         self._previews.drop({c.did for c in publishable})
@@ -221,7 +229,17 @@ class Bridge:
             return
 
         self._registry = CameraRegistry(client)
-        self._sessions = SessionManager(client, resolver=self._settings.resolved_for)
+        # Sessions only ever open for cameras the vendor SDK itself accepted
+        # (`MIoTCameraInfo` only exists for those), so `support` is always
+        # "full" here -- and `session_for` refuses anything not on the
+        # official path regardless, so a stale `compat_ready` cannot open a
+        # session it should not.
+        self._sessions = SessionManager(
+            client,
+            resolver=lambda did: self._settings.resolved_for(
+                did, support="full", compat_ready=False
+            ),
+        )
 
     async def _refresh_loop(self) -> None:
         while True:

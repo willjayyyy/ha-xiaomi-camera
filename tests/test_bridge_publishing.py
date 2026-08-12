@@ -65,7 +65,7 @@ class _FakeSettings:
     def prune(self, dids: set[str]) -> None:
         self.pruned = set(dids)
 
-    def resolved_for(self, did: str) -> str:
+    def resolved_for(self, did: str, *, support: str, compat_ready: bool) -> str:
         return f"resolved-{did}"
 
 

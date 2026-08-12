@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING
 
 from miot.types import MIoTCameraCodec, MIoTCameraStatus, MIoTCameraVideoQuality
 
-from .config import VideoQuality
 from .const import (
     CONNECT_TIMEOUT_SECONDS,
     PARAMETER_SET_TIMEOUT_SECONDS,
@@ -46,6 +45,7 @@ from .nal import (
     iter_nal_units,
     nal_type,
 )
+from .paths import VideoPath
 from .redact import safe_error
 
 if TYPE_CHECKING:
@@ -58,10 +58,15 @@ _LOGGER = logging.getLogger(__name__)
 
 #: Maps the add-on's own quality setting onto the vendor SDK's enum. Lives
 #: here rather than in `__main__.py` because `SessionManager` is now its only
-#: caller: it is consulted exactly when a session opens, per camera.
+#: caller: it is consulted exactly when a session opens, per camera. Keyed by
+#: plain strings rather than `config.VideoQuality` -- that enum is kept for
+#: the add-on's own configuration and its two members compare equal to these
+#: strings anyway (it is a `StrEnum`), but this table only ever needs to
+#: translate "low"/"high" into the vendor SDK's own type, and naming that
+#: without a second enum in the middle is one less thing to keep reconciled.
 _QUALITY_MAP = {
-    VideoQuality.LOW: MIoTCameraVideoQuality.LOW,
-    VideoQuality.HIGH: MIoTCameraVideoQuality.HIGH,
+    "low": MIoTCameraVideoQuality.LOW,
+    "high": MIoTCameraVideoQuality.HIGH,
 }
 
 #: Bounded so a stalled consumer drops frames instead of growing without limit.
@@ -582,7 +587,7 @@ class SessionManager:
     def __init__(
         self,
         client: MIoTClient,
-        resolver: Callable[[str], Resolved],
+        resolver: Callable[[str], Resolved | None],
     ) -> None:
         self._client = client
         self._resolve = resolver
@@ -592,6 +597,11 @@ class SessionManager:
         session = self._sessions.get(info.did)
         if session is None:
             settings = self._resolve(info.did)
+            if settings is None or settings.path is not VideoPath.OFFICIAL:
+                # This class only ever speaks the vendor SDK's own protocol,
+                # so a camera resolved onto any other path -- or onto none at
+                # all -- has nothing here to open a session with.
+                raise ValueError(f"{info.did} is not on the Xiaomi official path")
             session = CameraSession(
                 self._client,
                 info,

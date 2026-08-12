@@ -25,17 +25,6 @@ class VideoPath(StrEnum):
     COMPAT = "compat"
 
 
-#: Picture quality per path. Xiaomi's own library negotiates one of two sizes
-#: when the session opens. go2rtc takes `subtype=hd/sd/auto/0-5`, but upstream
-#: warns the numbers do not mean the same thing on every camera and that 3
-#: breaks the codec on older ones -- so the named values are what the
-#: interface offers, and the raw numbers stay an advanced escape hatch.
-_QUALITIES: dict[VideoPath, tuple[list[str], str]] = {
-    VideoPath.OFFICIAL: (["low", "high"], "low"),
-    VideoPath.COMPAT: (["auto", "sd", "hd"], "hd"),
-}
-
-
 def path_for(
     support: str, override: VideoPath | None, *, compat_ready: bool
 ) -> VideoPath | None:
@@ -53,11 +42,6 @@ def path_for(
     # Never chosen automatically: compatibility mode costs the user a
     # password, and spending that on their behalf is not ours to do.
     return None
-
-
-def quality_choices_for(path: VideoPath) -> tuple[list[str], str]:
-    """The picture qualities this path offers, and its built-in value."""
-    return _QUALITIES[path]
 
 
 def available_paths(support: str, *, compat_ready: bool) -> dict[VideoPath, str | None]:
