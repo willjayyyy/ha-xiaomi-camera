@@ -850,48 +850,6 @@ class TestCompatibilitySource:
 
         assert "compat_ready" not in inspect.signature(source_for).parameters
 
-    def test_a_second_lens_gets_channel_two(self) -> None:
-        cameras = {
-            "99": Resolved(
-                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
-            )
-        }
-        config = build_config(
-            make_options(AccessMode.LOCAL),
-            cameras,
-            channel_counts={"99": 2},
-            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
-        )
-        assert "&channel=2" in config["streams"][stream_name("99", lens=2)]
-
-    def test_a_single_lens_camera_gets_no_second_stream(self) -> None:
-        cameras = {
-            "99": Resolved(
-                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.COMPAT
-            )
-        }
-        config = build_config(
-            make_options(AccessMode.LOCAL),
-            cameras,
-            channel_counts={"99": 1},
-            compat_urls={"99": "xiaomi://1:cn@1.2.3.4?did=99&model=m"},
-        )
-        assert stream_name("99", lens=2) not in config["streams"]
-
-    def test_the_official_path_never_gets_a_second_lens_stream(self) -> None:
-        """Only compatibility mode addresses a second lens with `channel=2`
-        today; the official path has no equivalent yet, so a dual-lens
-        camera on it must not spuriously gain a stream nothing serves."""
-        cameras = {
-            "99": Resolved(
-                VideoQuality.LOW, False, TranscodeQuality.STANDARD, VideoPath.OFFICIAL
-            )
-        }
-        config = build_config(
-            make_options(AccessMode.LOCAL), cameras, channel_counts={"99": 2}
-        )
-        assert stream_name("99", lens=2) not in config["streams"]
-
     def test_switching_path_changes_no_stream_name(self) -> None:
         """The hard constraint. Breaking it unpairs HomeKit and orphans
         history with nothing logged -- this project has shipped that once
@@ -935,11 +893,6 @@ class TestCompatibilitySource:
         config = build_config(make_options(AccessMode.LOCAL), cameras, errors=errors)
         assert "99" in errors
         assert not any(name.startswith("camera_99") for name in config["streams"])
-
-
-def test_stream_name_names_the_second_lens() -> None:
-    assert stream_name("99", lens=2) == "camera_99_2"
-    assert stream_name("99") == stream_name("99", lens=1)
 
 
 def test_no_other_module_composes_a_xiaomi_url() -> None:

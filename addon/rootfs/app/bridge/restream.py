@@ -263,7 +263,7 @@ def _audio_codecs(spec: StreamSpec) -> tuple[str, ...]:
     return ("copy", "aac") if spec.codec == "h264" else ("copy",)
 
 
-def stream_name(did: str, key: str = ROOT_KEY, *, lens: int = 1) -> str:
+def stream_name(did: str, key: str = ROOT_KEY) -> str:
     """Stable go2rtc stream name for one variant of a camera.
 
     `camera_<did>` for the root -- the camera's own encoding, which has no
@@ -279,13 +279,14 @@ def stream_name(did: str, key: str = ROOT_KEY, *, lens: int = 1) -> str:
     its entity -- unpairing HomeKit and orphaning history, the exact failure
     this project has already shipped once (see `paths.py`'s own docstring).
 
-    `lens` names a camera's second video channel, which compatibility mode
-    addresses with go2rtc's own `channel=2` parameter (see `source_for`) --
-    the official path has no equivalent yet. Defaulted to 1 so every existing
-    caller keeps naming exactly the stream it always has.
+    There is deliberately no name here for a dual-lens camera's second lens.
+    One was added on the strength of "the official path already does this",
+    which was not true of the official path and never had been; nothing
+    produced it (the refused-camera branch reports one channel) and nothing
+    consumed it (`stream_descriptions` never named it). A real dual-lens
+    camera gets this designed then, with evidence.
     """
-    base = f"camera_{did}" if key == ROOT_KEY else f"camera_{did}_{key}"
-    return base if lens == 1 else f"{base}_{lens}"
+    return f"camera_{did}" if key == ROOT_KEY else f"camera_{did}_{key}"
 
 
 def _bits(rate: str) -> int:
@@ -399,7 +400,6 @@ def build_config(
     options: Options,
     cameras: Mapping[str, Resolved | None],
     *,
-    channel_counts: Mapping[str, int] | None = None,
     compat_urls: Mapping[str, str] | None = None,
     errors: dict[str, str] | None = None,
 ) -> dict:
@@ -432,7 +432,6 @@ def build_config(
     is what lets the page report the failure on that camera's row instead of
     it simply having no working stream with nothing to explain why.
     """
-    channel_counts = channel_counts or {}
     compat_urls = compat_urls or {}
     bind = options.bind_address
     streams: dict[str, str] = {}
@@ -455,13 +454,6 @@ def build_config(
         # would spend three seconds of cold start probing a container it did
         # not need to, to do a job go2rtc already does.
         streams[root] = root_source
-        if channel_counts.get(did, 1) > 1 and settings.path is VideoPath.COMPAT:
-            # go2rtc addresses a dual-lens camera's second lens with its own
-            # `channel=2` parameter. The official path has no equivalent
-            # today, so this only ever fires on compatibility mode -- a
-            # camera that switches to it must not lose the second lens it
-            # had on the vendor path.
-            streams[stream_name(did, lens=2)] = f"{root_source}&channel=2"
         for spec in STREAM_SPECS:
             if spec.key == ROOT_KEY:
                 continue
@@ -548,10 +540,9 @@ class Restreamer:
         self._cameras: dict[str, Resolved] = {}
         #: What `async_apply` was last called with, alongside `_cameras`,
         #: purely so a later call can tell whether anything actually changed
-        #: -- see the comparison in `async_apply`. Neither ever reaches
-        #: `_cameras`'s own shape: existing callers and tests read that
-        #: attribute as a plain `dict[str, Resolved]`.
-        self._channel_counts: dict[str, int] = {}
+        #: -- see the comparison in `async_apply`. Kept out of `_cameras`'s
+        #: own shape: existing callers and tests read that attribute as a
+        #: plain `dict[str, Resolved]`.
         self._compat_urls: dict[str, str] = {}
         #: The stream table as last written, which is also what the running
         #: go2rtc was last told. Kept so a change can be delivered per stream:
@@ -648,7 +639,6 @@ class Restreamer:
         self,
         cameras: Mapping[str, Resolved | None],
         *,
-        channel_counts: Mapping[str, int] | None = None,
         compat_urls: Mapping[str, str] | None = None,
         explicit: bool = False,
     ) -> None:
@@ -660,11 +650,11 @@ class Restreamer:
         Equality on a dict ignores key order, which matters because the cloud
         does not guarantee a stable device order -- treating a reordering as
         a change would restart go2rtc, dropping every live viewer, on an
-        unrelated refresh. `channel_counts` and `compat_urls` are compared
-        alongside it for the same reason: a compatibility-mode camera's
-        address can change in the background with its `Resolved` untouched,
-        and missing that would leave go2rtc dialing a stale address until
-        some unrelated setting happened to change too.
+        unrelated refresh. `compat_urls` is compared alongside it for the
+        same reason: a compatibility-mode camera's address can change in the
+        background with its `Resolved` untouched, and missing that would
+        leave go2rtc dialing a stale address until some unrelated setting
+        happened to change too.
 
         A camera may map to `None` -- `SettingsStore.resolved_for` returns
         that for one with no usable path -- and is simply published as
@@ -686,24 +676,20 @@ class Restreamer:
         camera's address changing, a periodic re-read of the device list --
         whose viewers are left on their existing connection.
         """
-        channel_counts = dict(channel_counts or {})
         compat_urls = dict(compat_urls or {})
         if (
             cameras == self._cameras
-            and channel_counts == self._channel_counts
             and compat_urls == self._compat_urls
             and self._process is not None
         ):
             return
 
         self._cameras = dict(cameras)
-        self._channel_counts = channel_counts
         self._compat_urls = compat_urls
         errors: dict[str, str] = {}
         config = build_config(
             self._options,
             self._cameras,
-            channel_counts=self._channel_counts,
             compat_urls=self._compat_urls,
             errors=errors,
         )

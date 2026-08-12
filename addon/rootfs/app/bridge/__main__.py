@@ -267,7 +267,6 @@ class Bridge:
         )
         await self._restreamer.async_apply(
             resolved,
-            channel_counts={c.did: c.channel_count for c in publishable},
             compat_urls=compat_urls,
             explicit=explicit,
         )
