@@ -13,6 +13,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from bridge.cameras import CameraDescription, CameraRegistry
+from bridge.paths import VideoPath
+from bridge.settings import SettingsStore
 
 pytestmark = pytest.mark.skipif(
     sys.version_info < (3, 14),
@@ -455,8 +457,14 @@ class _FakeCameraClient:
         }
 
 
-async def _describe(devices: list[SimpleNamespace]) -> list[CameraDescription]:
-    registry = CameraRegistry(_FakeCameraClient(devices))
+def _settings(tmp_path) -> SettingsStore:
+    return SettingsStore(tmp_path / "settings.json")
+
+
+async def _describe(
+    devices: list[SimpleNamespace], settings: SettingsStore
+) -> list[CameraDescription]:
+    registry = CameraRegistry(_FakeCameraClient(devices), settings)
     return await registry.async_refresh()
 
 
@@ -466,7 +474,7 @@ def _by_did(descriptions: list[CameraDescription], did: str) -> CameraDescriptio
     return matches[0]
 
 
-async def test_a_refused_model_is_listed_rather_than_silently_dropped() -> None:
+async def test_a_refused_model_is_listed_rather_than_silently_dropped(tmp_path) -> None:
     """A camera missing from the list with no explanation reads as a broken
     add-on. It is the vendor library refusing that model, and saying so is
     also where the second path is discovered."""
@@ -474,7 +482,8 @@ async def test_a_refused_model_is_listed_rather_than_silently_dropped() -> None:
         [
             _device("aaa", "chuangmi.camera.81ac1"),
             _device("bbb", "chuangmi.camera.ipc019"),
-        ]
+        ],
+        _settings(tmp_path),
     )
     assert {d.did for d in descriptions} == {"aaa", "bbb"}
     assert _by_did(descriptions, "aaa").support == "full"
@@ -485,13 +494,17 @@ async def test_a_refused_model_is_listed_rather_than_silently_dropped() -> None:
     assert _by_did(descriptions, "bbb").support == "limited"
 
 
-async def test_a_refused_model_is_not_offered_a_working_stream() -> None:
+async def test_a_refused_model_is_not_offered_a_working_stream(tmp_path) -> None:
     """It is listed so it can be explained, not so it can appear to work."""
-    descriptions = await _describe([_device("bbb", "chuangmi.camera.ipc019")])
+    descriptions = await _describe(
+        [_device("bbb", "chuangmi.camera.ipc019")], _settings(tmp_path)
+    )
     assert _by_did(descriptions, "bbb").online is False
 
 
-async def test_one_device_with_an_odd_model_string_does_not_hide_the_cameras() -> None:
+async def test_one_device_with_an_odd_model_string_does_not_hide_the_cameras(
+    tmp_path,
+) -> None:
     """Whatever else is on the account is not this add-on's to validate.
 
     Every model seen so far reads `<vendor>.<class>.<variant>`, but the list
@@ -500,12 +513,13 @@ async def test_one_device_with_an_odd_model_string_does_not_hide_the_cameras() -
     reads as the add-on being broken rather than as one odd device.
     """
     descriptions = await _describe(
-        [_device("aaa", "chuangmi.camera.81ac1"), _device("odd", "gateway")]
+        [_device("aaa", "chuangmi.camera.81ac1"), _device("odd", "gateway")],
+        _settings(tmp_path),
     )
     assert {d.did for d in descriptions} == {"aaa"}
 
 
-async def test_the_wire_format_carries_the_publishing_decision() -> None:
+async def test_the_wire_format_carries_the_publishing_decision(tmp_path) -> None:
     """`publishable` is one property for a reason -- see its docstring. A
     payload that stated only `support` would hand the same question back to
     the page, which is where the fourth support level would be forgotten."""
@@ -513,13 +527,16 @@ async def test_the_wire_format_carries_the_publishing_decision() -> None:
         [
             _device("aaa", "chuangmi.camera.81ac1"),
             _device("bbb", "chuangmi.camera.ipc019"),
-        ]
+        ],
+        _settings(tmp_path),
     )
     assert _by_did(descriptions, "aaa").as_dict()["publishable"] is True
     assert _by_did(descriptions, "bbb").as_dict()["publishable"] is False
 
 
-async def test_a_refused_models_support_level_follows_the_go2rtc_protocol() -> None:
+async def test_a_refused_models_support_level_follows_the_go2rtc_protocol(
+    tmp_path,
+) -> None:
     """The two paths go2rtc offers refused models are not equally safe.
 
     A model reachable over `cs2` gets "limited" -- go2rtc's own maintainer
@@ -538,14 +555,54 @@ async def test_a_refused_models_support_level_follows_the_go2rtc_protocol() -> N
             _device("tutk", "chuangmi.camera.v2"),
             # On the vendor's denylist but not reported working by go2rtc at all.
             _device("neither", "chuangmi.camera.no-known-alternative"),
-        ]
+        ],
+        _settings(tmp_path),
     )
     assert _by_did(descriptions, "cs2").support == "limited"
     assert _by_did(descriptions, "tutk").support == "unsupported"
     assert _by_did(descriptions, "neither").support == "unsupported"
 
 
-async def test_a_non_camera_device_on_the_deny_list_is_not_listed_as_a_camera() -> None:
+async def test_a_non_camera_device_on_the_deny_list_is_not_listed_as_a_camera(
+    tmp_path,
+) -> None:
     """`is_camera_model` denies non-camera classes too; those never belong here."""
-    descriptions = await _describe([_device("light", "yeelink.light.col")])
+    descriptions = await _describe(
+        [_device("light", "yeelink.light.col")], _settings(tmp_path)
+    )
     assert descriptions == []
+
+
+async def test_a_refused_camera_on_compat_reports_its_real_state(tmp_path) -> None:
+    """C10: online and powered_on were hardcoded for refused models.
+
+    They were hardcoded because such a camera could not stream at all. Once
+    compatibility mode can reach it, the hardcoded answers make the card read
+    "offline" forever and leave the lens switch permanently unavailable.
+    """
+    settings = _settings(tmp_path)
+    settings.set_override("bbb", path=VideoPath.COMPAT)
+    descriptions = await _describe(
+        [_device("bbb", "chuangmi.camera.no-known-alternative")], settings
+    )
+    described = _by_did(descriptions, "bbb")
+    assert described.online is True
+    assert described.powered_on is True
+    # This task only fixes state reporting. Whether a compat-mode camera
+    # actually streams -- and therefore whether it is `publishable` -- is
+    # unrelated and must not move as a side effect of reading real state.
+    assert described.support == "unsupported"
+    assert described.as_dict()["publishable"] is False
+
+
+async def test_a_refused_camera_with_no_path_is_still_reported_as_unreachable(
+    tmp_path,
+) -> None:
+    """Nothing changes for a camera the user has not enabled: there is no
+    channel to it, so claiming it is online would be a guess."""
+    descriptions = await _describe(
+        [_device("bbb", "chuangmi.camera.v2")], _settings(tmp_path)
+    )
+    described = _by_did(descriptions, "bbb")
+    assert described.online is False
+    assert described.powered_on is None

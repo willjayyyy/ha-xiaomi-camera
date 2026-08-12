@@ -16,6 +16,8 @@ from miot.client import MIoTClient
 from miot.types import MIoTCameraInfo, MIoTGetPropertyParam
 
 from .const import POWER_PIID, POWER_SIID
+from .paths import VideoPath, is_full_support, path_for
+from .settings import SettingsStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -144,7 +146,7 @@ class CameraDescription:
         support level, if one is ever added, cannot silently become
         publishable by accident -- it has to be added here, once.
         """
-        return self.support == "full"
+        return is_full_support(self.support)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -171,9 +173,15 @@ class CameraDescription:
 class CameraRegistry:
     """Discovers cameras and tracks the state Home Assistant needs."""
 
-    def __init__(self, client: MIoTClient) -> None:
+    def __init__(self, client: MIoTClient, settings: SettingsStore) -> None:
         self._client = client
+        self._settings = settings
         self._cameras: dict[str, MIoTCameraInfo] = {}
+        #: Every device on the account, unfiltered, as of the last refresh.
+        #: Needed by :meth:`_path_for` for models the vendor library refuses,
+        #: which are absent from :attr:`_cameras` but still need a support
+        #: level to ask `path_for` about.
+        self._all_devices: dict[str, object] = {}
         #: Lens switches as last read, alongside the cameras they belong to.
         #: Empty until the first refresh, which reads "not known" rather than
         #: "off" -- see :meth:`power_state`.
@@ -247,6 +255,7 @@ class CameraRegistry:
         camera list over one unrelated device.
         """
         all_devices = await self._client.get_devices_async()
+        self._all_devices = all_devices
         try:
             self._cameras = await self._client.get_cameras_async()
         except IndexError:
@@ -261,7 +270,14 @@ class CameraRegistry:
                 "unfiltered device list below",
                 ", ".join(culprits) if culprits else "<undetermined>",
             )
-        power_states = await self._async_read_power_states(list(self._cameras))
+        # Every camera with a resolvable path, not just the ones the vendor
+        # library accepts. A model it refuses still answers MIoT property
+        # reads -- the refusal is about opening a video session, not about
+        # the device being unreachable -- and once compatibility mode can
+        # stream it, a hardcoded "offline" would be the only thing wrong
+        # with the card.
+        readable = [did for did in all_devices if self._path_for(did) is not None]
+        power_states = await self._async_read_power_states(readable)
         self._power_states = power_states
 
         descriptions: list[CameraDescription] = []
@@ -293,6 +309,7 @@ class CameraRegistry:
             if _device_class(info.model) != "camera":
                 continue
             refused_count += 1
+            has_path = self._path_for(did) is not None
             descriptions.append(
                 CameraDescription(
                     did=did,
@@ -300,14 +317,13 @@ class CameraRegistry:
                     model=info.model,
                     manufacturer=info.manufacturer,
                     channel_count=1,
-                    # Always False, never the cloud's own answer for this
-                    # device: there is no camera-control channel to a refused
-                    # model at all, so nothing here can ever open a stream for
-                    # it regardless of what the cloud reports about it being
-                    # reachable.
-                    online=False,
+                    # Real values once something can reach this camera. With
+                    # no path there is no channel to it at all, and reporting
+                    # the cloud's own answer would promise a picture that
+                    # nothing can produce.
+                    online=bool(info.online) if has_path else False,
                     lan_online=bool(getattr(info, "lan_online", False)),
-                    powered_on=None,
+                    powered_on=power_states.get(did) if has_path else None,
                     requires_pin=False,
                     support=_support_for_refused_model(info.model),
                 )
@@ -319,6 +335,29 @@ class CameraRegistry:
             refused_count,
         )
         return descriptions
+
+    def _path_for(self, did: str) -> VideoPath | None:
+        """This camera's path. Delegated -- see the note in `paths.py`."""
+        info = self._all_devices.get(did)
+        support = (
+            "full"
+            if did in self._cameras
+            else _support_for_refused_model(info.model)
+            if info is not None
+            else "unsupported"
+        )
+        return path_for(
+            support,
+            self._settings.override_for(did).path,
+            compat_ready=self._compat_ready(),
+        )
+
+    def _compat_ready(self) -> bool:
+        # No compatibility-mode credential exists yet. Hardcoded here for
+        # the same reason it is hardcoded at the other two call sites
+        # (`__main__.py`, `api.py`): a later task wires the real account
+        # state into all three at once.
+        return False
 
     async def async_set_power(self, did: str, value: bool) -> None:
         """Switch a camera on or off."""

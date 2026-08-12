@@ -228,7 +228,7 @@ class Bridge:
             await self._restreamer.async_apply({})
             return
 
-        self._registry = CameraRegistry(client)
+        self._registry = CameraRegistry(client, self._settings)
         # Sessions only ever open for cameras the vendor SDK itself accepted
         # (`MIoTCameraInfo` only exists for those), so `support` is always
         # "full" here -- and `session_for` refuses anything not on the

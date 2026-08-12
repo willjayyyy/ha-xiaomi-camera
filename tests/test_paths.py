@@ -59,8 +59,6 @@ def test_no_other_module_answers_these_two_questions():
 
     root = pathlib.Path("addon/rootfs/app/bridge")
     offenders = []
-    # Task B3 removes cameras.py from this allowlist
-    allowed_offenders = {"cameras.py: decides a path from support"}
     for source in root.glob("*.py"):
         if source.name == "paths.py":
             continue
@@ -69,5 +67,4 @@ def test_no_other_module_answers_these_two_questions():
             offenders.append(f"{source.name}: decides a path from support")
         if '"low", "high"' in text or "'low', 'high'" in text:
             offenders.append(f"{source.name}: hardcodes a quality ladder")
-    offenders = [o for o in offenders if o not in allowed_offenders]
     assert not offenders, offenders

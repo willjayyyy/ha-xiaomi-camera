@@ -25,6 +25,17 @@ class VideoPath(StrEnum):
     COMPAT = "compat"
 
 
+def is_full_support(support: str) -> bool:
+    """Whether ``support`` names a model this add-on actually streams today.
+
+    The one place that spells out the "full" support level, so a camera's
+    publishability -- ``CameraDescription.publishable`` in ``cameras.py`` --
+    can ask this instead of re-deriving the same comparison next to a
+    different question (which path to use).
+    """
+    return support == "full"
+
+
 def path_for(
     support: str, override: VideoPath | None, *, compat_ready: bool
 ) -> VideoPath | None:
@@ -37,7 +48,7 @@ def path_for(
     """
     if override is not None:
         return override
-    if support == "full":
+    if is_full_support(support):
         return VideoPath.OFFICIAL
     # Never chosen automatically: compatibility mode costs the user a
     # password, and spending that on their behalf is not ours to do.
@@ -52,6 +63,8 @@ def available_paths(support: str, *, compat_ready: bool) -> dict[VideoPath, str 
     exist even when the answer is "not on this model".
     """
     return {
-        VideoPath.OFFICIAL: None if support == "full" else "pathOfficialUnsupported",
+        VideoPath.OFFICIAL: (
+            None if is_full_support(support) else "pathOfficialUnsupported"
+        ),
         VideoPath.COMPAT: None if compat_ready else "pathCompatNoAuth",
     }
