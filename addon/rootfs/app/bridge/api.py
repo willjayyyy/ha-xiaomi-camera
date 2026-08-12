@@ -27,8 +27,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import ipaddress
 import logging
 import secrets
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
 import av.error
@@ -77,8 +79,30 @@ _INGRESS_HEADER = "X-Ingress-Path"
 #: denial-of-service switch anyone on the network can throw, with the owner
 #: on the wrong side of it, standing in their own house, unable to see their
 #: own cameras.
+#:
+#: Two limits of this, worth stating here rather than only in a design note,
+#: because this comment is where the next person will look and a defence
+#: whose limits live only in a report is a defence whose limits get lost.
+#: First, this slows one *address*, not one attacker: anyone with a second
+#: NIC, a spare device, or an IPv6 /64 gets a fresh budget and a fresh curve
+#: per address they attack from. That is inherent to any per-address scheme,
+#: not a defect of this one. Second, the password check runs in every
+#: deployment including through Home Assistant's own panel (see
+#: `webauth.py`'s module docstring), and behind Supervisor's ingress every
+#: request arrives from Supervisor's single address -- so yes, one person
+#: mistyping the password there slows the page for everyone else on that
+#: instance too, capped at the same 30 seconds.
 _MAX_FREE_ATTEMPTS = 5
 _MAX_PENALTY_S = 30.0
+
+#: Upper bound on how many source addresses are tracked at once. Only a
+#: success removes an entry, so without a cap a sustained attack spread
+#: across many addresses -- cheap over an IPv6 /64, though TCP's handshake
+#: means it is never free -- would grow this dict for the life of the
+#: process. Bounded by evicting the least-recently-touched entry once the
+#: cap is hit: a defence that can be turned into a memory leak is a new
+#: attack surface, not a fix.
+_MAX_TRACKED_ADDRESSES = 10_000
 
 
 def _bounded(raw: str | None, name: str, low: int, high: int, default: int) -> int:
@@ -159,8 +183,10 @@ class BridgeApi:
         # `webauth._from_supervisor` for why that distinction matters), and
         # never persisted: a restart is an acceptable way to reset it, and
         # keeping it only in memory is what keeps the login page itself free
-        # of anything worth calling storage.
-        self._login_failures: dict[str, int] = {}
+        # of anything worth calling storage. An `OrderedDict` so the least
+        # recently touched address can be evicted once `_MAX_TRACKED_ADDRESSES`
+        # is reached -- see that constant for why a cap exists at all.
+        self._login_failures: OrderedDict[str, int] = OrderedDict()
 
     # ------------------------------------------------------------------
     # Server lifetime
@@ -838,7 +864,7 @@ class BridgeApi:
             # cannot explain.
             raise web.HTTPBadRequest(text="No password is configured.")
 
-        peer = request.remote or "unknown"
+        peer = self._bucket_key(request.remote or "unknown")
         await self._login_penalty(peer)
 
         supplied = str((await _json_body(request)).get("password", ""))
@@ -848,8 +874,7 @@ class BridgeApi:
         if not secrets.compare_digest(
             supplied.encode("utf-8"), expected.encode("utf-8")
         ):
-            failures = self._login_failures.get(peer, 0) + 1
-            self._login_failures[peer] = failures
+            failures = self._record_login_failure(peer)
             # The source and the count, never the value: the attempted
             # password must not enter a log line, full stop -- see
             # `redact.py`'s reason for existing, which is that credentials
@@ -890,11 +915,53 @@ class BridgeApi:
         concurrently without interfering, because each is its own coroutine
         waiting on its own timer.
         """
+        if peer in self._login_failures:
+            # Touched: this address stays recently-used, so eviction under
+            # `_MAX_TRACKED_ADDRESSES` takes an idle address first.
+            self._login_failures.move_to_end(peer)
         failures = self._login_failures.get(peer, 0)
         if failures < _MAX_FREE_ATTEMPTS:
             return
         delay = min(2.0 ** (failures - _MAX_FREE_ATTEMPTS), _MAX_PENALTY_S)
         await asyncio.sleep(delay)
+
+    @staticmethod
+    def _bucket_key(peer: str) -> str:
+        """Normalise a peer address before it becomes a dict key.
+
+        `request.remote` can name the same host two ways -- plain
+        `192.168.1.5` and its IPv4-mapped IPv6 form `::ffff:192.168.1.5` --
+        and leaving both as their raw strings would hand a dual-stack
+        attacker two separate budgets for one address. Parsed through
+        `ipaddress`, the same normalisation `webauth._from_supervisor`
+        already relies on to reason about a peer address in this file
+        family. Falls back to the raw string when it does not parse as an
+        address at all -- losing the backoff there is better than the
+        request failing outright.
+        """
+        try:
+            address = ipaddress.ip_address(peer)
+        except ValueError:
+            return peer
+        mapped = getattr(address, "ipv4_mapped", None)
+        return str(mapped) if mapped is not None else str(address)
+
+    def _record_login_failure(self, peer: str) -> int:
+        """Bump this address's failure count and return it.
+
+        Also where the bound in `_MAX_TRACKED_ADDRESSES` is enforced: the
+        address just touched is moved to the most-recently-used end, and if
+        that pushes the map over the cap, the least-recently-touched address
+        -- not necessarily this one -- is evicted. Split out from `_login`
+        so this bookkeeping can be exercised directly rather than only
+        through however many real requests it would take to fill the cap.
+        """
+        failures = self._login_failures.get(peer, 0) + 1
+        self._login_failures[peer] = failures
+        self._login_failures.move_to_end(peer)
+        if len(self._login_failures) > _MAX_TRACKED_ADDRESSES:
+            self._login_failures.popitem(last=False)
+        return failures
 
     async def _logout(self, request: web.Request) -> web.Response:
         response = web.json_response({"status": "ok"})

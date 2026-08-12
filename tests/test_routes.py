@@ -691,6 +691,37 @@ async def bridge_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         await test_client.close()
 
 
+def test_the_bucket_key_normalises_dual_stack_addresses() -> None:
+    """`192.168.1.5` and its IPv4-mapped IPv6 form `::ffff:192.168.1.5` name
+    the same host -- leaving them as distinct dict keys would hand a
+    dual-stack attacker a second free budget for nothing."""
+    assert BridgeApi._bucket_key("::ffff:192.168.1.5") == BridgeApi._bucket_key(
+        "192.168.1.5"
+    )
+
+
+def test_the_bucket_key_falls_back_to_the_raw_string_when_unparseable() -> None:
+    assert BridgeApi._bucket_key("unknown") == "unknown"
+
+
+def test_the_tracked_address_map_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a success clears an address's entry -- without a cap, a
+    sustained attack spread across many addresses would grow the map for
+    the life of the process."""
+    import bridge.api as api_module
+
+    monkeypatch.setattr(api_module, "_MAX_TRACKED_ADDRESSES", 3)
+    api = _build_bridge(tmp_path, web_password="right")
+    for i in range(8):
+        api._record_login_failure(f"10.0.0.{i}")
+    assert len(api._login_failures) == 3
+    # The addresses kept are the most recently touched, not an arbitrary
+    # subset -- the earliest ones were the ones evicted.
+    assert set(api._login_failures) == {"10.0.0.5", "10.0.0.6", "10.0.0.7"}
+
+
 @pytest.mark.asyncio
 async def test_repeated_wrong_passwords_are_slowed_down(bridge_client, clock) -> None:
     """`access_mode: lan` puts this page on the network, and what it guards
@@ -716,6 +747,17 @@ async def test_a_correct_password_clears_the_penalty(bridge_client, clock) -> No
 async def test_the_attempted_password_is_never_logged(
     bridge_client, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """A guard that only checks the password's absence cannot tell "nothing
+    leaked" from "nothing happened" -- deleting the failure log entirely
+    would pass it too. The positive half pins that the source and the count
+    are logged, so there is something here besides silence."""
     caplog.set_level(logging.DEBUG)
     await bridge_client.post("/api/login", json={"password": "hunter2"})
     assert "hunter2" not in caplog.text
+    failure_records = [
+        r for r in caplog.records if "wrong web password" in r.getMessage()
+    ]
+    assert len(failure_records) == 1
+    message = failure_records[0].getMessage()
+    assert "127.0.0.1" in message
+    assert "1 failed attempt" in message
