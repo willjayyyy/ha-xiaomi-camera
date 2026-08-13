@@ -9,7 +9,7 @@
   // the sign-in service owns that protocol and this only renders whichever
   // step it names: account + password, a picture captcha, or a phone/email
   // verification code.
-  import { overlay, showMessage } from "../lib/stores.js";
+  import { overlay, cameras, showMessage } from "../lib/stores.js";
   import { api, loadInfo, loadCameras } from "../lib/api.js";
   import { t } from "../lib/i18n.svelte.js";
 
@@ -77,22 +77,31 @@
 
   async function onSignedIn() {
     overlay.set(null);
+    // Signing in *is* the decision to use compatibility mode for the cameras
+    // that needed it: every camera whose only blocker was "not signed in"
+    // (a model the official path refuses) is switched now. One login logic,
+    // one result, whether it was entered from a specific camera's action
+    // button or from the account sheet -- the difference used to be that the
+    // account entry left every camera showing "connect" again.
+    const toSwitch = $cameras.filter(
+      (c) => !c.publishable && c.paths?.compat === "pathCompatNoAuth"
+    );
     // `compat_ready` just changed; `/api/info` and the camera list are
     // re-read so every consumer (the account sheet's row, every card's
     // blocked state) re-renders from the fresh stores -- the page updates
     // itself, no reload needed.
     await loadInfo();
-    if (did) {
-      const response = await api(`/api/cameras/${encodeURIComponent(did)}/settings`, {
+    for (const c of toSwitch) {
+      const response = await api(`/api/cameras/${encodeURIComponent(c.did)}/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: "compat" }),
       });
-      if (response.ok) await loadCameras();
-    } else {
-      await loadCameras();
-      overlay.set({ kind: "account" });
+      // A camera that fails to switch reports it on its own card; the rest
+      // still switch.
     }
+    await loadCameras();
+    if (!did) overlay.set({ kind: "account" });
   }
 
   function cancel() {

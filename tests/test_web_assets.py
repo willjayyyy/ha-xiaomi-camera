@@ -205,9 +205,14 @@ def test_the_connection_row_reads_the_backends_resolved_path():
     assert "override.path" not in sheet
 
 
-def test_a_successful_signin_switches_the_camera_that_asked_for_it():
+def test_a_successful_signin_switches_the_cameras_that_needed_compat():
+    """Signing in is the decision to use compatibility mode: every camera
+    whose only blocker was "not signed in" is switched, whichever entry the
+    login came from -- the account sheet and a camera's action button share
+    one login, one result."""
     signed_in = (SOURCE / "components" / "CompatSignIn.svelte").read_text()
     assert 'path: "compat"' in signed_in
+    assert 'paths?.compat === "pathCompatNoAuth"' in signed_in
 
 
 def test_compat_signin_posts_the_step_the_401_names():
