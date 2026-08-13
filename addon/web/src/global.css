@@ -94,31 +94,9 @@
     padding: 44px 36px 36px; box-shadow: var(--lift);
   }
   /* The language switch lives on the card, top right -- a normal place for
-     it. On the sign-in card it is a compact dropdown, because two buttons
-     overflow the space available there (the header keeps the two-button
-     switch, which has room). */
+     it. Its styles are scoped to the `LangSelect` component, so the sign-in
+     card and the header render it identically. */
   .signin-lang { position: absolute; top: var(--s4); right: var(--s4); }
-  .lang-select { position: relative; }
-  .lang-select-btn {
-    font: inherit; font-size: .82rem; color: var(--ink-1);
-    background: var(--surface); border: 1px solid var(--hairline);
-    border-radius: var(--r-ctl); padding: var(--s1) var(--s2); cursor: pointer;
-    display: flex; align-items: center; gap: var(--s2);
-  }
-  .lang-select-btn::after { content: "▾"; font-size: .7rem; color: var(--ink-3); }
-  .lang-select-menu {
-    position: absolute; top: calc(100% + var(--s1)); right: 0; z-index: 10;
-    min-width: 100%; background: var(--surface); border-radius: var(--r-ctl);
-    box-shadow: var(--lift); border: 1px solid var(--hairline); padding: var(--s1);
-  }
-  .lang-select-option {
-    display: block; width: 100%; text-align: left;
-    font: inherit; font-size: .82rem; color: var(--ink-1);
-    background: none; border: 0; border-radius: var(--s2);
-    padding: var(--s2) var(--s3); cursor: pointer;
-  }
-  .lang-select-option:hover { background: var(--sunken); }
-  .lang-select-option.active { color: var(--accent); font-weight: 600; }
   .signin-mark {
     width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
     background: var(--accent-wash); color: var(--accent);
@@ -193,7 +171,13 @@
   button.primary:hover { filter: brightness(1.07); }
   button.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--hairline); }
   button.ghost:hover { background: var(--ground); }
-  button:disabled { opacity: .45; cursor: default; filter: none; }
+  /* A disabled button is grey, never a faded accent -- fading the orange
+     reads as "about to work", which a disabled Save is not. */
+  button:disabled {
+    cursor: default; filter: none; opacity: 1;
+    background: var(--sunken); color: var(--ink-3);
+    border-color: var(--hairline);
+  }
 
   /* Every field, not only text ones. Naming a single input type left the
      password field on the sign-in screen unstyled -- a native box beside a
@@ -453,61 +437,9 @@
      Two to four options: a segmented control. Every option is visible and
      one tap away, and it cannot be styled inconsistently across the
      browsers Home Assistant is opened in. */
-  /* The track itself carries the 44px touch-target floor rather than each
-     button: segmented buttons sit adjacent, so the invisible-inset trick
-     used elsewhere on this page would have neighbours stealing each other's
-     clicks. `align-self: stretch` (the flex default here, stated for
-     clarity) is what lets each button fill that height instead. */
-  .seg {
-    display: flex; flex-wrap: wrap; gap: var(--s1); min-height: 44px;
-    background: var(--sunken); border-radius: var(--r-ctl); padding: var(--s1);
-  }
-  .seg button {
-    flex: 1; align-self: stretch; font: inherit; font-size: .82rem; color: var(--ink-2);
-    background: none; border: 1px solid transparent;
-    border-radius: var(--s2); padding: var(--s2) var(--s3); cursor: pointer;
-    transition: border-color .15s ease, background .15s ease, color .15s ease;
-  }
-  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
-
-  /* ---- Preference chip --------------------------------------------------
-     This viewer's own frame rate / detail preferences, floating on the
-     picture they change rather than sitting in the settings sheet -- see
-     `prefChipHtml`'s own comment for why. */
-  .chip-wrap { position: absolute; top: var(--s3); right: var(--s3); z-index: 3; }
-  .chip {
-    min-height: 24px; padding: 0 var(--s3); border: 0; border-radius: var(--r-pill);
-    background: rgba(0,0,0,.55); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-    color: #fff; font-size: 12px; cursor: pointer;
-  }
-  .chip-panel {
-    position: absolute; top: var(--s7); right: 0;
-    min-width: 200px; max-width: min(300px, calc(100vw - 40px));
-    background: var(--surface); border-radius: var(--r-ctl);
-    box-shadow: var(--lift); padding: var(--s3);
-  }
-  .chip-panel[hidden] { display: none; }
-  /* The chip's options are standalone pills, not a segmented track: this
-     panel floats on a picture, where a second sunken container reads as a
-     box someone forgot to close. Each option is its own bordered pill, the
-     one in effect filled with the accent. */
-  .chip-panel .seg {
-    margin-top: var(--s1); background: none; padding: 0; min-height: 0; gap: var(--s2);
-  }
-  .chip-panel .seg button { flex: 0 1 auto; background: var(--surface); border: 1px solid var(--hairline); }
-  .chip-panel .seg button[aria-pressed="true"] {
-    background: var(--accent); color: #fff; border-color: var(--accent);
-  }
-  .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 0; }
-  .chip-label:first-child { margin-top: 0; }
-  /* Gated on a real pointer, same reasoning as `.preview .controls` above:
-     latched `:hover` on touch would otherwise leave this stuck open, or
-     needing a second tap, on the device most viewers hold. Off that media
-     query the chip is simply always visible -- which is what touch wants. */
-  @media (hover: hover) and (pointer: fine) {
-    .chip { opacity: 0; transition: opacity 150ms var(--ease-micro); }
-    .preview:hover .chip, .chip[aria-expanded="true"], .preview:focus-within .chip { opacity: 1; }
-  }
+  /* The segmented control's and the preference chip's styles are scoped to
+     their components (`Seg.svelte`, `Chip.svelte`); the note above the track
+     about the 44px touch floor now lives there too. */
 
   /* Overlay ------------------------------------------------------------------
      One primitive, two contents: the settings sheet and the enlarged

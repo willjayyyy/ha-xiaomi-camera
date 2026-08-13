@@ -1,7 +1,7 @@
 <script>
-  // A compact language dropdown, for the sign-in card where two buttons
-  // overflow the space available. The header keeps the two-button switch --
-  // it has room.
+  // A compact language dropdown, used on the sign-in card and in the header.
+  // The styles live here so both instances render identically -- nothing in
+  // the page can make one bigger than the other.
   import { currentLang, setLang } from "../lib/i18n.svelte.js";
 
   const LANGS = [
@@ -41,3 +41,27 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .lang-select { position: relative; }
+  .lang-select-btn {
+    font: inherit; font-size: .82rem; color: var(--ink-1);
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: var(--r-ctl); padding: var(--s1) var(--s2); cursor: pointer;
+    display: flex; align-items: center; gap: var(--s2);
+  }
+  .lang-select-btn::after { content: "▾"; font-size: .7rem; color: var(--ink-3); }
+  .lang-select-menu {
+    position: absolute; top: calc(100% + var(--s1)); right: 0; z-index: 10;
+    min-width: 100%; background: var(--surface); border-radius: var(--r-ctl);
+    box-shadow: var(--lift); border: 1px solid var(--hairline); padding: var(--s1);
+  }
+  .lang-select-option {
+    display: block; width: 100%; text-align: center;
+    font: inherit; font-size: .82rem; color: var(--ink-1);
+    background: none; border: 0; border-radius: var(--s2);
+    padding: var(--s2) var(--s3); cursor: pointer;
+  }
+  .lang-select-option:hover { background: var(--sunken); }
+  .lang-select-option.active { color: var(--accent); font-weight: 600; }
+</style>

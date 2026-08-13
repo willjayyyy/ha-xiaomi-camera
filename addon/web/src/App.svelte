@@ -24,6 +24,12 @@
     }
     authed = true;
     refreshStatus();
+    // The add-on's own facts, read fresh each time the main page is entered
+    // -- including after the sign-in screen, which mounts before the page
+    // password is known. Without this, a compat credential that landed
+    // between the login page's own load and the successful sign-in stays
+    // invisible until a reload.
+    loadInfo();
   }
 
   onMount(() => {

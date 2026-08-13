@@ -55,9 +55,39 @@
   {#if open}
     <div class="chip-panel">
       <span class="chip-label">{t("prefFps")}</span>
-      <Seg choices={fpsChoices()} selected={String(prefs.fps)} onchoose={(v) => choose("fps", v)} />
+      <Seg variant="pills" choices={fpsChoices()} selected={String(prefs.fps)} onchoose={(v) => choose("fps", v)} />
       <span class="chip-label">{t("prefDetail")}</span>
-      <Seg choices={detailChoices()} selected={prefs.detail} onchoose={(v) => choose("detail", v)} />
+      <Seg variant="pills" choices={detailChoices()} selected={prefs.detail} onchoose={(v) => choose("detail", v)} />
     </div>
   {/if}
 </div>
+
+<style>
+  .chip-wrap { position: absolute; top: var(--s3); right: var(--s3); z-index: 3; }
+  .chip {
+    min-height: 24px; padding: 0 var(--s3); border: 0; border-radius: var(--r-pill);
+    background: rgba(0,0,0,.55); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: #fff; font-size: 12px; cursor: pointer;
+  }
+  .chip-panel {
+    position: absolute; top: var(--s7); right: 0;
+    min-width: 200px; max-width: min(300px, calc(100vw - 40px));
+    background: var(--surface); border-radius: var(--r-ctl);
+    box-shadow: var(--lift); padding: var(--s3);
+  }
+  .chip-panel[hidden] { display: none; }
+  .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 var(--s1); }
+  .chip-label:first-child { margin-top: 0; }
+  /* Gated on a real pointer, same reasoning as the preview's controls:
+     latched `:hover` on touch would otherwise leave this stuck open, or
+     needing a second tap, on the device most viewers hold. Off that media
+     query the chip is simply always visible -- which is what touch wants.
+     The `.preview` here is the camera card's preview area, not a Chip
+     element, so it is global. */
+  @media (hover: hover) and (pointer: fine) {
+    .chip { opacity: 0; transition: opacity 150ms var(--ease-micro); }
+    :global(.preview:hover) .chip,
+    .chip[aria-expanded="true"],
+    :global(.preview:focus-within) .chip { opacity: 1; }
+  }
+</style>
