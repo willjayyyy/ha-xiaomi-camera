@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed: right after signing into compatibility mode, a camera's settings
+  sheet showed no RTSP address until a page refresh.
+- A camera becomes playable a moment after a compatibility-mode sign-in,
+  when the camera list refreshes, instead of instantly -- so its RTSP
+  address is always ready when the settings sheet opens.
+- The connection-switch confirmation's buttons now sit on the right.
+- The preview preference chip closes when you click anywhere outside it.
+
+### 中文
+
+- 修复：兼容模式登录后，立即打开摄像头设置页时 RTSP 地址不显示，刷新后才出现。
+- 兼容模式登录后，摄像头改为等列表刷新完成即可播放，不再登录瞬间就可播——这样设置页里的地址一定已经就绪。
+- 切换连接方式的确认按钮改为靠右。
+- 预览画质切换弹窗点击外部即可关闭。
+
 ## 2.0.0
 
 - Cameras Xiaomi's own library refuses now appear in the list, and can be
