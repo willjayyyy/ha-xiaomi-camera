@@ -65,12 +65,14 @@
   // from the model's support level, and whether compatibility mode is
   // available follows from the global sign-in store -- so a sign-in lands on
   // an open sheet without it needing a refresh.
+  // The unusable path is greyed out, which says "not available" on its own --
+  // no sentence under the control explaining why (the user asked to drop the
+  // explanatory copy; a disabled option is self-explanatory).
   let pathChoices = $derived([
-    { value: "official", label: t("pathOfficial"), disabled: camera?.support === "full" ? null : "pathOfficialUnsupported" },
-    { value: "compat", label: t("pathCompat"), disabled: $addonInfo.compat_ready ? null : "pathCompatNoAuth" },
+    { value: "official", label: t("pathOfficial"), disabled: camera?.support === "full" ? null : true },
+    { value: "compat", label: t("pathCompat"), disabled: $addonInfo.compat_ready ? null : true },
   ]);
   let pathSelected = $derived(pending.path ?? camera?.settings?.path);
-  let pathReasons = $derived(pathChoices.filter((c) => c.disabled).map((c) => t(c.disabled)));
   let pathValueLabel = $derived(
     pathChoices.find((c) => c.value === pathSelected)?.label ?? ""
   );
@@ -124,9 +126,6 @@
           </div>
         {:else}
           <Seg choices={pathChoices} selected={pathSelected} onchoose={pickPath} />
-          {#each pathReasons as reason}
-            <p class="hint">{reason}</p>
-          {/each}
         {/if}
       </div>
     </div>

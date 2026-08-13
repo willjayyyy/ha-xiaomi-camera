@@ -27,7 +27,7 @@ from bridge.settings import (
 
 DEFAULTS = Defaults(
     quality=VideoQuality.LOW,
-    audio=False,
+    audio=True,
     transcode_quality=TranscodeQuality.STANDARD,
 )
 
@@ -40,7 +40,7 @@ def store(tmp_path: Path) -> SettingsStore:
 def test_absent_override_resolves_to_defaults():
     result = resolve(DEFAULTS, None, support="full", compat_ready=False)
     assert result.quality is VideoQuality.LOW
-    assert result.audio is False
+    assert result.audio is True
     assert result.transcode_quality is TranscodeQuality.STANDARD
     assert result.path is VideoPath.OFFICIAL
 
@@ -51,7 +51,7 @@ def test_partial_override_resolves_field_by_field():
     )
     result = resolve(DEFAULTS, override, support="full", compat_ready=False)
     assert result.quality is VideoQuality.HIGH
-    assert result.audio is False
+    assert result.audio is True
 
 
 def test_audio_false_is_an_override_not_an_absence():

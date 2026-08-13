@@ -50,6 +50,10 @@ async def make_client(**kwargs: object) -> TestClient:
     kwargs.setdefault("published", True)
     app = web.Application(middlewares=build_guards(**kwargs))
     app.router.add_get("/", reached)
+    # The page's own assets, plus the endpoints it calls -- the assets must
+    # stay reachable without the password, or the login page cannot render.
+    app.router.add_get("/app.css", reached)
+    app.router.add_get("/app.js", reached)
     app.router.add_get("/api/cameras", reached)
     app.router.add_post("/api/login", reached)
     client = TestClient(TestServer(app))
@@ -107,6 +111,17 @@ class TestPassword:
         try:
             response = await client.get("/api/cameras", headers={INGRESS_HEADER: ""})
             assert response.status == 401
+        finally:
+            await client.close()
+
+    async def test_the_pages_own_assets_stay_public(self) -> None:
+        # The login page is built from these files; a password that hides them
+        # hides the page that asks for the password.
+        client = await make_client(supervised=True, web_password=PASSWORD)
+        try:
+            for path in ("/app.css", "/app.js"):
+                response = await client.get(path, headers={INGRESS_HEADER: ""})
+                assert response.status == 200, path
         finally:
             await client.close()
 

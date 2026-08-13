@@ -129,7 +129,7 @@ def resolve(
 
 _FACTORY = Defaults(
     quality=VideoQuality.LOW,
-    audio=False,
+    audio=True,
     transcode_quality=TranscodeQuality.STANDARD,
 )
 

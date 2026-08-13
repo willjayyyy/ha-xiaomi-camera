@@ -54,10 +54,13 @@
         ? { text: camera.stream_error, icon: true, action: camera.support === "full" ? "path-official" : null, label: "switchToOfficial" }
         : null
       : $addonInfo.compat_ready
-        ? { reason: "pathOfficialUnsupported", icon: true, action: "path-compat", label: "compatConnect" }
+        // The official path is refused for this model; the disabled option
+        // in the connection row says that on its own, so the card shows only
+        // the action -- no sentence to read.
+        ? { icon: true, action: "path-compat", label: "compatConnect" }
         : { reason: "pathCompatNoAuth", icon: false, action: "compat-signin", label: "compatConnect" }
   );
-  let blockedWhy = $derived(blocked ? (blocked.text ?? t(blocked.reason)) : "");
+  let blockedWhy = $derived(blocked ? (blocked.text ?? (blocked.reason ? t(blocked.reason) : "")) : "");
 
   // -------------------------------------------------------------------------
   // Preview lifecycle -- ported from the pre-Svelte `startPreview` unchanged,
@@ -254,7 +257,9 @@
         {#if blocked.icon}
           <span class="blocked-icon" aria-hidden="true">{@html ICONS.warn}</span>
         {/if}
-        <span class="blocked-why">{blockedWhy}</span>
+        {#if blockedWhy}
+          <span class="blocked-why">{blockedWhy}</span>
+        {/if}
         {#if blocked.action}
           <button type="button" class="blocked-action" onclick={() => blockedAction(blocked.action)}>
             {t(blocked.label)}

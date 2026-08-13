@@ -408,6 +408,13 @@
     margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
   }
   .setting-choices { padding: 0 var(--s4) var(--s4); }
+  /* The choices hug their labels rather than stretching to fill the sheet's
+     width: with two options a full-width segmented control paints two huge
+     buttons, while the camera sheet's (which prepend "Follow default") has
+     three or four. One button size on every sheet -- the camera's, which is
+     the populated one. */
+  .setting-choices .seg { width: max-content; max-width: 100%; }
+  .setting-choices .seg button { flex: 0 1 auto; min-width: 88px; }
   /* The sheet's Save button: settings are applied together, one request to
      the add-on for however many fields changed. Full width, a step the eye
      lands on at the bottom of the sheet. */
