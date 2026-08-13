@@ -69,6 +69,19 @@ class AccountManager:
         return self._store.exists()
 
     @property
+    def cloud_server(self) -> str:
+        """The Xiaomi cloud region this account's OAuth session talks to.
+
+        Compatibility mode's account and this add-on's own OAuth account need
+        not be the same Xiaomi login (see `go2rtc_xiaomi.all_device_urls`),
+        but they must query the same regional cloud -- go2rtc's `/api/xiaomi`
+        takes a `region` parameter for exactly this. Reused rather than
+        exposed as a second option: a region chosen twice is a region that
+        can disagree with itself.
+        """
+        return self._cloud_server
+
+    @property
     def client(self) -> MIoTClient:
         """The authenticated client.
 

@@ -174,16 +174,18 @@ a snapshot.
 | Stream access | `local` | `local` keeps video on the Home Assistant machine. `lan` shares it with your whole network for tools like Frigate, and then requires a username and password. |
 | RTSP username / password | — | Required when stream access is `lan` |
 | Web page password | — | Required when stream access is `lan`. Optional otherwise, but **if you set it, it is always asked for** — through the Home Assistant panel too. |
-| Video quality | `low` | Enough for a dashboard tile. Higher quality uses more bandwidth. |
-| Include audio | off | Carry the camera's microphone on the published streams |
 | Log level | `info` | Turn up to `debug` when reporting a problem |
+
+Picture size, sound and transcode quality moved off this table: set them per
+camera, with a shared default, on the add-on's own page.
 
 ## Audio
 
-Turn on **Include audio** and the camera's microphone rides along on every
-published stream. The original stream carries it in the camera's own encoding,
-passed through untouched. The H.264 streams — produced for players that cannot
-decode H.265 — additionally offer an AAC copy of the same audio.
+Turn on **Sound** for a camera, on the add-on page, and its microphone rides
+along on every published stream. The original stream carries it in the
+camera's own encoding, passed through untouched. The H.264 streams — produced
+for players that cannot decode H.265 — additionally offer an AAC copy of the
+same audio.
 
 Whether you hear it depends on what plays the stream:
 
@@ -218,12 +220,25 @@ to the internet, that is a risk regardless of anything set here.
 ## Which cameras work
 
 Support follows Xiaomi's own list, which leaves out most models released before
-2022. Unsupported cameras are simply not shown, rather than appearing as
-something that never works.
+2022. A camera not on that list still appears, marked, and can connect a
+second way — see [Compatibility mode](#compatibility-mode) below.
 
-This reflects a real limitation rather than caution: a camera on Xiaomi's
-exclusion list was tested and could not be connected to at all. A camera that
-does not appear is almost certainly on that list.
+This reflects a real limitation rather than caution: a camera Xiaomi's own
+library refuses was tested and could not be connected to through it at all.
+
+## Compatibility mode
+
+Some Xiaomi models are refused by Xiaomi's own streaming library. Those
+cameras now appear in the list instead of being left out, and offer a second
+way to connect, built on the open-source project
+[go2rtc](https://github.com/AlexxIT/go2rtc).
+
+Turn it on from the settings of the camera that needs it, not from a
+settings page. It asks for your Xiaomi account password — separate from the
+sign-in you already completed — and stores a long-lived credential.
+
+That credential cannot be removed from within the add-on. It stays until you
+uninstall the add-on, which clears it along with the add-on's other data.
 
 ## Known limits
 

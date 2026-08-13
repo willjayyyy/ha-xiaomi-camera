@@ -51,10 +51,10 @@ example. That publishes this add-on to your whole network, so all three
 passwords become mandatory: the RTSP username and password, and the web page
 password. The add-on will not start without them, and says which are missing.
 
-### Video quality
+### Picture size, sound and transcode quality
 
-`low` is the default and is enough for a dashboard tile. `high` uses more
-bandwidth and more resources on the machine running Home Assistant.
+These are set per camera, with a shared default, on the add-on's own page —
+not here.
 
 ## Supported cameras
 
@@ -137,9 +137,10 @@ Raise **Log level** to `debug` before reporting a problem, and include the log.
 这会把本加载项发布到整个局域网，因此三项密码全部变为必填：RTSP 用户名、
 RTSP 密码，以及网页密码。缺任何一项加载项都会拒绝启动，并说明缺的是哪些。
 
-### 画质
+### 画质、声音、转码画质
 
-默认 `low`，用于仪表盘缩略图足够。`high` 会占用更多带宽和主机资源。
+这三项改为每台摄像头单独设置，带一个共用默认值，位置在加载项自己的页面
+——不在这里。
 
 ## 支持的机型
 

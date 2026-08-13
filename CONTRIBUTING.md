@@ -9,8 +9,8 @@ anyone can read them. User-facing text is **bilingual** — English and
 Simplified Chinese — because most of these cameras are sold in China and most
 of Home Assistant's users are not: `README.md` / `README.zh-CN.md`,
 `addon/translations/`, `custom_components/xiaomi_camera/translations/`, and the
-strings in `addon/rootfs/app/web/index.html`. A change that adds user-facing
-text without both languages is incomplete.
+I18N table in `addon/web/src/lib/i18n.svelte.js`. A change that adds
+user-facing text without both languages is incomplete.
 
 ## Branches
 

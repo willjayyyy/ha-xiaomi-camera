@@ -11,27 +11,30 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
 
-from miot.types import MIoTCameraVideoQuality
+import aiohttp
 
+from . import go2rtc_xiaomi
 from .account import AccountManager, NotLinkedError
 from .api import BridgeApi
 from .cameras import CameraRegistry
 from .config import (
     LOG_LEVELS,
     Options,
-    VideoQuality,
     build_ref,
     data_is_ephemeral,
     load_options,
 )
-from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER
+from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER, SETTINGS_FILE
 from .discovery import async_announce, async_withdraw
+from .paths import VideoPath
 from .redact import install as install_redaction
 from .redact import safe_error
 from .restream import Restreamer
+from .settings import SettingsStore
 from .stills import Stills
 from .store import CredentialStore
 from .streaming import SessionManager
@@ -42,17 +45,48 @@ _LOGGER = logging.getLogger("bridge")
 #: and each refresh costs a cloud round trip, so this is deliberately slow.
 _REFRESH_INTERVAL_SECONDS = 300
 
+#: Module-level so a test can point it at a fake server instead of the real
+#: Supervisor -- the same seam `discovery.py` leaves for the same reason.
+_SUPERVISOR_URL = "http://supervisor"
 
-_QUALITY_MAP = {
-    VideoQuality.LOW: MIoTCameraVideoQuality.LOW,
-    VideoQuality.HIGH: MIoTCameraVideoQuality.HIGH,
-}
+
+async def _read_own_slug(token: str | None) -> str | None:
+    """The add-on's real slug, once, at start-up.
+
+    Home Assistant prefixes an add-on's slug with the repository it came
+    from, so the bare slug in ``config.yaml`` is never the one that appears
+    in a ``/hassio/addon/<slug>/config`` URL -- confirmed on real hardware,
+    where the running container is ``app_fd1fda3d_xiaomi_camera_bridge`` and
+    the real slug is ``fd1fda3d_xiaomi_camera_bridge``.
+
+    ``None`` when there is no Supervisor: standalone deployments have no such
+    page, and a link to one that cannot exist is worse than no link. Never
+    raises -- a failure to read it degrades to ``None`` and a warning, the
+    same choice `discovery.py` makes for the same reason.
+    """
+    if not token:
+        return None
+    try:
+        async with (
+            aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session,
+            session.get(
+                f"{_SUPERVISOR_URL}/addons/self/info",
+                headers={"Authorization": f"Bearer {token}"},
+            ) as response,
+        ):
+            if response.status != 200:
+                return None
+            body = await response.json()
+            return body.get("data", {}).get("slug")
+    except Exception as err:
+        _LOGGER.warning("Could not read this add-on's slug: %s", safe_error(err))
+        return None
 
 
 class Bridge:
     """Owns every long-lived component."""
 
-    def __init__(self, options: Options) -> None:
+    def __init__(self, options: Options, *, slug: str | None = None) -> None:
         self._options = options
         #: The client the current registry and sessions were built against.
         #: Compared by identity so an unlink/relink cycle rebuilds them.
@@ -65,6 +99,12 @@ class Bridge:
         self._previews = Stills(
             self._restreamer.internal_rtsp_url, self._keyframe_interval
         )
+        # One store for the whole process: the API reads and writes it, the
+        # session manager resolves each camera's picture size and audio from
+        # it, and `async_refresh` resolves the same values for the restreamer.
+        # Three separate stores would each answer "what does this camera get"
+        # independently, and independent answers are exactly what drifts.
+        self._settings = SettingsStore(SETTINGS_FILE)
         self._api = BridgeApi(
             account=self._account,
             registry_provider=lambda: self._registry,
@@ -73,6 +113,8 @@ class Bridge:
             refresh_callback=self.async_refresh,
             options=options,
             previews=self._previews,
+            settings_store=self._settings,
+            slug=slug,
         )
         self._discovery_uuid: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -84,7 +126,11 @@ class Bridge:
         that changes its keyframe interval -- firmware does this when the
         resolution or the scene changes -- is judged on what it sends now.
         `None` while nothing is running or nothing has been measured, which
-        callers must read as "unknown" rather than as "often".
+        callers must read as "unknown" rather than as "often" -- and equally
+        for a camera on compatibility mode, which has no vendor session to
+        measure and never will. `session_for` refuses those by raising, and
+        this is a hint read while opening a preview: it must answer "unknown"
+        rather than take the preview down with it.
         """
         sessions = self._sessions
         registry = self._registry
@@ -93,9 +139,21 @@ class Bridge:
         info = registry.get(did)
         if info is None:
             return None
-        return sessions.session_for(info).stats.keyframe_interval
+        try:
+            session = sessions.session_for(info)
+        except ValueError:
+            return None
+        return session.stats.keyframe_interval
 
     async def async_start(self) -> None:
+        # go2rtc is a subprocess this bridge starts, so at start-up it is not
+        # up yet -- and `compat_ready` is read from it. Settle both before the
+        # HTTP servers start: a page served while go2rtc was still booting
+        # reads a credential that actually persisted as missing, and shows the
+        # sign-in prompt until something forces a refresh.
+        await self._restreamer.async_start()
+        await go2rtc_xiaomi.refresh_compat_ready()
+
         await self._api.async_start()
         self._discovery_uuid = await async_announce()
 
@@ -122,8 +180,14 @@ class Bridge:
 
         self._refresh_task = asyncio.create_task(self._refresh_loop())
 
-    async def async_refresh(self) -> None:
-        """Re-read the camera list and republish the RTSP streams."""
+    async def async_refresh(self, *, explicit: bool = False) -> None:
+        """Re-read the camera list and republish the RTSP streams.
+
+        `explicit` comes from the caller, which already knows why this ran:
+        a settings write someone is watching for versus a background refresh
+        whose viewers should be left on their existing connection. See
+        `Restreamer.async_apply` for what the distinction changes.
+        """
         await self._async_sync_session_binding()
         if self._registry is None:
             return
@@ -134,8 +198,18 @@ class Bridge:
             _LOGGER.error("Could not refresh the camera list: %s", err)
             return
 
-        offline = [c.name for c in cameras if not c.online]
-        powered_off = [c.name for c in cameras if c.powered_on is False]
+        # A refused camera is always reported `online=False` by construction
+        # (see `CameraRegistry.async_refresh`) -- not a real connectivity
+        # signal, so counting it here would flood this log with entries that
+        # look like a network problem for cameras that were never going to
+        # stream. Everything below this point -- the two logs, session and
+        # settings pruning, and what go2rtc is told to publish -- only ever
+        # looks at cameras this add-on can actually stream: see
+        # `CameraDescription.publishable`.
+        publishable = [c for c in cameras if c.publishable]
+
+        offline = [c.name for c in publishable if not c.online]
+        powered_off = [c.name for c in publishable if c.powered_on is False]
         if offline:
             _LOGGER.warning("Offline camera(s): %s", ", ".join(offline))
         if powered_off:
@@ -151,10 +225,73 @@ class Bridge:
         if self._sessions is not None:
             # Drop sessions for cameras that no longer exist, so a removed
             # device does not keep its native instance alive for the lifetime
-            # of the process.
-            await self._sessions.async_prune({c.did for c in cameras})
-        await self._restreamer.async_apply([c.did for c in cameras])
-        self._previews.drop({c.did for c in cameras})
+            # of the process. Deliberately keyed on `publishable` rather than
+            # on the full list, unlike the settings prune below: a session is
+            # only ever built for the official path, so a camera that has
+            # left that path has nothing here worth keeping, and one that
+            # returns to it gets a fresh session on the next reader. Losing a
+            # session costs a reconnect; the two questions are not the same
+            # question and must not be made symmetrical.
+            await self._sessions.async_prune({c.did for c in publishable})
+        # Every camera on the account, not just the publishable ones. This
+        # deletes stored overrides, and `path` is one of them: for a model
+        # the vendor library refuses, that stored `path` is the only reason
+        # the camera is publishable at all, so pruning by publishability
+        # would delete the row that makes the row survive -- permanently, and
+        # taking the camera's Home Assistant entities with it.
+        self._settings.prune({c.did for c in cameras})
+        # `self._registry.async_refresh()` above already refreshed the
+        # cache this reads -- see `CameraRegistry.async_refresh`'s
+        # docstring -- so this is a plain read, not a second network call.
+        compat_ready = go2rtc_xiaomi.compat_ready()
+        resolved = {
+            c.did: self._settings.resolved_for(
+                c.did, support=c.support, compat_ready=compat_ready
+            )
+            for c in publishable
+        }
+        # Fetched only when something actually needs it: every camera's
+        # compatibility-mode address, merged across every signed-in go2rtc
+        # account (see `all_device_urls`'s own docstring for why there is no
+        # single "the" account to ask). Which source a camera actually uses
+        # is decided once, in `restream.source_for`, from its own resolved
+        # `path` -- never from `compat_ready` here, so a transient go2rtc
+        # error on this call cannot erase a working compatibility stream; a
+        # camera whose address this fetch could not find simply reports its
+        # own `stream_error` (see `BridgeApi._cameras`).
+        needs_compat = any(
+            settings is not None and settings.path is VideoPath.COMPAT
+            for settings in resolved.values()
+        )
+        compat_urls: dict[str, str] = {}
+        if needs_compat:
+            try:
+                compat_urls = await go2rtc_xiaomi.all_device_urls(
+                    self._account.cloud_server
+                )
+            except Exception as err:
+                # Never allowed to fail the caller. This is the refresh
+                # callback behind every settings write -- `_link_complete`,
+                # `_unlink`, `_compat_signin`, `_set_camera_settings` -- and
+                # those writes have already committed by the time this runs,
+                # so raising here answers 500 for a change that was made:
+                # switching a camera to compatibility mode during a go2rtc
+                # hiccup would persist and report failure at once. Continuing
+                # with no addresses leaves the affected cameras reporting
+                # `stream_error`, which is precisely the state that exists
+                # for "publishable, but no reachable source right now".
+                _LOGGER.error(
+                    "Could not read compatibility-mode addresses from go2rtc; "
+                    "affected cameras will report a stream error until the "
+                    "next refresh: %s",
+                    safe_error(err),
+                )
+        await self._restreamer.async_apply(
+            resolved,
+            compat_urls=compat_urls,
+            explicit=explicit,
+        )
+        self._previews.drop({c.did for c in publishable})
 
     async def async_stop(self) -> None:
         if self._refresh_task is not None:
@@ -193,14 +330,22 @@ class Bridge:
         self._bound_client = client
 
         if client is None:
-            await self._restreamer.async_apply([])
+            await self._restreamer.async_apply({})
             return
 
-        self._registry = CameraRegistry(client)
+        self._registry = CameraRegistry(client, self._settings)
+        # Sessions only ever open for cameras the vendor SDK itself accepted
+        # (`MIoTCameraInfo` only exists for those), so `support` is always
+        # "full" here -- and `session_for` refuses anything not on the
+        # official path regardless, so what `compat_ready` reads here can
+        # never open a session it should not. Read from the same cache as
+        # every other caller anyway, rather than hardcoding a second answer
+        # to a question `go2rtc_xiaomi.compat_ready` already owns.
         self._sessions = SessionManager(
             client,
-            quality=_QUALITY_MAP[self._options.video_quality],
-            enable_audio=self._options.enable_audio,
+            resolver=lambda did: self._settings.resolved_for(
+                did, support="full", compat_ready=go2rtc_xiaomi.compat_ready()
+            ),
         )
 
     async def _refresh_loop(self) -> None:
@@ -244,10 +389,12 @@ async def async_main() -> int:
             DATA_DIR,
         )
 
+    # No picture size here any more: it is per camera and lives in the
+    # settings store, so printing the add-on option would show someone
+    # diagnosing a stream a value that decides nothing.
     _LOGGER.info(
-        "Starting bridge (access_mode=%s, quality=%s, supervised=%s, build=%s)",
+        "Starting bridge (access_mode=%s, supervised=%s, build=%s)",
         options.access_mode.value,
-        options.video_quality.value,
         options.supervised,
         build_ref(),
     )
@@ -255,7 +402,11 @@ async def async_main() -> int:
 
     pathlib.Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
 
-    bridge = Bridge(options)
+    # Only readable by a process started through `#!/usr/bin/with-contenv
+    # bash` -- `run.sh` already is one. Read once, up front: it is a fact
+    # about this process, not about any one request.
+    slug = await _read_own_slug(os.environ.get("SUPERVISOR_TOKEN"))
+    bridge = Bridge(options, slug=slug)
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):

@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, "release/*"]
   pull_request:
   workflow_dispatch:
 
@@ -29,6 +29,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
+      # The web UI is built into the image, not committed, so the tests that
+      # read the built output build it here first -- the same build the image
+      # runs, so a broken page fails CI before it reaches the image.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Build the web UI
+        run: |
+          cd addon/web
+          npm ci
+          npm run build
       # Tests the integration against the pinned Home Assistant release this
       # add-on is deployed against (see requirements-test.txt). The vendor
       # SDK stays stubbed in tests/conftest.py -- it is closed source and

@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import TYPE_CHECKING
 
 from miot.types import MIoTCameraCodec, MIoTCameraStatus, MIoTCameraVideoQuality
@@ -45,13 +45,29 @@ from .nal import (
     iter_nal_units,
     nal_type,
 )
+from .paths import VideoPath
 from .redact import safe_error
 
 if TYPE_CHECKING:
     from miot.client import MIoTClient
     from miot.types import MIoTCameraInfo
 
+    from .settings import Resolved
+
 _LOGGER = logging.getLogger(__name__)
+
+#: Maps the add-on's own quality setting onto the vendor SDK's enum. Lives
+#: here rather than in `__main__.py` because `SessionManager` is now its only
+#: caller: it is consulted exactly when a session opens, per camera. Keyed by
+#: plain strings rather than `config.VideoQuality` -- that enum is kept for
+#: the add-on's own configuration and its two members compare equal to these
+#: strings anyway (it is a `StrEnum`), but this table only ever needs to
+#: translate "low"/"high" into the vendor SDK's own type, and naming that
+#: without a second enum in the middle is one less thing to keep reconciled.
+_QUALITY_MAP = {
+    "low": MIoTCameraVideoQuality.LOW,
+    "high": MIoTCameraVideoQuality.HIGH,
+}
 
 #: Bounded so a stalled consumer drops frames instead of growing without limit.
 #: A unit is one video frame or one audio packet -- the queue carries both since
@@ -558,27 +574,53 @@ class CameraSession:
 
 
 class SessionManager:
-    """Owns one :class:`CameraSession` per camera."""
+    """Owns one :class:`CameraSession` per camera.
+
+    Picture size and audio are negotiated when a peer-to-peer session opens,
+    so they cannot be changed on a running one -- each camera's settings are
+    read once, at that moment, via `resolver`. Two fields cached here instead
+    would be a second copy of a fact the settings store already answers, and
+    would go stale the instant one camera's setting changed while the rest
+    kept running.
+    """
 
     def __init__(
         self,
         client: MIoTClient,
-        quality: MIoTCameraVideoQuality,
-        enable_audio: bool,
+        resolver: Callable[[str], Resolved | None],
     ) -> None:
         self._client = client
-        self._quality = quality
-        self._enable_audio = enable_audio
+        self._resolve = resolver
         self._sessions: dict[str, CameraSession] = {}
 
     def session_for(self, info: MIoTCameraInfo) -> CameraSession:
         session = self._sessions.get(info.did)
         if session is None:
+            settings = self._resolve(info.did)
+            if settings is None or settings.path is not VideoPath.OFFICIAL:
+                # This class only ever speaks the vendor SDK's own protocol,
+                # so a camera resolved onto any other path -- or onto none at
+                # all -- has nothing here to open a session with.
+                raise ValueError(f"{info.did} is not on the Xiaomi official path")
             session = CameraSession(
-                self._client, info, self._quality, self._enable_audio
+                self._client,
+                info,
+                _QUALITY_MAP[settings.quality],
+                settings.audio,
             )
             self._sessions[info.did] = session
         return session
+
+    async def async_reload(self, did: str) -> None:
+        """Drop one camera's session so the next reader opens it afresh.
+
+        Picture size and audio can only be set when a session opens, so
+        applying a changed setting means reopening that camera's session --
+        and only that camera's. Stopping every session to change one would
+        cost the other cameras their live view for a setting that is not
+        theirs.
+        """
+        await self._async_stop_one(did)
 
     def stats(self) -> dict[str, dict[str, object]]:
         return {

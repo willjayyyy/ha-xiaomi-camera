@@ -1,0 +1,534 @@
+/* Xiaomi Mi Home's visual language, not an interpretation of it: a light
+   grey ground with borderless white cards, four text weights carried by
+   opacity rather than four greys, one accent used at most once per screen,
+   and settings as rows whose separator starts at the label. */
+
+:root {
+  color-scheme: light dark;
+
+  --ground:  #f5f6f8;
+  --surface: #ffffff;
+  --sunken:  #f2f3f5;
+
+  /* Opacity steps, not four greys. A step reads correctly on any card
+     colour and inverts to one rule in dark mode; four hardcoded greys drift
+     apart the first time a surface changes. */
+  --ink-1: rgba(0,0,0,.90);
+  --ink-2: rgba(0,0,0,.55);
+  --ink-3: rgba(0,0,0,.35);
+  --ink-4: rgba(0,0,0,.20);
+  --hairline: rgba(0,0,0,.07);
+
+  --accent:      #ff6900;
+  --accent-wash: rgba(255,105,0,.10);
+
+  --ok:   #1a9c50;
+  --warn: #e6812a;
+  --err:  #e5392e;
+
+  --lift: 0 1px 2px rgba(0,0,0,.03), 0 6px 20px rgba(0,0,0,.04);
+
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 20px; --s6: 24px; --s7: 32px;
+
+  --r-card:  16px;
+  --r-sheet: 20px;
+  --r-ctl:   10px;
+  --r-pill:  999px;
+
+  --ease-sheet: cubic-bezier(.32,.72,0,1);
+  --ease-micro: cubic-bezier(.4,0,.2,1);
+
+  --font: "MiSans", "HarmonyOS Sans SC", -apple-system, BlinkMacSystemFont,
+          "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:  #0d0e10;
+    --surface: #17191d;
+    --sunken:  #1f2228;
+    --ink-1: rgba(255,255,255,.92);
+    --ink-2: rgba(255,255,255,.58);
+    --ink-3: rgba(255,255,255,.38);
+    --ink-4: rgba(255,255,255,.22);
+    --hairline: rgba(255,255,255,.09);
+    --accent:      #ff6900;
+    --accent-wash: rgba(255,105,0,.16);
+    --ok: #3ecf7a; --warn: #f5a623; --err: #ff6b60;
+    --lift: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    transform: none !important;
+  }
+}
+
+/* end tokens */
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: var(--s7) 20px 48px; background: var(--ground); color: var(--ink-1);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 1080px; margin: 0 auto; }
+  main[hidden], #signin[hidden] { display: none; }
+
+  /* Its own screen rather than a dialog over a page the viewer cannot use
+     yet. One field, because there is one thing to know -- an add-on has no
+     accounts, and a username box would be a question with no answer. */
+  #signin {
+    min-height: 78vh; display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+  }
+  .signin-card {
+    position: relative;
+    width: 100%; max-width: 400px; text-align: center;
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 24px;
+    padding: 44px 36px 36px; box-shadow: var(--lift);
+  }
+  /* The language switch lives on the card, top right -- a normal place for
+     it. Its styles are scoped to the `LangSelect` component, so the sign-in
+     card and the header render it identically. */
+  .signin-lang { position: absolute; top: var(--s4); right: var(--s4); }
+  .signin-mark {
+    width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
+    background: var(--accent-wash); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .signin-mark svg { width: var(--s7); height: var(--s7); fill: currentColor; }
+  .signin-card h1 { font-size: 1.32rem; margin: 0 0 10px; }
+  .signin-card .sub { margin: 0 0 28px; font-size: .9rem; line-height: 1.6; }
+  /* The field and the button carry the same weight: matching height, radius
+     and width, so the pair reads as one control rather than as a small box
+     next to a large one. */
+  .signin-card input { margin-bottom: 16px; }
+  .signin-card button {
+    width: 100%; padding: 14px 16px; border-radius: 14px;
+    font-size: .95rem; font-weight: 600;
+  }
+  .signin-error {
+    color: var(--err); font-size: .85rem; margin: 0 0 14px; min-height: 1em;
+  }
+  .signin-error[hidden] { display: none; }
+
+  header { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 28px; }
+  h1 { font-size: 1.6rem; font-weight: 600; letter-spacing: -.02em; margin: 0 0 6px; }
+  .sub { color: var(--ink-2); margin: 0; font-size: .95rem; }
+  /* The two entrances that replaced the account/defaults/add-on cards:
+     identity (who) and preferences (what), kept apart on purpose -- see the
+     comment on `openAccountSheet` in the script. */
+  .head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s3); }
+  .lang { font-size: .85rem; color: var(--ink-2); white-space: nowrap; }
+  .lang button {
+    background: none; border: 0; color: var(--ink-2); cursor: pointer;
+    font: inherit; padding: 4px 6px; border-radius: 6px;
+  }
+  .lang button[aria-pressed="true"] { color: var(--accent); font-weight: 600; }
+  /* Same visual and touch-target size as `.settings-btn` on a camera card --
+     one icon-button language across the page rather than a second one
+     invented for the header. */
+  .icon-btn {
+    flex: none; width: 36px; height: 36px; border-radius: var(--r-pill); padding: 0;
+    background: var(--sunken); color: var(--ink-2); border: 0; position: relative;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+  }
+  .icon-btn::after { content: ""; position: absolute; inset: -4px; }
+  .icon-btn svg { width: 17px; height: 17px; fill: currentColor; }
+  .icon-btn:hover { color: var(--accent); background: var(--accent-wash); }
+
+  /* ---- Card -------------------------------------------------------------
+     Borderless: a Mi Home card is told apart from the ground by being white,
+     not by an outline, and does not lift on hover -- a wall of live pictures
+     rising under the pointer is noise, and Mi Home's device cards do not do
+     it. Shared with `.cam` below, which adds its own overflow/position. */
+  .card, .cam {
+    background: var(--surface); border-radius: var(--r-card);
+    box-shadow: var(--lift);
+  }
+  .card { padding: var(--s4); margin-bottom: var(--s5); }
+  .card h2 {
+    font-size: .82rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-2); margin: 0 0 18px;
+  }
+  /* Borderless, same as every other card -- the sign-in screen's own card
+     still sets a border above (it is a fuller-page treatment than the two
+     shared here), so it needs this said again to actually go away. */
+  .signin-card { border: 0; }
+
+  button.primary, button.ghost {
+    font: inherit; font-weight: 500; padding: 11px 22px; border-radius: 12px;
+    border: 0; background: var(--accent); color: #fff; cursor: pointer;
+    transition: filter .15s ease, background .15s ease;
+  }
+  button.primary:hover { filter: brightness(1.07); }
+  button.ghost { background: transparent; color: var(--ink-2); border: 1px solid var(--hairline); }
+  button.ghost:hover { background: var(--ground); }
+  /* A disabled button is grey, never a faded accent -- fading the orange
+     reads as "about to work", which a disabled Save is not. */
+  button:disabled {
+    cursor: default; filter: none; opacity: 1;
+    background: var(--sunken); color: var(--ink-3);
+    border-color: var(--hairline);
+  }
+
+  /* Every field, not only text ones. Naming a single input type left the
+     password field on the sign-in screen unstyled -- a native box beside a
+     styled button, which is exactly where the mismatch shows most. */
+  input[type=text], input[type=password] {
+    font: inherit; width: 100%; padding: 14px 16px; border-radius: 14px;
+    border: 1px solid var(--hairline); background: var(--sunken); color: var(--ink-1);
+    transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+  }
+  /* :focus-visible, not bare :focus -- a bare rule would paint this on every
+     mouse click, and a text field earns the ring on any focus method anyway. */
+  input[type=text]:focus-visible, input[type=password]:focus-visible {
+    outline: none; border-color: var(--accent); background: var(--surface);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  input::placeholder { color: var(--ink-2); opacity: 1; }
+
+  ol { padding-left: 22px; margin: 0 0 18px; }
+  ol li { margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  /* ---- Status -------------------------------------------------------------
+     Colour never carries the meaning on its own -- there is always a word
+     next to the dot. */
+  .status {
+    display: inline-flex; align-items: center; gap: var(--s2);
+    font-weight: 500; white-space: nowrap;
+  }
+  /* `.status`'s own `display` above outranks the browser's default
+     `[hidden] { display: none }` (author styles beat user-agent ones
+     regardless of selector weight), so a hidden status pill needs this
+     restated explicitly or the attribute does nothing. */
+  .status[hidden] { display: none; }
+  .status .dot { width: var(--s2); height: var(--s2); border-radius: var(--r-pill); flex: none; background: currentColor; }
+  /* On a card the state is a label, not a headline: a pill at the size of the
+     caption beside it, rather than coloured text competing with the name. */
+  .cam .status {
+    font-size: .78rem; padding: var(--s1) var(--s3); border-radius: var(--r-pill);
+    background: var(--sunken);
+  }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+  .status.err { color: var(--err); }
+
+  /* ---- Camera card --------------------------------------------------------
+     `.cam`'s shared box model (background, radius, shadow) comes from the
+     `.card, .cam` rule above; this adds only what a camera card needs beyond
+     that: clipping the picture to the rounded corners, and a positioning
+     context for the play control. */
+  .grid {
+    display: grid; gap: var(--s4);
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  }
+  .cam { overflow: hidden; position: relative; }
+  /* Every state occupies the same box, including the ones that can never show
+     a picture. A card that drops its preview area collapses to one row and
+     stands a head shorter than its neighbours. */
+  .preview {
+    position: relative; aspect-ratio: 16 / 9; background: #0b0d10;
+    display: flex; align-items: center; justify-content: center;
+  }
+  /* Overlaid rather than laid out, so the placeholder stays visible behind the
+     image until the first picture arrives and the card does not resize when it
+     does. */
+  .preview img {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: contain; display: block; opacity: 0; transition: opacity .2s ease;
+  }
+  .preview img.visible { opacity: 1; }
+  .preview .placeholder {
+    color: #8b929c; font-size: .85rem; line-height: 1.5;
+    text-align: center; padding: 0 22px; max-width: 100%;
+  }
+  /* What a camera with no usable path shows in place of a picture, in the
+     same box a working camera's picture would occupy -- see the comment on
+     `.preview` above for why every card keeps this box regardless. */
+  .blocked {
+    display: flex; flex-direction: column; align-items: center; gap: var(--s2);
+    padding: 0 22px; text-align: center; color: #8b929c;
+  }
+  .blocked-icon { color: var(--warn); }
+  .blocked-icon svg { width: 22px; height: 22px; fill: currentColor; }
+  .blocked-why { font-size: .85rem; line-height: 1.5; }
+  .blocked-action {
+    margin-top: var(--s1); font: inherit; font-size: .82rem; font-weight: 500;
+    padding: var(--s2) var(--s4); border-radius: var(--r-pill); border: 0;
+    background: var(--accent); color: #fff; cursor: pointer;
+  }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem;
+    background: var(--sunken); color: var(--ink-2);
+    border: 1px solid var(--hairline);
+    padding: 8px 11px; border-radius: var(--r-ctl);
+    flex: 1; min-width: 0;
+    /* One line that scrolls, rather than a wrap that breaks a device id in
+       half. The whole value is one token to a reader even where it is not one
+       to the browser. */
+    white-space: nowrap; overflow-x: auto;
+  }
+  code::-webkit-scrollbar { height: 0; }
+  .copy {
+    font: inherit; font-size: .78rem; padding: 8px 14px; border-radius: var(--r-ctl);
+    border: 1px solid var(--hairline); background: var(--surface); color: var(--ink-2);
+    cursor: pointer; white-space: nowrap; flex: none;
+    transition: border-color .15s ease, color .15s ease, background .15s ease;
+  }
+  .copy:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+
+  .hint { color: var(--ink-2); font-size: .88rem; margin: 10px 0 0; }
+
+  /* ---- Compatibility sign-in form ----------------------------------------
+     The fields inside the M5 panel. The global `input` rule styles the
+     boxes (which is why every field here is `type="text"` or `password` --
+     a bare `<input>` without a type keeps the browser's native box); this
+     adds the label-above-input layout, and the captcha image's own box. */
+  /* The explanation above the form and the form were once flush against each
+     other -- the caption is not part of the fields, so it earns its own
+     space before them. */
+  .compat-form { margin-top: var(--s4); }
+  .compat-field { display: block; margin: 0 0 var(--s4); }
+  .compat-field > span {
+    display: block; margin-bottom: var(--s2);
+    font-size: .82rem; font-weight: 500; color: var(--ink-2);
+  }
+  /* A form's action buttons sit on the right, the primary last -- the
+     browser-native prompt does the same, so this needs no explaining. */
+  .compat-actions { justify-content: flex-end; }
+  /* The captcha is a button: tapping it asks for a fresh one. */
+  .compat-captcha {
+    display: block; width: 100%; max-width: 300px; margin: 0 auto var(--s4);
+    padding: 0; border: 0; border-radius: var(--r-ctl);
+    background: var(--sunken); cursor: pointer;
+  }
+  .compat-captcha img { display: block; width: 100%; height: auto; border-radius: var(--r-ctl); }
+
+  .section-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+  .section-head h2 {
+    font-size: .82rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-2); margin: 0;
+  }
+
+  /* Playback lives on the picture, everything else lives in the row
+     underneath. What a camera is doing and how it is configured are
+     different questions and do not share a control cluster. */
+  .cam-row { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); }
+  .cam-id { min-width: 0; flex: 1; }
+  .cam-name {
+    font-size: 15px; font-weight: 500; color: var(--ink-1);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cam-model { font-size: 12px; color: var(--ink-3); margin-top: var(--s1); }
+  .settings-btn {
+    flex: none; width: 36px; height: 36px; border-radius: var(--r-pill); padding: 0;
+    background: var(--sunken); color: var(--ink-2); position: relative;
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+    /* `border: 0` where `.icon-btn` gets it too: a button without it keeps
+       the browser's default border, which is drawn in the system palette and
+       never follows this page's dark-mode tokens. */
+    border: 0;
+    transition: color .15s ease, background .15s ease;
+  }
+  /* Visual size 36, touch target 44 -- the gap is padded out invisibly. */
+  .settings-btn::after { content: ""; position: absolute; inset: -4px; }
+  .settings-btn svg { width: 17px; height: 17px; fill: currentColor; }
+  .settings-btn:hover { color: var(--accent); background: var(--accent-wash); }
+
+  /* ---- Play control ---------------------------------------------------
+     Shown over a placeholder this page drew itself, so it can stay put
+     without a scrim: the background is a colour chosen for it, not whatever
+     the camera happens to be pointed at, so there is no legibility problem
+     to solve. */
+  .play-btn {
+    position: absolute; inset: 0; margin: auto;
+    width: 48px; height: 48px; border: 0; border-radius: var(--r-pill);
+    background: rgba(255,255,255,.92); color: #111; padding: 0; cursor: pointer;
+    display: grid; place-items: center;
+    transition: transform .15s ease, filter .15s ease;
+  }
+  .play-btn:hover { filter: brightness(1.06); transform: scale(1.05); }
+  /* No nudge. The triangle's own path is already drawn right of the viewBox
+     centre, so a margin here shifts it twice and it reads off-centre. */
+  .play-btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+  /* ---- Preview controls -------------------------------------------------
+     Stop and enlarge sit in a corner once a picture is playing, rather than
+     over the whole picture -- a corner is a fair price against any scene,
+     covering it is not. Hidden by opacity, never by display: a control
+     removed from layout cannot be focused, and :focus-within is what keeps
+     these reachable from a keyboard, which never hovers. */
+  .preview .controls {
+    position: absolute; right: var(--s3); bottom: var(--s3); z-index: 3;
+    display: flex; gap: var(--s2); opacity: 1;
+  }
+  /* Gated on a real pointer: many mobile browsers latch `:hover` after a tap
+     and never release it, so a bare `:hover` rule leaves the controls stuck
+     open -- or requiring a second tap -- on the device most viewers hold. */
+  @media (hover: hover) and (pointer: fine) {
+    .preview .controls { opacity: 0; transition: opacity 150ms var(--ease-micro); }
+    .preview:hover .controls,
+    .preview:focus-within .controls { opacity: 1; }
+  }
+  .ctl-btn {
+    width: var(--s7); height: var(--s7); border: 0; border-radius: var(--r-pill);
+    background: rgba(255,255,255,.22); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    color: #fff; padding: 0; cursor: pointer; position: relative;
+    display: grid; place-items: center;
+    transition: background .15s ease;
+  }
+  /* Visual size 32, touch target 44 -- the gap is padded out invisibly. */
+  .ctl-btn::after { content: ""; position: absolute; inset: -6px; }
+  .ctl-btn:hover { background: rgba(255, 255, 255, .34); }
+  .ctl-btn svg { width: 14px; height: 14px; fill: currentColor; }
+
+  /* ---- Settings row ---------------------------------------------------
+     Two shapes share the name. A *static* row (the defaults and camera
+     sheets) is a label, its resolved value, and the `.seg` control with
+     every choice shown beneath it -- always expanded, never behind a
+     toggle. A *nav* row (the account sheet's compatibility-mode entry) is
+     the same label and value plus a chevron, and is a button. The value
+     answers the label, so it stays quieter than it. Inset to the label --
+     Mi Home's most recognisable list detail -- rather than run wall to
+     wall. */
+  .setting-row + .setting-row { border-top: 1px solid var(--hairline); margin-left: var(--s4); }
+  .setting-row + .setting-row .setting-row-btn,
+  .setting-row + .setting-row .setting-row-head,
+  .setting-row + .setting-row .setting-choices { margin-left: calc(var(--s4) * -1); }
+  .setting-row-btn {
+    display: flex; align-items: center; width: 100%; min-height: 56px;
+    padding: 0 var(--s4); margin: 0; border: 0; background: none; cursor: pointer;
+    font: inherit; color: inherit; text-align: left; text-decoration: none;
+  }
+  .setting-row-head {
+    display: flex; align-items: center; gap: var(--s3);
+    min-height: 56px; padding: 0 var(--s4);
+  }
+  .setting-label { font-size: .95rem; color: var(--ink-1); flex: none; }
+  .setting-value {
+    flex: 1; min-width: 0;
+    margin-left: auto; padding-left: var(--s3); font-size: .95rem; color: var(--ink-2);
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .setting-chevron {
+    margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
+  }
+  .setting-choices { padding: 0 var(--s4) var(--s4); }
+  /* The sheet's Save button: settings are applied together, one request to
+     the add-on for however many fields changed. Full width, a step the eye
+     lands on at the bottom of the sheet. */
+  .sheet-footer { margin-top: var(--s4); }
+  .sheet-footer button { width: 100%; }
+  .setting-group-label {
+    display: block; font-size: .74rem; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-2); margin: 20px 0 10px;
+  }
+  .setting-group-label:first-child { margin-top: 0; }
+
+  /* ---- Choosers ---------------------------------------------------------
+     Two to four options: a segmented control. Every option is visible and
+     one tap away, and it cannot be styled inconsistently across the
+     browsers Home Assistant is opened in. */
+  /* The segmented control's and the preference chip's styles are scoped to
+     their components (`Seg.svelte`, `Chip.svelte`); the note above the track
+     about the 44px touch floor now lives there too. */
+
+  /* Overlay ------------------------------------------------------------------
+     One primitive, two contents: the settings sheet and the enlarged
+     preview. Both need a backdrop, Escape, a sane place for focus to land on
+     open and return to on close, and reduced-motion respected -- built once
+     rather than twice, which is the usual way one of the pair ends up
+     keyboard-unreachable. Deliberately does not trap focus: Tab may leave it,
+     which keeps the implementation simple and Escape is always the way out. */
+  #overlay[hidden] { display: none; }
+  #overlay { position: fixed; inset: 0; z-index: 50; display: flex; }
+  .overlay-backdrop {
+    position: absolute; inset: 0; background: rgba(0, 0, 0, .5); border: 0; padding: 0; cursor: default;
+    opacity: 0; transition: opacity .18s ease;
+  }
+  .overlay-panel {
+    position: relative; margin: auto; z-index: 1;
+    max-width: 420px; width: calc(100% - 40px); max-height: 84vh;
+    background: var(--surface); border-radius: var(--r-sheet); box-shadow: var(--lift);
+    display: flex; flex-direction: column; overflow: hidden;
+    opacity: 0; transform: translateY(10px); transition: opacity .18s ease, transform .18s ease var(--ease-sheet);
+  }
+  /* Focused programmatically on open (see `openOverlay`), never by Tab --
+     `tabindex="-1"` takes it out of the normal tab order entirely, so a
+     keyboard user can never land here by navigating. That focus move is
+     still right: it is what puts a screen reader and the keyboard inside
+     the dialog instead of behind it. But the ring answers "where does the
+     next keystroke go", and nobody keyed their way here to ask -- so it is
+     suppressed on the panel itself only, and only when it was not reached by
+     a keyboard. Every focusable control inside the panel keeps its own
+     `:focus-visible` outline untouched below. */
+  .overlay-panel:focus:not(:focus-visible) { outline: none; }
+  /* The class a frame after `hidden` is cleared -- see the comment on
+     `openOverlay` in the script for why the two are separate steps. */
+  #overlay.open .overlay-backdrop { opacity: 1; }
+  #overlay.open .overlay-panel { opacity: 1; transform: none; }
+  .overlay-head { display: flex; align-items: center; gap: 12px; padding: 18px 18px 4px; flex: none; }
+  .overlay-title { font-size: 1rem; font-weight: 600; flex: 1; min-width: 0; }
+  .overlay-close {
+    flex: none; width: var(--s7); height: var(--s7); border-radius: var(--r-pill); border: 0; padding: 0;
+    background: var(--sunken); color: var(--ink-2); cursor: pointer; position: relative;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s ease, color .15s ease;
+  }
+  /* Visual size 32, touch target 44 -- isolated (nothing sits beside it), so
+     the invisible-inset trick applies cleanly here, same as `.ctl-btn`. */
+  .overlay-close::after { content: ""; position: absolute; inset: -6px; }
+  .overlay-close svg { width: 15px; height: 15px; fill: currentColor; }
+  .overlay-close:hover { background: var(--ground); color: var(--ink-1); }
+  .overlay-body { padding: 4px 18px 18px; overflow-y: auto; }
+
+  /* The sheet becomes a bottom drawer on a narrow viewport, centred on a
+     wide one: the Home Assistant app renders this page in the same ingress
+     frame on a phone, and a dialog centred there puts its controls under
+     the thumb's reach rather than at it. */
+  @media (max-width: 600px) {
+    .overlay-panel {
+      margin: auto 0 0; width: 100%; max-width: none; max-height: 88vh;
+      border-radius: var(--r-sheet) var(--r-sheet) 0 0; transform: translateY(100%);
+    }
+    #overlay.open .overlay-panel { transform: none; }
+  }
+
+  /* The enlarged preview is the one place on this page that gets to look
+     like something -- everywhere else stays a quiet list of rows. */
+  .overlay-panel.enlarge { max-width: min(94vw, 1100px); width: auto; background: #0b0d10; }
+  .overlay-panel.enlarge .overlay-head { position: absolute; top: 0; right: 0; z-index: 2; padding: 12px; }
+  .overlay-panel.enlarge .overlay-title { display: none; }
+  .overlay-panel.enlarge .overlay-close { background: rgba(0, 0, 0, .5); color: #fff; }
+  .overlay-panel.enlarge .overlay-close:hover { background: rgba(0, 0, 0, .68); }
+  .overlay-panel.enlarge .overlay-body { padding: 0; display: flex; }
+  .overlay-panel.enlarge img { display: block; max-width: 94vw; max-height: 84vh; margin: auto; }
+  /* Shown in place of the picture when the preview it belongs to fails while
+     enlarged -- see `settle` in `startPreview`. `.placeholder`'s own colour
+     (below, under `.preview`) does not reach here: this sits directly under
+     `.overlay-panel`, not a `.preview`, so the light-on-dark colour is
+     restated for it specifically. */
+  .overlay-panel.enlarge .placeholder {
+    margin: auto; padding: 40px; color: #c7cbd1; font-size: .9rem; text-align: center;
+  }
+
+  .msg { padding: 13px 17px; border-radius: 12px; margin-bottom: 16px; display: none; }
+  .msg.show { display: block; }
+  .msg.error { background: color-mix(in srgb, var(--err) 11%, transparent); color: var(--err); }
+  .msg.success { background: color-mix(in srgb, var(--ok) 11%, transparent); color: var(--ok); }
+  .empty { color: var(--ink-2); text-align: center; padding: 40px 0; }
+  .empty button.primary { margin-top: var(--s4); }
+
+  /* ---- Focus ------------------------------------------------------------
+     One rule for every focusable control on the page: a ring for keyboard
+     navigation, and nothing for a mouse click. Component rules above no
+     longer need their own -- this is the one source of truth. */
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

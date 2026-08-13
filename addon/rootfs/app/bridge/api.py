@@ -25,26 +25,32 @@ credentials.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import ipaddress
 import logging
 import secrets
+from collections import OrderedDict, defaultdict
 from typing import TYPE_CHECKING, Any
 
 import av.error
 from aiohttp import web
 
+from . import go2rtc_xiaomi
 from .account import AccountManager, LinkFailedError
-from .config import Options
+from .config import Options, TranscodeQuality, VideoQuality
 from .const import ALL_INTERFACES, API_PORT, INGRESS_PORT, LOOPBACK
 from .framing import MediaKind
 from .mux import StreamMuxer
+from .paths import VideoPath, available_paths
 from .redact import safe_error
+from .settings import Defaults, Resolved, SettingsStore
 from .stills import QUALITIES, Stills, StillsError
 from .streaming import StreamError
 from .webauth import SESSION_COOKIE, build_guards, session_token
 
 if TYPE_CHECKING:
-    from .cameras import CameraRegistry
+    from .cameras import CameraDescription, CameraRegistry
     from .restream import Restreamer
     from .streaming import SessionManager
 
@@ -65,6 +71,38 @@ _SESSION_SECONDS = 30 * 24 * 3600
 #: Supervisor's ingress path prefix. The session cookie is scoped to it so it
 #: is not sent to other add-ons living behind the same proxy.
 _INGRESS_HEADER = "X-Ingress-Path"
+
+#: Failures per source address, and the delay each earns. Five free attempts
+#: covers a typo and a forgotten variant; after that the answer slows down,
+#: doubling each time and capped so a very persistent attacker still gets an
+#: answer eventually. Never a lockout -- that turns the page into a
+#: denial-of-service switch anyone on the network can throw, with the owner
+#: on the wrong side of it, standing in their own house, unable to see their
+#: own cameras.
+#:
+#: Two limits of this, worth stating here rather than only in a design note,
+#: because this comment is where the next person will look and a defence
+#: whose limits live only in a report is a defence whose limits get lost.
+#: First, this slows one *address*, not one attacker: anyone with a second
+#: NIC, a spare device, or an IPv6 /64 gets a fresh budget and a fresh curve
+#: per address they attack from. That is inherent to any per-address scheme,
+#: not a defect of this one. Second, the password check runs in every
+#: deployment including through Home Assistant's own panel (see
+#: `webauth.py`'s module docstring), and behind Supervisor's ingress every
+#: request arrives from Supervisor's single address -- so yes, one person
+#: mistyping the password there slows the page for everyone else on that
+#: instance too, capped at the same 30 seconds.
+_MAX_FREE_ATTEMPTS = 5
+_MAX_PENALTY_S = 30.0
+
+#: Upper bound on how many source addresses are tracked at once. Only a
+#: success removes an entry, so without a cap a sustained attack spread
+#: across many addresses -- cheap over an IPv6 /64, though TCP's handshake
+#: means it is never free -- would grow this dict for the life of the
+#: process. Bounded by evicting the least-recently-touched entry once the
+#: cap is hit: a defence that can be turned into a memory leak is a new
+#: attack surface, not a fix.
+_MAX_TRACKED_ADDRESSES = 10_000
 
 
 def _bounded(raw: str | None, name: str, low: int, high: int, default: int) -> int:
@@ -120,15 +158,43 @@ class BridgeApi:
         refresh_callback,
         options: Options,
         previews: Stills,
+        settings_store: SettingsStore | None = None,
+        slug: str | None = None,
     ) -> None:
         self._previews = previews
         self._options = options
+        # Read once at start-up by `__main__.py` and handed in here, rather
+        # than read on every `/api/info` request: it does not change while
+        # the add-on runs, and a Supervisor round trip per page load would be
+        # a cost with no matching benefit.
+        self._slug = slug
+        # Optional only so the many tests that build a `BridgeApi` to exercise
+        # one unrelated handler (streaming, previews, linking) do not each
+        # need a store of their own. Every handler that actually reads or
+        # writes settings requires a real one, wired once in `__main__.py`.
+        self._settings_store = settings_store
         self._account = account
         self._registry_provider = registry_provider
         self._sessions_provider = sessions_provider
         self._restreamer = restreamer
         self._refresh_callback = refresh_callback
         self._runners: list[web.AppRunner] = []
+        # Keyed on the peer address (never a forwarded-for header -- see
+        # `webauth._from_supervisor` for why that distinction matters), and
+        # never persisted: a restart is an acceptable way to reset it, and
+        # keeping it only in memory is what keeps the login page itself free
+        # of anything worth calling storage. An `OrderedDict` so the least
+        # recently touched address can be evicted once `_MAX_TRACKED_ADDRESSES`
+        # is reached -- see that constant for why a cap exists at all.
+        self._login_failures: OrderedDict[str, int] = OrderedDict()
+        # Open preview sockets, keyed by the camera they show. Consulted only
+        # by `_set_camera_settings`, which needs to reach every viewer of a
+        # camera whose session it is about to tear down and reopen -- without
+        # this they would just go quiet until the still decoder's own
+        # twenty-second first-frame timeout turned the silence into
+        # `no_video` (see `stills.py`'s `_FIRST_FRAME_TIMEOUT` and
+        # `docs/superpowers/findings/2026-08-12-preview-restart.md`).
+        self._preview_sockets: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
 
     # ------------------------------------------------------------------
     # Server lifetime
@@ -140,7 +206,7 @@ class BridgeApi:
         app.add_routes(
             [
                 web.get("/api/health", self._health),
-                web.get("/api/cameras", self._cameras),
+                web.get("/api/cameras", self._cameras_for_control),
                 web.post("/api/cameras/refresh", self._refresh),
                 web.get("/api/snapshot/{did}", self._snapshot),
                 web.get("/api/stream/{did}", self._stream),
@@ -161,14 +227,31 @@ class BridgeApi:
         app.add_routes(
             [
                 web.get("/api/health", self._health),
-                web.get("/api/cameras", self._cameras),
+                web.get("/api/cameras", self._cameras_for_page),
                 web.post("/api/link/begin", self._link_begin),
                 web.post("/api/link/complete", self._link_complete),
                 web.post("/api/unlink", self._unlink),
                 web.post("/api/login", self._login),
                 web.post("/api/logout", self._logout),
                 web.get("/api/preview/{did}/ws", self._preview_ws),
+                # These belong to the page, not the control plane: the page
+                # is where a person changes them, and the integration has no
+                # business writing video settings over the loopback API.
+                web.get("/api/settings", self._settings),
+                web.put("/api/settings", self._set_defaults),
+                web.put("/api/cameras/{did}/settings", self._set_camera_settings),
+                # Compatibility mode's own sign-in, carried to go2rtc.
+                # Nothing generic: go2rtc's wider API exposes `exec` and
+                # stream management, and a passthrough would put both
+                # behind this add-on's password too.
+                web.post("/api/compat/signin", self._compat_signin),
+                web.delete("/api/compat", self._compat_forget),
+                # Facts about the add-on itself, not any one camera: changes
+                # only when the add-on restarts, unlike `/api/cameras`.
+                web.get("/api/info", self._info),
                 web.get("/", self._index),
+                web.get("/app.css", self._asset),
+                web.get("/app.js", self._asset),
                 web.static("/static", _STATIC_DIR, show_index=False),
             ]
         )
@@ -220,7 +303,30 @@ class BridgeApi:
             }
         )
 
-    async def _cameras(self, request: web.Request) -> web.Response:
+    async def _cameras_for_control(self, request: web.Request) -> web.Response:
+        """The integration's answer: only cameras this add-on can stream.
+
+        A refused camera is real account data, not a bug, but an integration
+        -- including one released before this field existed -- has no way to
+        act on ``support`` and would otherwise build a `camera` entity for a
+        device that can never show a picture, with nothing telling the user
+        why. Filtering happens here, once, rather than trusting every caller
+        of this route to check ``CameraDescription.publishable`` itself.
+        """
+        return await self._cameras(request, publishable_only=True)
+
+    async def _cameras_for_page(self, request: web.Request) -> web.Response:
+        """The page's answer: every camera on the account, refused or not.
+
+        The page is where a refused camera's ``support`` value has somewhere
+        to be read and explained; unlike the control plane it is not asking
+        "which of these can I build an entity for".
+        """
+        return await self._cameras(request, publishable_only=False)
+
+    async def _cameras(
+        self, request: web.Request, *, publishable_only: bool
+    ) -> web.Response:
         registry: CameraRegistry | None = self._registry_provider()
         if registry is None:
             return web.json_response(
@@ -228,6 +334,8 @@ class BridgeApi:
                 status=503,
             )
         descriptions = await registry.async_refresh()
+        if publishable_only:
+            descriptions = [d for d in descriptions if d.publishable]
         sessions: SessionManager | None = self._sessions_provider()
         stats = sessions.stats() if sessions else {}
         return web.json_response(
@@ -247,38 +355,90 @@ class BridgeApi:
                         "stream_audio": (
                             stats.get(description.did, {}).get("audio_codec")
                         ),
-                        # Credential-free by construction: a URL carrying
-                        # user:password@ would be copied into Home Assistant
-                        # config state, diagnostics and the UI.
-                        "rtsp_url": self._restreamer.rtsp_url(description.did),
-                        # The same pictures, re-encoded on demand for anything
-                        # that cannot decode H.265 -- browsers and HomeKit,
-                        # mostly. Nothing pays for it until something opens it.
-                        "rtsp_url_h264": self._restreamer.rtsp_url_h264(
+                        **self._stream_fields(description),
+                        # A publishable camera whose root stream still could
+                        # not be built -- most often compatibility mode
+                        # unable to find this camera's address. `None` covers
+                        # both "not publishable" and "built fine": neither
+                        # has anything to report here. See
+                        # `Restreamer.stream_error` and `restream.source_for`
+                        # for who raises this.
+                        "stream_error": self._restreamer.stream_error(description.did),
+                        # Resolved is what the camera actually gets right now
+                        # -- its own override where it has one, the shared
+                        # default otherwise. Override is only what this
+                        # camera says for itself, so the page can show which
+                        # fields are following the default versus set here.
+                        "settings": _settings_dict(
+                            self._settings_store.resolved_for(
+                                description.did,
+                                support=description.support,
+                                compat_ready=self._compat_ready(),
+                            )
+                        ),
+                        "override": self._settings_store.override_for(
                             description.did
-                        ),
-                        # Read by the integration in place of the two fixed
-                        # fields above, which stay for an integration older
-                        # than this add-on.
-                        "streams": self._restreamer.stream_descriptions(
-                            description.did
-                        ),
-                        "rtsp_requires_credentials": (
-                            self._restreamer.requires_credentials
-                        ),
-                        # Whether the address above is reachable from anything
-                        # other than this host -- distinct from whether a
-                        # password is required. The page needs this to decide
-                        # whether rewriting the loopback hostname it was sent
-                        # would produce a working address or a dead one.
-                        "rtsp_reachable_off_host": (
-                            self._restreamer.rtsp_reachable_off_host
-                        ),
+                        ).as_dict(),
+                        # Sent rather than derived on the page: which path is
+                        # usable depends on the account's compatibility-mode
+                        # state, which only this process holds. A copy in
+                        # JavaScript would be the second source `paths.py`'s
+                        # own docstring exists to avoid.
+                        "paths": {
+                            path.value: reason
+                            for path, reason in available_paths(
+                                description.support,
+                                compat_ready=self._compat_ready(),
+                            ).items()
+                        },
                     }
                     for description in descriptions
                 ]
             }
         )
+
+    def _stream_fields(self, description: CameraDescription) -> dict[str, object]:
+        """RTSP addresses for a camera, or nothing for one that cannot stream.
+
+        A refused camera's ``publishable`` is ``False`` -- go2rtc never builds
+        a stream table entry for it, so any address handed out here would name
+        a connection that can never succeed. Relying on the page to remember
+        not to render it is weaker than not sending it: any consumer of this
+        JSON, now or later, may reasonably show or dial a URL it was given.
+        Gated on the same ``publishable`` property everything else that
+        touches a camera's stream uses, rather than re-deriving it from
+        ``support`` here -- see the property's own docstring for why that
+        matters on this project specifically. Also gated on
+        ``Restreamer.stream_error``: a publishable camera whose root source
+        could not be built (see ``restream.source_for``) has no go2rtc stream
+        behind these names either, and handing out a URL that can never
+        connect is worse than not sending one -- see ``stream_error`` in
+        ``_cameras`` for where that failure is reported instead.
+        """
+        if not description.publishable or self._restreamer.stream_error(
+            description.did
+        ):
+            return {}
+        return {
+            # Credential-free by construction: a URL carrying user:password@
+            # would be copied into Home Assistant config state, diagnostics
+            # and the UI.
+            "rtsp_url": self._restreamer.rtsp_url(description.did),
+            # The same pictures, re-encoded on demand for anything that cannot
+            # decode H.265 -- browsers and HomeKit, mostly. Nothing pays for
+            # it until something opens it.
+            "rtsp_url_h264": self._restreamer.rtsp_url_h264(description.did),
+            # Read by the integration in place of the two fixed fields above,
+            # which stay for an integration older than this add-on.
+            "streams": self._restreamer.stream_descriptions(description.did),
+            "rtsp_requires_credentials": self._restreamer.requires_credentials,
+            # Whether the address above is reachable from anything other than
+            # this host -- distinct from whether a password is required. The
+            # page needs this to decide whether rewriting the loopback
+            # hostname it was sent would produce a working address or a dead
+            # one.
+            "rtsp_reachable_off_host": self._restreamer.rtsp_reachable_off_host,
+        }
 
     async def _refresh(self, request: web.Request) -> web.Response:
         await self._refresh_callback()
@@ -286,8 +446,13 @@ class BridgeApi:
 
     async def _snapshot(self, request: web.Request) -> web.StreamResponse:
         did = request.match_info["did"]
-        session = self._session_for(did)
-        if session is None:
+        # Gated on the camera being publishable, not on a vendor session
+        # existing: this picture is decoded from the add-on's own published
+        # RTSP stream (see `Stills`), which go2rtc serves under the same name
+        # on either path. Home Assistant fetches this for the entity picture,
+        # so gating it on the vendor SDK left every compatibility-mode camera
+        # permanently blank.
+        if not self._publishable(did):
             raise web.HTTPNotFound(text=f"unknown camera {did}")
         # Asked before anything is started, and only for a definite "off":
         # such a camera answers every call and sends nothing, so waiting for a
@@ -465,6 +630,187 @@ class BridgeApi:
         await self._refresh_callback()
         return web.json_response({"status": "ok"})
 
+    async def _settings(self, request: web.Request) -> web.Response:
+        """The global video defaults every camera falls back to.
+
+        Add-on-level facts used to be mirrored alongside these -- see
+        `_info` for why they moved out.
+        """
+        defaults = self._settings_store.defaults
+        return web.json_response({"defaults": _settings_dict(defaults)})
+
+    async def _info(self, request: web.Request) -> web.Response:
+        """What the page needs about the add-on itself, not any one camera.
+
+        Split from `/api/settings` (which used to carry an `addon` block
+        alongside the video defaults) because the two change on different
+        schedules: this one only when the add-on restarts, `/api/cameras`
+        whenever a camera does. Folding them together would mean re-sending
+        facts that never changed every time one that does is polled.
+        """
+        return web.json_response(
+            {
+                "slug": self._slug,
+                "compat_ready": self._compat_ready(),
+            }
+        )
+
+    def _compat_ready(self) -> bool:
+        """Delegated to the one owner of this fact -- see
+        `go2rtc_xiaomi.compat_ready`'s docstring."""
+        return go2rtc_xiaomi.compat_ready()
+
+    async def _compat_signin(self, request: web.Request) -> web.Response:
+        """One step of compatibility mode's sign-in, carried to go2rtc.
+
+        Only this. go2rtc's API also exposes `exec` and stream management,
+        and a general proxy would put both behind this add-on's password --
+        which is a smaller door than either of those deserves.
+        """
+        body = await _json_body(request)
+        step = body.get("step")
+        if step not in {"password", "captcha", "verify"}:
+            return web.json_response({"error": "unknown_step"}, status=400)
+        try:
+            result = await go2rtc_xiaomi.sign_in(
+                step, **{k: v for k, v in body.items() if k != "step"}
+            )
+        except go2rtc_xiaomi.SignInBusy:
+            return web.json_response({"error": "sign_in_busy"}, status=409)
+        except Exception as err:
+            # Credentials live in this exception text often enough that it
+            # must never reach a response unredacted.
+            return web.json_response({"error": safe_error(err)}, status=502)
+        if result.ok:
+            # Refreshed before the camera-list refresh below, which reads
+            # this cache to decide whether the compat path is offered --
+            # otherwise the page's own reload would show "not signed in"
+            # for one more cycle.
+            await go2rtc_xiaomi.refresh_compat_ready()
+            await self._refresh_callback(explicit=True)
+            return web.json_response({"ok": True})
+        return web.json_response(
+            {
+                "captcha": (
+                    base64.b64encode(result.captcha).decode()
+                    if result.captcha
+                    else None
+                ),
+                "verify_phone": result.verify_phone,
+                "verify_email": result.verify_email,
+            },
+            status=401,
+        )
+
+    async def _compat_forget(self, request: web.Request) -> web.Response:
+        """Remove compatibility mode's Xiaomi credential -- which go2rtc has
+        no way to do.
+
+        go2rtc's own `/api/xiaomi` handler (`internal/xiaomi/xiaomi.go` in
+        its source) accepts a GET to list and a POST to sign in; there is no
+        third case, and the in-memory token map that handler fills is only
+        ever written to, never deleted from, anywhere in that file. go2rtc
+        is also the sole writer of the state file it stores the token in
+        (`app.PatchConfig`, called from that same POST handler), so editing
+        that file from here would give it a second writer -- exactly what
+        this add-on's configuration design avoids everywhere else. A control
+        that says it is not supported is better than one that does nothing.
+        """
+        return web.json_response({"error": "not_supported"}, status=501)
+
+    async def _set_defaults(self, request: web.Request) -> web.Response:
+        body = await _json_body(request)
+        try:
+            changes = _settings_changes(body, per_camera=False)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        self._settings_store.set_defaults(**changes)
+        # `explicit=True`: someone is looking at the page they just changed a
+        # setting on. Without it a viewer keeps seeing the old picture until
+        # they happen to reconnect, which reads as a setting that did nothing.
+        await self._refresh_callback(explicit=True)
+        return web.json_response({"ok": True})
+
+    async def _set_camera_settings(self, request: web.Request) -> web.Response:
+        did = request.match_info["did"]
+        body = await _json_body(request)
+        try:
+            changes = _settings_changes(body, per_camera=True)
+        except ValueError as err:
+            return web.json_response({"error": str(err)}, status=400)
+        # `path` belongs here too: `SessionManager.session_for` decides which
+        # implementation serves a camera -- today only `VideoPath.OFFICIAL`,
+        # by raising for anything else -- from the same `resolver` callback
+        # quality and audio are read through, at the same moment: when a
+        # session opens. Dropping the cached session is what forces that
+        # decision to be remade, exactly as it already does for the other
+        # two.
+        #
+        # The go2rtc stream URL a path change also moves is not touched here
+        # either -- compatibility mode does have a source of its own (see
+        # `restream.source_for`), and it is `_refresh_callback` below that
+        # rebuilds and delivers the whole stream table from the settings this
+        # line has just written. Two writers of that table, one here and one
+        # there, is exactly the second source `restream.py` is arranged to
+        # avoid.
+        session_affecting = {"quality", "audio", "path"} & set(changes)
+        self._settings_store.set_override(did, **changes)
+        sessions: SessionManager | None = self._sessions_provider()
+        if session_affecting and sessions is not None:
+            # Picture size, audio and which implementation serves the camera
+            # are all only decided when its session opens, so any of them
+            # changing means reopening that camera's session -- and only
+            # this camera's.
+            _LOGGER.info("reloading session %s for changed %s", did, sorted(changes))
+            await sessions.async_reload(did)
+            _LOGGER.info("session %s reloaded", did)
+            # Told only once the old session is fully torn down, not while it
+            # is still in flight: `SessionManager._async_stop_one` removes
+            # the entry from its table before it awaits the vendor P2P
+            # teardown, so `session_for()` would build a second, concurrent
+            # session for the same physical camera if a viewer reconnected
+            # into that window. Waiting for `async_reload` to return closes
+            # the window entirely -- on real hardware that cost about 1.68s,
+            # against the 20s `no_video` this replaces. See
+            # `_notify_reloading`.
+            await self._notify_reloading(did)
+        await self._refresh_callback(explicit=True)
+        return web.json_response({"ok": True})
+
+    async def _notify_reloading(self, did: str) -> None:
+        """Tell every open preview socket for *did* its session is reloading.
+
+        A settings change that touches quality, audio or path drops and
+        reopens the camera's session, which interrupts the RTSP stream that
+        feeds a preview's decoder. Left alone, an open socket would just go
+        quiet until the decoder's own first-frame timeout turned the silence
+        into a generic `no_video` -- twenty seconds after a change the add-on
+        itself caused, and a message the page used to treat as permanent.
+        Saying `reloading` up front removes both problems: it is immediate,
+        and the page knows it is temporary.
+
+        Each socket is closed right after, rather than left to notice on its
+        own -- the page reconnects on a transient reason, and a socket left
+        open here would otherwise sit waiting for pictures a torn-down
+        session cannot yet produce.
+        """
+        for ws in list(self._preview_sockets.get(did, ())):
+            # Broad on purpose, matching every other best-effort socket
+            # cleanup in this file (`async_stop` above, `_stream`'s
+            # `response.write_eof()`): this runs inside `_set_camera_settings`,
+            # so a narrower catch that let some other error through -- a
+            # `RuntimeError` from writing to a transport that is mid-close,
+            # say -- would abort the settings PUT before the session it is
+            # announcing ever reloads. A best-effort notification must never
+            # be able to fail the operation it is announcing.
+            try:
+                await ws.send_json({"type": "unavailable", "reason": "reloading"})
+                await ws.close()
+            except Exception:
+                _LOGGER.debug(
+                    "could not notify a preview socket for %s", did, exc_info=True
+                )
+
     async def _preview_ws(self, request: web.Request) -> web.WebSocketResponse:
         """Pictures from one camera, over one connection.
 
@@ -482,7 +828,13 @@ class BridgeApi:
         applies to it only when it next reconnects.
         """
         did = request.match_info["did"]
-        if self._session_for(did) is None:
+        # Publishable, not "has a vendor session" -- see `_snapshot` for why
+        # the two are different questions and why only the first one is this
+        # one. A compatibility-mode camera has no vendor session and never
+        # will, and refusing its preview left the user with no way at all to
+        # confirm that compatibility mode had worked.
+        if not self._publishable(did):
+            _LOGGER.warning("preview ws refused: %s cannot be published", did)
             raise web.HTTPNotFound(text=f"unknown camera {did}")
 
         fps = _bounded(request.query.get("fps"), "fps", 0, 30, default=12)
@@ -506,6 +858,14 @@ class BridgeApi:
             await ws.close()
             return ws
 
+        # Registered so `_notify_reloading` can reach this socket if a
+        # settings change reloads this camera's session while it is open.
+        # Removed unconditionally below -- both a clean close and one this
+        # handler ends itself (`send_pictures`'s `finally`) must stop
+        # tracking it, or a closed socket would linger here forever.
+        sockets = self._preview_sockets[did]
+        sockets.add(ws)
+
         async def send_pictures() -> None:
             """Each picture, named by the last one sent.
 
@@ -521,6 +881,7 @@ class BridgeApi:
                     )
                     await ws.send_bytes(image)
             except StillsError as err:
+                _LOGGER.warning("preview %s ended: %s", did, safe_error(err))
                 # Asked again rather than recalled: the case worth naming is a
                 # camera switched off since the list was last read, and the
                 # remembered value is by definition the one from before that.
@@ -559,6 +920,9 @@ class BridgeApi:
             sending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await sending
+            sockets.discard(ws)
+            if not sockets:
+                self._preview_sockets.pop(did, None)
         return ws
 
     async def _login(self, request: web.Request) -> web.Response:
@@ -574,6 +938,9 @@ class BridgeApi:
             # cannot explain.
             raise web.HTTPBadRequest(text="No password is configured.")
 
+        peer = self._bucket_key(request.remote or "unknown")
+        await self._login_penalty(peer)
+
         supplied = str((await _json_body(request)).get("password", ""))
         # Compared as bytes: `compare_digest` refuses non-ASCII strings
         # outright, and a password with a Chinese character in it would
@@ -581,7 +948,21 @@ class BridgeApi:
         if not secrets.compare_digest(
             supplied.encode("utf-8"), expected.encode("utf-8")
         ):
+            failures = self._record_login_failure(peer)
+            # The source and the count, never the value: the attempted
+            # password must not enter a log line, full stop -- see
+            # `redact.py`'s reason for existing, which is that credentials
+            # leaked through exception text before.
+            _LOGGER.warning(
+                "wrong web password from %s (%d failed attempt(s))",
+                peer,
+                failures,
+            )
             raise web.HTTPUnauthorized(text="That password is not right.")
+
+        # A success clears the slate completely -- this is a delay on
+        # guessing, not a debt the address carries forward.
+        self._login_failures.pop(peer, None)
 
         response = web.json_response({"status": "ok"})
         response.set_cookie(
@@ -596,6 +977,65 @@ class BridgeApi:
             max_age=_SESSION_SECONDS,
         )
         return response
+
+    async def _login_penalty(self, peer: str) -> None:
+        """Delay this address's login attempt, if it has earned one.
+
+        A genuine `await asyncio.sleep` rather than anything that blocks the
+        loop: this is a single-threaded server, and every camera's preview
+        and every API call shares it. A sleep that blocked would let an
+        attacker degrade the whole add-on just by failing to log in
+        repeatedly. Several delayed attempts from different addresses run
+        concurrently without interfering, because each is its own coroutine
+        waiting on its own timer.
+        """
+        if peer in self._login_failures:
+            # Touched: this address stays recently-used, so eviction under
+            # `_MAX_TRACKED_ADDRESSES` takes an idle address first.
+            self._login_failures.move_to_end(peer)
+        failures = self._login_failures.get(peer, 0)
+        if failures < _MAX_FREE_ATTEMPTS:
+            return
+        delay = min(2.0 ** (failures - _MAX_FREE_ATTEMPTS), _MAX_PENALTY_S)
+        await asyncio.sleep(delay)
+
+    @staticmethod
+    def _bucket_key(peer: str) -> str:
+        """Normalise a peer address before it becomes a dict key.
+
+        `request.remote` can name the same host two ways -- plain
+        `192.168.1.5` and its IPv4-mapped IPv6 form `::ffff:192.168.1.5` --
+        and leaving both as their raw strings would hand a dual-stack
+        attacker two separate budgets for one address. Parsed through
+        `ipaddress`, the same normalisation `webauth._from_supervisor`
+        already relies on to reason about a peer address in this file
+        family. Falls back to the raw string when it does not parse as an
+        address at all -- losing the backoff there is better than the
+        request failing outright.
+        """
+        try:
+            address = ipaddress.ip_address(peer)
+        except ValueError:
+            return peer
+        mapped = getattr(address, "ipv4_mapped", None)
+        return str(mapped) if mapped is not None else str(address)
+
+    def _record_login_failure(self, peer: str) -> int:
+        """Bump this address's failure count and return it.
+
+        Also where the bound in `_MAX_TRACKED_ADDRESSES` is enforced: the
+        address just touched is moved to the most-recently-used end, and if
+        that pushes the map over the cap, the least-recently-touched address
+        -- not necessarily this one -- is evicted. Split out from `_login`
+        so this bookkeeping can be exercised directly rather than only
+        through however many real requests it would take to fill the cap.
+        """
+        failures = self._login_failures.get(peer, 0) + 1
+        self._login_failures[peer] = failures
+        self._login_failures.move_to_end(peer)
+        if len(self._login_failures) > _MAX_TRACKED_ADDRESSES:
+            self._login_failures.popitem(last=False)
+        return failures
 
     async def _logout(self, request: web.Request) -> web.Response:
         response = web.json_response({"status": "ok"})
@@ -614,6 +1054,21 @@ class BridgeApi:
         # not work.
         return web.FileResponse(
             f"{_STATIC_DIR}/index.html",
+            headers={"Cache-Control": "no-cache, must-revalidate"},
+        )
+
+    async def _asset(self, request: web.Request) -> web.StreamResponse:
+        """The page's own stylesheet and script.
+
+        Served beside the page rather than under `/static` so the page can
+        reference them relatively -- ingress serves it under a prefix this
+        file must not know or reconstruct.
+        """
+        name = request.path.lstrip("/")
+        if name not in {"app.css", "app.js"}:
+            raise web.HTTPNotFound()
+        return web.FileResponse(
+            f"{_STATIC_DIR}/{name}",
             headers={"Cache-Control": "no-cache, must-revalidate"},
         )
 
@@ -647,6 +1102,14 @@ class BridgeApi:
             return None
         return registry.power_state(did)
 
+    def _publishable(self, did: str) -> bool:
+        """Whether this camera may be streamed -- delegated to the registry,
+        which owns the one answer (see `CameraRegistry.is_publishable`)."""
+        registry: CameraRegistry | None = self._registry_provider()
+        if registry is None:
+            return False
+        return registry.is_publishable(did)
+
     def _session_for(self, did: str):
         registry: CameraRegistry | None = self._registry_provider()
         sessions: SessionManager | None = self._sessions_provider()
@@ -666,6 +1129,100 @@ async def _json_body(request: web.Request) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise web.HTTPBadRequest(text="expected a JSON object")
     return payload
+
+
+def _settings_dict(settings: Defaults | Resolved | None) -> dict[str, object] | None:
+    """`Defaults` and `Resolved` serialised the same way for the three fields
+    they share -- the page has no reason to see those rendered differently.
+
+    `path` exists only on `Resolved`: `Defaults` has no path to follow (see
+    `settings.py`'s module docstring), so it is included only when present
+    rather than reported as absent or invented for the defaults card. The
+    page must read it from here, not reconstruct it -- `path_for` in
+    `paths.py` is the one place that fact is decided; a second answer to it
+    is exactly the bug the multi-stream incident in CLAUDE.md was.
+
+    `None` passes straight through: a camera with no resolvable path (see
+    `SettingsStore.resolved_for`) has no effective settings to show.
+    """
+    if settings is None:
+        return None
+    result: dict[str, object] = {
+        "quality": settings.quality.value,
+        "audio": settings.audio,
+        "transcode_quality": settings.transcode_quality.value,
+    }
+    if isinstance(settings, Resolved):
+        result["path"] = settings.path.value
+    return result
+
+
+def _settings_changes(body: dict, *, per_camera: bool = False) -> dict:
+    """Validated settings from a request body.
+
+    ``per_camera`` is the one distinction between this function's two
+    callers, `/api/settings` (defaults) and `/api/cameras/{did}/settings`
+    (one camera) -- not two independently-set flags, because "may this
+    write clear a field back to following the default" and "may this write
+    name a path" have always moved together: both are true for a per-camera
+    write and false for a defaults write, and nothing about either question
+    can be answered without knowing which endpoint is asking.
+
+    `path` is refused outright, by name, on a defaults write -- never
+    silently dropped. A global default for it would be meaningless: which
+    paths a camera can use depends on its own model and on whether the
+    compatibility-mode credential exists (see `settings.py`'s module
+    docstring), and a dropped key here is exactly how the connection row
+    in the settings sheet shipped as a control that accepted a choice and
+    did nothing with it.
+
+    Names the setting and the accepted values in the error. A bare enum
+    ValueError names neither, which leaves someone who sent `"ultra"` with
+    nothing to act on.
+    """
+    changes: dict[str, object] = {}
+    parsers = {
+        "quality": VideoQuality,
+        "transcode_quality": TranscodeQuality,
+    }
+    for key, cls in parsers.items():
+        if key not in body:
+            continue
+        raw = body[key]
+        if raw is None and per_camera:
+            changes[key] = None
+            continue
+        try:
+            changes[key] = cls(raw)
+        except ValueError:
+            allowed = ", ".join(member.value for member in cls)
+            raise ValueError(f"{key} must be one of {allowed}, not {raw!r}") from None
+    if "audio" in body:
+        raw = body["audio"]
+        if raw is None and per_camera:
+            changes["audio"] = None
+        elif isinstance(raw, bool):
+            changes["audio"] = raw
+        else:
+            raise ValueError(f"audio must be true or false, not {raw!r}")
+    if "path" in body:
+        if not per_camera:
+            raise ValueError(
+                "path has no default -- set it on the camera itself, "
+                "not on /api/settings"
+            )
+        raw = body["path"]
+        if raw is None:
+            changes["path"] = None
+        else:
+            try:
+                changes["path"] = VideoPath(raw)
+            except ValueError:
+                allowed = ", ".join(member.value for member in VideoPath)
+                raise ValueError(
+                    f"path must be one of {allowed}, not {raw!r}"
+                ) from None
+    return changes
 
 
 __all__ = ["BridgeApi"]

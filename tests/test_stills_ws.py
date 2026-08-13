@@ -20,11 +20,14 @@ the route table.
 from __future__ import annotations
 
 import asyncio
+from typing import ClassVar
 
 import pytest
 from aiohttp import WSMsgType, web
 from aiohttp.test_utils import TestClient, TestServer
 from bridge.api import BridgeApi
+from bridge.config import AccessMode, Options
+from bridge.settings import SettingsStore
 from bridge.stills import StillsError
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")
@@ -74,6 +77,9 @@ def _api(previews, *, powered_on: bool | None = True, switch=None) -> BridgeApi:
     class _Registry:
         def get(self, did: str) -> object | None:
             return _Camera() if did == "42" else None
+
+        def is_publishable(self, did: str) -> bool:
+            return did == "42"
 
         def power_state(self, did: str) -> bool | None:
             return switch["powered_on"] if switch else powered_on
@@ -310,5 +316,187 @@ class TestACameraSwitchedOffWhileWatchedIsNamed:
             async with client.ws_connect("/api/preview/42/ws") as ws:
                 message = await asyncio.wait_for(ws.receive(), timeout=2)
                 assert message.json()["reason"] == "no_video"
+        finally:
+            await client.close()
+
+
+class TestASettingsChangeTellsOpenPreviewsItIsReloading:
+    """The measured cause of "the preview never comes back after a settings
+    change" (docs/superpowers/findings/2026-08-12-preview-restart.md).
+
+    `_set_camera_settings` drops and reopens a camera's session whenever
+    quality, audio or path changes. On real hardware the published stream
+    took on the order of ten seconds to recover once that reload finished --
+    and until this fix, an open preview socket learned nothing about it: it
+    waited out the still decoder's own twenty-second first-frame timeout and
+    only then reported the generic `no_video`, a reason the page used to
+    treat as permanent. Telling the socket `reloading` the moment the reload
+    starts removes both the twenty-second silence and the permanent failure.
+    """
+
+    async def test_it_notifies_every_open_socket_for_that_camera_and_no_other(
+        self, tmp_path
+    ) -> None:
+        """Two viewers on the reloading camera both hear about it; a third
+        viewer on an unrelated camera hears nothing -- `_notify_reloading`
+        must reach every socket registered under the reloading `did` and
+        none registered under any other.
+        """
+        previews = _Previews([])  # never sends a frame; only the notify matters here
+
+        class _Camera:
+            def __init__(self, did: str) -> None:
+                self.did = did
+
+        class _Registry:
+            _dids: ClassVar = {"42", "99"}
+
+            def get(self, did: str) -> object | None:
+                return _Camera(did) if did in self._dids else None
+
+            def is_publishable(self, did: str) -> bool:
+                return did in self._dids
+
+            def power_state(self, did: str) -> bool | None:
+                return True
+
+            async def async_read_power_state(self, did: str) -> bool | None:
+                return True
+
+        class _Sessions:
+            def __init__(self) -> None:
+                self.reloaded: list[str] = []
+
+            def session_for(self, info: object) -> object:
+                return object()
+
+            async def async_reload(self, did: str) -> None:
+                self.reloaded.append(did)
+
+        sessions = _Sessions()
+
+        async def refresh_callback(*, explicit: bool = False) -> None:
+            return None
+
+        options = Options(
+            access_mode=AccessMode.LOCAL,
+            rtsp_username="",
+            rtsp_password="",
+            log_level="info",
+            web_password="",
+            supervised=False,
+        )
+        api = BridgeApi(
+            account=None,
+            registry_provider=_Registry,
+            sessions_provider=lambda: sessions,
+            restreamer=None,
+            refresh_callback=refresh_callback,
+            options=options,
+            previews=previews,
+            settings_store=SettingsStore(tmp_path / "settings.json"),
+        )
+
+        app = web.Application()
+        app.router.add_get("/api/preview/{did}/ws", api._preview_ws)
+        app.router.add_put("/api/cameras/{did}/settings", api._set_camera_settings)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            async with (
+                client.ws_connect("/api/preview/42/ws") as ws_a,
+                client.ws_connect("/api/preview/42/ws") as ws_b,
+                client.ws_connect("/api/preview/99/ws") as ws_other,
+            ):
+                response = await client.put(
+                    "/api/cameras/42/settings", json={"quality": "high"}
+                )
+                assert response.status == 200
+                for ws in (ws_a, ws_b):
+                    message = await asyncio.wait_for(ws.receive(), timeout=2)
+                    assert message.type is WSMsgType.TEXT
+                    assert message.json() == {
+                        "type": "unavailable",
+                        "reason": "reloading",
+                    }
+                # `99` was never touched -- its socket has nothing waiting,
+                # and `_Previews([])` never produces a frame either, so this
+                # only proves true if the loop above stayed silent for it.
+                with pytest.raises(asyncio.TimeoutError):
+                    await asyncio.wait_for(ws_other.receive(), timeout=0.2)
+            # The reload itself still happened -- the notify is additional,
+            # not a replacement for reopening the session.
+            assert sessions.reloaded == ["42"]
+        finally:
+            await client.close()
+
+
+class TestACompatibilityModeCameraCanBePreviewed:
+    """The preview is gated on the camera being publishable, not on a vendor
+    session existing.
+
+    Pictures come from the add-on's own published RTSP stream (`Stills` reads
+    `Restreamer.internal_rtsp_url`), which go2rtc serves under the same name
+    whichever path fills it. `SessionManager` speaks only the vendor SDK, so
+    gating here on one made every compatibility-mode camera unpreviewable --
+    a 404 for a model the vendor library refuses (it has no `MIoTCameraInfo`
+    at all) and an uncaught 500 for a supported one switched over (its
+    `session_for` raises). Confirming the compatibility mode you just set up
+    is the whole reason the preview is there.
+    """
+
+    @staticmethod
+    def _api_for_compat(previews: _Previews) -> BridgeApi:
+        class _Registry:
+            def get(self, did: str) -> object | None:
+                # A model the vendor library refuses is absent from the
+                # vendor camera list -- there is no session object to hand
+                # out and never will be.
+                return None
+
+            def is_publishable(self, did: str) -> bool:
+                return did == "42"
+
+            def power_state(self, did: str) -> bool | None:
+                return True
+
+            async def async_read_power_state(self, did: str) -> bool | None:
+                return True
+
+        class _Sessions:
+            def session_for(self, info: object) -> object:
+                raise ValueError("not on the Xiaomi official path")
+
+        return BridgeApi(
+            account=None,
+            registry_provider=_Registry,
+            sessions_provider=_Sessions,
+            restreamer=None,
+            refresh_callback=None,
+            options=None,
+            previews=previews,
+        )
+
+    async def test_it_sends_pictures(self) -> None:
+        previews = _Previews([_JPEG])
+        client = await _client(self._api_for_compat(previews))
+        try:
+            async with client.ws_connect("/api/preview/42/ws") as ws:
+                message = await asyncio.wait_for(ws.receive(), timeout=2)
+                assert message.type is WSMsgType.BINARY
+                assert message.data == _JPEG
+        finally:
+            await client.close()
+
+    async def test_a_camera_that_cannot_be_published_is_still_refused(self) -> None:
+        """Widening the gate must not open it to a camera with no path at
+        all -- there is no stream behind its name for ffmpeg to read."""
+        previews = _Previews([_JPEG])
+        client = await _client(self._api_for_compat(previews))
+        try:
+            with pytest.raises(Exception) as caught:
+                async with client.ws_connect("/api/preview/99/ws"):
+                    pass
+            assert "404" in str(caught.value)
         finally:
             await client.close()

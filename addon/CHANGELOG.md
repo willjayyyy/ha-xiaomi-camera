@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.0.0
+
+- Cameras Xiaomi's own library refuses now appear in the list, and can be
+  connected a second way.
+- Every video setting moved onto the add-on's page, and is set per camera.
+- The page follows Mi Home's design, and works on a phone.
+- Fixed: a preview would not come back after changing picture quality.
+- The three video settings that had moved are gone from the configuration.
+- Picture quality and sound go back to their defaults on upgrade; set them
+  again on the add-on's page.
+- Compatibility-mode sign-in now walks through Xiaomi's picture captcha and
+  phone or email verification codes, where it used to fail with a raw error.
+- Camera settings show every choice without tapping each row open.
+- Sound is on by default; turn it off per camera from the add-on's page.
+
+### 中文
+
+- 小米官方不支持的摄像头现在会出现在列表里，并且可以换一种方式连接。
+- 所有画面设置移到了加载项页面上，按摄像头分别设置。
+- 页面改用米家的设计，手机上也好用。
+- 修复：改过画面质量之后预览不再出图。
+- 加载项配置里那三个已经迁移走的设置删掉了。
+- 升级后画面质量和声音会回到默认值，请到加载项页面上重新设置一次。
+- 兼容模式登录现在能走小米的图形验证码和短信/邮箱验证流程，之前会报一个看不懂的错误。
+- 摄像头设置会直接显示全部选项，不用再逐行点开。
+- 声音默认开启，可在加载项页面上按摄像头关闭。
+
 ## 1.4.0
 
 Previews no longer stutter, the add-on is far lighter on the processor, and

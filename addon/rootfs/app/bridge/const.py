@@ -8,6 +8,7 @@ from typing import Final
 DATA_DIR: Final = "/data"
 OPTIONS_FILE: Final = f"{DATA_DIR}/options.json"
 CREDENTIALS_FILE: Final = f"{DATA_DIR}/credentials.json"
+SETTINGS_FILE: Final = f"{DATA_DIR}/settings.json"
 CACHE_DIR: Final = f"{DATA_DIR}/cache"
 
 # The control plane is machine-facing: it serves the raw video stream to the

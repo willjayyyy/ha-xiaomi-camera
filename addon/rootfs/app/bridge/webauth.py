@@ -61,8 +61,10 @@ SESSION_COOKIE = "xiaomi_camera_session"
 
 #: Reachable without the password, because they are how it gets entered: the
 #: page itself, what it is built from, and the endpoint that checks it. None of
-#: them reveal anything about the cameras.
-_PUBLIC_PATHS = frozenset({"/", "/api/login"})
+#: them reveal anything about the cameras. `app.css`/`app.js` are the page's
+#: own assets -- the login page cannot render without them, so they are public
+#: exactly as the `/static/` mount they also live under always was.
+_PUBLIC_PATHS = frozenset({"/", "/api/login", "/app.css", "/app.js"})
 _PUBLIC_PREFIXES = ("/static/",)
 
 _UNGUARDED = (
