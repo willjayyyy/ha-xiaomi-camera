@@ -146,21 +146,16 @@ class Bridge:
         return session.stats.keyframe_interval
 
     async def async_start(self) -> None:
-        await self._api.async_start()
-
         # go2rtc is a subprocess this bridge starts, so at start-up it is not
-        # up yet -- and `compat_ready` is read from it. `Restreamer.async_start`
-        # does not return until go2rtc answers its API, so the read below
-        # never races the boot and reports a credential that persisted as
-        # missing.
+        # up yet -- and `compat_ready` is read from it. Settle both before the
+        # HTTP servers start: a page served while go2rtc was still booting
+        # reads a credential that actually persisted as missing, and shows the
+        # sign-in prompt until something forces a refresh.
         await self._restreamer.async_start()
-
-        self._discovery_uuid = await async_announce()
-
-        # Compatibility mode's credential lives in go2rtc, independent of
-        # whether a Xiaomi account is linked here -- so this has to run even
-        # when the block below never does. See `go2rtc_xiaomi.compat_ready`.
         await go2rtc_xiaomi.refresh_compat_ready()
+
+        await self._api.async_start()
+        self._discovery_uuid = await async_announce()
 
         # A failure here must not take the bridge down: the UI is exactly where
         # the user goes to fix a broken or missing account, and an add-on that

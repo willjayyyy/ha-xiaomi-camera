@@ -93,18 +93,32 @@
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 24px;
     padding: 44px 36px 36px; box-shadow: var(--lift);
   }
-  /* The language switcher lives on the card, top right -- a normal place for
-     it, not a stray sibling floating beside the box. Rendered as one pill
-     with both options inside, so the pair never reads as split. */
-  .signin-lang {
-    position: absolute; top: var(--s4); right: var(--s4);
-    display: flex; gap: var(--s1);
-    background: var(--sunken); border-radius: var(--r-pill); padding: 2px;
+  /* The language switch lives on the card, top right -- a normal place for
+     it. On the sign-in card it is a compact dropdown, because two buttons
+     overflow the space available there (the header keeps the two-button
+     switch, which has room). */
+  .signin-lang { position: absolute; top: var(--s4); right: var(--s4); }
+  .lang-select { position: relative; }
+  .lang-select-btn {
+    font: inherit; font-size: .82rem; color: var(--ink-1);
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: var(--r-ctl); padding: var(--s1) var(--s2); cursor: pointer;
+    display: flex; align-items: center; gap: var(--s2);
   }
-  .signin-lang .lang button { border-radius: var(--r-pill); }
-  .signin-lang .lang button[aria-pressed="true"] {
-    background: var(--surface); color: var(--accent); box-shadow: var(--lift);
+  .lang-select-btn::after { content: "▾"; font-size: .7rem; color: var(--ink-3); }
+  .lang-select-menu {
+    position: absolute; top: calc(100% + var(--s1)); right: 0; z-index: 10;
+    min-width: 100%; background: var(--surface); border-radius: var(--r-ctl);
+    box-shadow: var(--lift); border: 1px solid var(--hairline); padding: var(--s1);
   }
+  .lang-select-option {
+    display: block; width: 100%; text-align: left;
+    font: inherit; font-size: .82rem; color: var(--ink-1);
+    background: none; border: 0; border-radius: var(--s2);
+    padding: var(--s2) var(--s3); cursor: pointer;
+  }
+  .lang-select-option:hover { background: var(--sunken); }
+  .lang-select-option.active { color: var(--accent); font-weight: 600; }
   .signin-mark {
     width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
     background: var(--accent-wash); color: var(--accent);

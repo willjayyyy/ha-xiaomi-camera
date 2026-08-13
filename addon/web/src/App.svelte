@@ -8,7 +8,7 @@
   import { accountLinked, overlay, message } from "./lib/stores.js";
   import { api, loadInfo, loadSettings, refreshStatus } from "./lib/api.js";
   import { t, setLang, currentLang } from "./lib/i18n.svelte.js";
-  import LangSwitch from "./components/LangSwitch.svelte";
+  import LangSelect from "./components/LangSelect.svelte";
   import SignInForm from "./components/SignInForm.svelte";
   import CameraGrid from "./components/CameraGrid.svelte";
   import Overlay from "./components/Overlay.svelte";
@@ -58,7 +58,7 @@
         <p class="sub">{t("subtitle")}</p>
       </div>
       <span class="head-actions">
-        <LangSwitch />
+        <LangSelect />
         <button type="button" id="account-btn" class="icon-btn" aria-label={t("accountTitle")} onclick={() => overlay.set({ kind: "account" })}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
         </button>

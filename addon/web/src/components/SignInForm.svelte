@@ -8,7 +8,7 @@
   // on a username this add-on does not have.
   import { api } from "../lib/api.js";
   import { t } from "../lib/i18n.svelte.js";
-  import LangSwitch from "./LangSwitch.svelte";
+  import LangSelect from "./LangSelect.svelte";
 
   let { onsuccess } = $props();
 
@@ -38,7 +38,7 @@
 
 <section id="signin">
   <form class="signin-card" onsubmit={submit}>
-    <span class="signin-lang"><LangSwitch /></span>
+    <span class="signin-lang"><LangSelect /></span>
     <div class="signin-mark" aria-hidden="true">
       <svg viewBox="0 0 24 24"><path d="M17 10.5V7a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3.5l4 4v-11l-4 4Z"/></svg>
     </div>
