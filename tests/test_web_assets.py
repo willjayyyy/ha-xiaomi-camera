@@ -76,7 +76,6 @@ _SCALE = {
     "48px",
     "56px",
     "64px",  # sign-in mark diameter
-    "120px",  # defaults-sheet segmented button max width
     "300px",  # camera grid minimum column width
     "400px",  # sign-in card max-width
     "420px",  # settings sheet max-width
@@ -210,10 +209,12 @@ def test_a_successful_signin_switches_the_cameras_that_needed_compat():
     """Signing in is the decision to use compatibility mode: every camera
     with no usable path is switched, whichever entry the login came from --
     the account sheet and a camera's action button share one login, one
-    result."""
+    result. The switch is reflected in the store immediately, so the card is
+    playable the moment the login lands rather than after a slow refresh."""
     signed_in = (SOURCE / "components" / "CompatSignIn.svelte").read_text()
     assert 'path: "compat"' in signed_in
-    assert "!c.publishable" in signed_in
+    assert "c.publishable" in signed_in
+    assert "compat_ready: true" in signed_in
 
 
 def test_compat_signin_posts_the_step_the_401_names():

@@ -424,12 +424,6 @@
     margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
   }
   .setting-choices { padding: 0 var(--s4) var(--s4); }
-  /* The defaults sheet's choices span the full row like the camera sheet's,
-     but its fields carry no "Follow default" option, so a two-option control
-     would otherwise paint two enormous buttons. Cap the buttons at a
-     reasonable width and centre them in the full-width track. */
-  .defaults-sheet .seg { justify-content: center; }
-  .defaults-sheet .seg button { flex: 1 1 0; max-width: 120px; }
   /* The sheet's Save button: settings are applied together, one request to
      the add-on for however many fields changed. Full width, a step the eye
      lands on at the bottom of the sheet. */
@@ -474,7 +468,7 @@
   }
   .chip-panel {
     position: absolute; top: var(--s7); right: 0;
-    width: max-content; min-width: 200px; max-width: min(300px, calc(100vw - 40px));
+    min-width: 200px; max-width: min(300px, calc(100vw - 40px));
     background: var(--surface); border-radius: var(--r-ctl);
     box-shadow: var(--lift); padding: var(--s3);
   }
@@ -482,8 +476,9 @@
   /* The chip's options size to their own labels rather than stretching to
      equal thirds: "Camera's rate" is much longer than "2", and an
      equal-flex row would squash the long label until it wrapped. */
+  .chip-panel .seg { margin-top: var(--s1); }
   .chip-panel .seg button { flex: 0 1 auto; }
-  .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 var(--s1); }
+  .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 0; }
   .chip-label:first-child { margin-top: 0; }
   /* Gated on a real pointer, same reasoning as `.preview .controls` above:
      latched `:hover` on touch would otherwise leave this stuck open, or

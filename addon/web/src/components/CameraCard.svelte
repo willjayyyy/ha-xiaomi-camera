@@ -284,9 +284,10 @@
       {/if}
       <!-- The play button is the whole invitation in idle -- the "tap to
            view" line it used to sit on is gone, because a text under an icon
-           is a text behind an icon. -->
+           is a text behind an icon. The preference chip floats on the picture
+           whether or not it is playing: frame rate and detail are things to
+           change while watching, not only before. -->
       {#if mode === "idle"}
-        <Chip {camera} onapply={applyPref} />
         <button type="button" class="play-btn" aria-label={t("play")} onclick={play}>{@html ICONS.play}</button>
       {:else}
         <img src={frameUrl} class:visible alt="" />
@@ -295,6 +296,7 @@
           <button type="button" class="ctl-btn" aria-label={t("enlarge")} onclick={enlarge}>{@html ICONS.enlarge}</button>
         </div>
       {/if}
+      <Chip {camera} onapply={applyPref} />
     {/if}
   </div>
 
