@@ -78,37 +78,33 @@
 
   async function onSignedIn() {
     overlay.set(null);
-    // Signing in *is* the decision to use compatibility mode, and the login
-    // just committed: compat is ready, and every camera whose only blocker
-    // was "not signed in" is being switched. Reflect both in the stores now,
-    // so the moment the overlay closes those cards are playable -- nothing on
-    // the page waits on the slow refreshes below, which only reconcile.
+    // Signing in *is* the decision to use compatibility mode. `compat_ready`
+    // is the one fact that may flip here without waiting on the add-on -- it
+    // is the login that just committed, and the account sheet's row and every
+    // camera's sign-in prompt read it. A camera's own publishable state is a
+    // different fact: it comes from the same `/api/cameras` answer that
+    // carries the RTSP address, and both must arrive together or a camera the
+    // page called "publishable" would open a settings sheet with no address.
+    // So the switches are written to the add-on and the list re-read, rather
+    // than the store being told the answer ahead of it -- the same way an
+    // official-path camera becomes publishable, which is where the address is
+    // guaranteed to accompany it. The sign-in's PUTs are awaited rather than
+    // fired alongside the refresh, so the refresh cannot race them.
     addonInfo.set({ ...get(addonInfo), compat_ready: true });
-    for (const c of $cameras) {
-      if (c.publishable) continue;
-      cameras.update((list) =>
-        list.map((cam) =>
-          cam.did === c.did
-            ? {
-                ...cam,
-                publishable: true,
-                stream_error: null,
-                settings: { ...(cam.settings ?? {}), path: "compat" },
-                override: { ...(cam.override ?? {}), path: "compat" },
-              }
-            : cam
+    await Promise.all(
+      get(cameras)
+        .filter((c) => !c.publishable)
+        .map((c) =>
+          api(`/api/cameras/${encodeURIComponent(c.did)}/settings`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: "compat" }),
+          }).catch(() => {
+            // A camera that fails to switch reports it on its own card once
+            // the reconciling refresh below brings the truth.
+          })
         )
-      );
-      api(`/api/cameras/${encodeURIComponent(c.did)}/settings`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: "compat" }),
-      }).catch(() => {
-        // A camera that fails to switch reports it on its own card once the
-        // reconciling refresh below brings the truth; the rest already show
-        // the switch.
-      });
-    }
+    );
     await loadInfo();
     await loadCameras();
     if (!did) overlay.set({ kind: "account" });

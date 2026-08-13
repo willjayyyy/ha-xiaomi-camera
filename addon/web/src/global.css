@@ -304,6 +304,9 @@
   /* A form's action buttons sit on the right, the primary last -- the
      browser-native prompt does the same, so this needs no explaining. */
   .compat-actions { justify-content: flex-end; }
+  /* A path switch is confirmed on the row it changes, and its buttons sit
+     on the right, the primary last -- same as the sign-in form's. */
+  .path-switch-actions { justify-content: flex-end; margin-top: var(--s2); }
   /* The captcha is a button: tapping it asks for a fresh one. */
   .compat-captcha {
     display: block; width: 100%; max-width: 300px; margin: 0 auto var(--s4);
