@@ -112,7 +112,7 @@
       <div class="setting-choices">
         {#if pathChoice !== null}
           <p class="hint">{t("pathSwitchWarning")}</p>
-          <div class="row" style="margin-top:8px">
+          <div class="row path-switch-actions">
             <button type="button" class="ghost" onclick={() => (pathChoice = null)}>{t("cancel")}</button>
             <button
               type="button"

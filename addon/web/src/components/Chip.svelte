@@ -39,6 +39,19 @@
   //: unthrottled (`fps: 0`) -- the one thing this control is opened to learn.
   let fpsLabel = $derived(prefs.fps ? `${prefs.fps} fps` : t("fpsCamera"));
 
+  //: The chip floats over a picture, with no chrome around it to gesture
+  //: toward, so the way out is a click anywhere outside -- same dismissal as
+  //: the language dropdown's, rather than a second tap on the chip itself.
+  let wrap;
+  $effect(() => {
+    if (!open) return;
+    const onDoc = (event) => {
+      if (wrap && !wrap.contains(event.target)) openChipDid.set(null);
+    };
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
+  });
+
   function toggle() {
     openChipDid.set(open ? null : camera.did);
   }
@@ -50,7 +63,7 @@
   }
 </script>
 
-<div class="chip-wrap">
+<div class="chip-wrap" bind:this={wrap}>
   <button type="button" class="chip" class:open aria-expanded={open} onclick={toggle}>{fpsLabel}</button>
   {#if open}
     <div class="chip-panel">
