@@ -83,9 +83,9 @@
     // one result, whether it was entered from a specific camera's action
     // button or from the account sheet -- the difference used to be that the
     // account entry left every camera showing "connect" again.
-    const toSwitch = $cameras.filter(
-      (c) => !c.publishable && c.paths?.compat === "pathCompatNoAuth"
-    );
+    // A camera with no usable path at all (the official path refused, no
+    // override) is exactly the camera compatibility mode exists for.
+    const toSwitch = $cameras.filter((c) => !c.publishable);
     // `compat_ready` just changed; `/api/info` and the camera list are
     // re-read so every consumer (the account sheet's row, every card's
     // blocked state) re-renders from the fresh stores -- the page updates

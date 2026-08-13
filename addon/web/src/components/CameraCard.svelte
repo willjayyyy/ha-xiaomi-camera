@@ -6,7 +6,7 @@
   // rendering fault rather than as a camera that needs attention.
   import { onDestroy } from "svelte";
   import { get } from "svelte/store";
-  import { overlay, enlargedSession, enlargedError } from "../lib/stores.js";
+  import { overlay, addonInfo, enlargedSession, enlargedError, enlargedFrame } from "../lib/stores.js";
   import { api, loadCameras, prefsFor, socketUrl } from "../lib/api.js";
   import { t } from "../lib/i18n.svelte.js";
   import { ICONS } from "../lib/icons.js";
@@ -15,10 +15,12 @@
   let { camera } = $props();
 
   // -------------------------------------------------------------------------
-  // Status pill and blocked state -- both derived from the camera the add-on
-  // sent, read from the `cameras` store, so either updates on its own when
-  // the store does (a path switch, a login that makes compat ready, a
-  // refresh). `compat_ready` is baked into `camera.paths` by the add-on.
+  // Status pill and blocked state -- pure functions of reactive inputs. The
+  // camera's own facts (`publishable`, `support`, `online`, `powered_on`,
+  // `stream_error`) come from the `cameras` store and update when the store
+  // does; whether compatibility mode is signed in comes from the global
+  // `addonInfo` store. A login flips that store and every card re-derives
+  // itself -- the page never relies on a re-fetch to reflect it.
   // -------------------------------------------------------------------------
 
   const SUPPORT_STATES = {
@@ -39,15 +41,19 @@
   );
 
   // Why this camera cannot show a picture, or `null` if it can. Three cases,
-  // told apart by the resolved path and the credential rather than by the
-  // model. Only cases that are real faults get the warning triangle; "not
-  // signed in" is a setup step, not one.
+  // told apart by whether it can stream at all and whether compatibility mode
+  // is signed in. "Can it stream" is a fact the add-on resolved at the last
+  // fetch (`publishable`, stable); "is compatibility mode signed in" is read
+  // from the global `addonInfo` store, so the moment a sign-in lands every
+  // card re-derives its state on its own -- no refresh, no re-fetch. Only
+  // cases that are real faults get the warning triangle; "not signed in" is a
+  // setup step, not one.
   let blocked = $derived(
     camera.publishable
       ? camera.stream_error
-        ? { text: camera.stream_error, icon: true, action: camera.paths.official === null ? "path-official" : null, label: "switchToOfficial" }
+        ? { text: camera.stream_error, icon: true, action: camera.support === "full" ? "path-official" : null, label: "switchToOfficial" }
         : null
-      : camera.paths.compat === null
+      : $addonInfo.compat_ready
         ? { reason: "pathOfficialUnsupported", icon: true, action: "path-compat", label: "compatConnect" }
         : { reason: "pathCompatNoAuth", icon: false, action: "compat-signin", label: "compatConnect" }
   );
@@ -64,7 +70,9 @@
   let failText = $state("");
   let badge = $state(null);    // a restated status pill ({cls,label}), or null
   let visible = $state(false); // the <img> fades in on its first frame
-  let previewImg;              // bind:this -- this card's <img>
+  // The latest frame's object URL, bound to the `<img>` -- the picture is a
+  // value the socket writes, not an element it pokes.
+  let frameUrl = $state("");
   let socket = null;
   let objectUrl = null;
   let timer = null;
@@ -84,12 +92,12 @@
 
   function show(blob) {
     const next = URL.createObjectURL(blob);
-    previewImg.src = next;
+    frameUrl = next;
     visible = true;
     // The enlarged preview, if this session is the one being shown large,
-    // mirrors the same frames.
+    // gets the same frame through its own store binding.
     const enlarged = get(enlargedSession);
-    if (enlarged?.enlargedImg) enlarged.enlargedImg.src = next;
+    if (enlarged?.did === camera.did) enlargedFrame.set(next);
     // Revoked only once its replacement is on screen, or the picture would
     // blink to nothing in between.
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -117,13 +125,14 @@
     // showing a frame that just went stale; it says so rather than sitting
     // frozen while the card underneath it changes.
     const enlarged = get(enlargedSession);
-    if (enlarged?.img === previewImg) enlargedError.set(text);
+    if (enlarged?.did === camera.did) enlargedError.set(text);
   }
 
   function cleanup() {
     if (timer) { clearTimeout(timer); timer = null; }
     if (socket) { socket.close(); socket = null; }
     if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+    frameUrl = "";
     failures = 0;
   }
 
@@ -202,8 +211,9 @@
     if (!visible) return;
     // Reuses the running session rather than restarting it -- tearing it down
     // here would cost a reconnection to look at a picture already on screen.
-    enlargedSession.set({ img: previewImg, enlargedImg: null });
+    enlargedSession.set({ did: camera.did });
     enlargedError.set(null);
+    enlargedFrame.set(frameUrl);
     overlay.set({ kind: "enlarge" });
   }
 
@@ -265,7 +275,7 @@
         <Chip {camera} onapply={applyPref} />
         <button type="button" class="play-btn" aria-label={t("play")} onclick={play}>{@html ICONS.play}</button>
       {:else}
-        <img bind:this={previewImg} class:visible alt="" />
+        <img src={frameUrl} class:visible alt="" />
         <div class="controls">
           <button type="button" class="ctl-btn" aria-label={t("stop")} onclick={stop}>{@html ICONS.stop}</button>
           <button type="button" class="ctl-btn" aria-label={t("enlarge")} onclick={enlarge}>{@html ICONS.enlarge}</button>

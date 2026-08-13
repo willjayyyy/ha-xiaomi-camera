@@ -207,12 +207,12 @@ def test_the_connection_row_reads_the_backends_resolved_path():
 
 def test_a_successful_signin_switches_the_cameras_that_needed_compat():
     """Signing in is the decision to use compatibility mode: every camera
-    whose only blocker was "not signed in" is switched, whichever entry the
-    login came from -- the account sheet and a camera's action button share
-    one login, one result."""
+    with no usable path is switched, whichever entry the login came from --
+    the account sheet and a camera's action button share one login, one
+    result."""
     signed_in = (SOURCE / "components" / "CompatSignIn.svelte").read_text()
     assert 'path: "compat"' in signed_in
-    assert 'paths?.compat === "pathCompatNoAuth"' in signed_in
+    assert "!c.publishable" in signed_in
 
 
 def test_compat_signin_posts_the_step_the_401_names():
@@ -243,10 +243,19 @@ def test_blocker_has_a_third_case_for_an_unbuildable_stream():
     """A camera can have a resolved path and still have no picture -- the
     add-on's own `stream_error`, not a translation key, is what this case
     shows, and it only offers a way back to Xiaomi official when that model
-    actually supports it."""
+    actually supports it (`support === "full"`, derived rather than read from
+    a baked snapshot)."""
     card = (SOURCE / "components" / "CameraCard.svelte").read_text()
     assert "stream_error" in card
-    assert "paths.official === null" in card
+    assert 'camera.support === "full"' in card
+
+
+def test_a_compat_sign_in_reaches_every_card_on_its_own():
+    """The card's blocked state is a function of the global sign-in store,
+    not of a snapshot baked into the camera data -- so the moment a sign-in
+    lands, every card re-derives without a refresh."""
+    card = (SOURCE / "components" / "CameraCard.svelte").read_text()
+    assert "$addonInfo.compat_ready" in card
 
 
 def test_the_chip_is_not_on_a_card_that_cannot_play():

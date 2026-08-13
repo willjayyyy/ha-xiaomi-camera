@@ -4,27 +4,24 @@
   // it down here would cost a reconnection to look at a picture that was
   // already on screen a moment ago.
   //
-  // The card's preview session keeps this component's `<img>` up to date
-  // alongside its own (see `CameraCard`), so the enlarged view is the same
-  // stream, not a second copy.
-  import { enlargedSession, enlargedError } from "../lib/stores.js";
+  // The card whose session is enlarged writes each frame to the
+  // `enlargedFrame` store (see `CameraCard.show`); this `<img>` binds to it,
+  // so the enlarged view is the same stream, not a second copy.
+  import { onDestroy } from "svelte";
+  import { enlargedSession, enlargedError, enlargedFrame } from "../lib/stores.js";
   import { t } from "../lib/i18n.svelte.js";
 
-  let img;
-
-  $effect(() => {
-    const session = $enlargedSession;
-    if (!session) return;
-    session.enlargedImg = img;
-    // Bring the latest frame across immediately rather than waiting for the
-    // next one.
-    if (session.img?.src) img.src = session.img.src;
-    return () => { session.enlargedImg = null; };
+  // Closing the overlay ends the enlarged view: the card stops feeding it and
+  // the stores return to "nothing enlarged".
+  onDestroy(() => {
+    enlargedSession.set(null);
+    enlargedError.set(null);
+    enlargedFrame.set(null);
   });
 </script>
 
 {#if $enlargedError}
   <div class="placeholder">{t("previewFailed")}</div>
 {:else}
-  <img bind:this={img} alt="" />
+  <img src={$enlargedFrame} alt="" />
 {/if}

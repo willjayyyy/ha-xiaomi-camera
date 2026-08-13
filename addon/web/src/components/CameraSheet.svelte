@@ -8,7 +8,7 @@
   // The connection row keeps its own confirmation (switching reconnects
   // everything watching the camera); confirming a switch folds the path into
   // the same pending set and saves it all at once.
-  import { cameras, showMessage } from "../lib/stores.js";
+  import { cameras, addonInfo, showMessage } from "../lib/stores.js";
   import { api, SETTINGS_FIELDS, displayUrl, loadCameras } from "../lib/api.js";
   import { t } from "../lib/i18n.svelte.js";
   import SettingRow from "./SettingRow.svelte";
@@ -60,9 +60,14 @@
     }
   }
 
+  // Which path is usable, derived from reactive facts rather than the
+  // snapshot the add-on baked in: whether the official path exists follows
+  // from the model's support level, and whether compatibility mode is
+  // available follows from the global sign-in store -- so a sign-in lands on
+  // an open sheet without it needing a refresh.
   let pathChoices = $derived([
-    { value: "official", label: t("pathOfficial"), disabled: camera?.paths?.official },
-    { value: "compat", label: t("pathCompat"), disabled: camera?.paths?.compat },
+    { value: "official", label: t("pathOfficial"), disabled: camera?.support === "full" ? null : "pathOfficialUnsupported" },
+    { value: "compat", label: t("pathCompat"), disabled: $addonInfo.compat_ready ? null : "pathCompatNoAuth" },
   ]);
   let pathSelected = $derived(pending.path ?? camera?.settings?.path);
   let pathReasons = $derived(pathChoices.filter((c) => c.disabled).map((c) => t(c.disabled)));
@@ -75,13 +80,11 @@
   );
 
   // Copy the RTSP address; the button flashes "Copied" for a moment.
-  let copiedTimer = null;
-  function copyAddress(btn) {
-    navigator.clipboard?.writeText(btn.dataset.copy).then(() => {
-      const original = btn.textContent;
-      btn.textContent = t("copied");
-      clearTimeout(copiedTimer);
-      copiedTimer = setTimeout(() => { btn.textContent = original; }, 1500);
+  let copied = $state(false);
+  function copyAddress() {
+    navigator.clipboard?.writeText(address).then(() => {
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
     }).catch(() => { /* clipboard unavailable over plain http; ignore */ });
   }
 </script>
@@ -132,12 +135,7 @@
   <span class="setting-group-label">{t("addressGroup")}</span>
   <div class="row">
     <code>{address}</code>
-    <button
-      type="button"
-      class="copy"
-      data-copy={address}
-      onclick={(e) => copyAddress(e.currentTarget)}
-    >{t("copy")}</button>
+    <button type="button" class="copy" onclick={copyAddress}>{copied ? t("copied") : t("copy")}</button>
   </div>
   {#if camera.rtsp_requires_credentials}
     <p class="hint">{t("credentialsHint")}</p>

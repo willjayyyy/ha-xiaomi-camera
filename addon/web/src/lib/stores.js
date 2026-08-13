@@ -40,10 +40,14 @@ export const message = writable(null);
 //: closed the others.
 export const openChipDid = writable(null);
 
-//: The camera currently shown enlarged (its preview session), or `null`.
-//: Read by the enlarged preview and by the card whose session it is, so the
-//: two stay in agreement about which picture is where.
+//: The camera currently shown enlarged, as `{ did }`, or `null`. Read by the
+//: enlarged preview and by the card whose session it is, so the two stay in
+//: agreement about which picture is where.
 export const enlargedSession = writable(null);
+
+//: The enlarged preview's latest frame object URL -- bound by the enlarged
+//: `<img>`, written by the card whose session is enlarged.
+export const enlargedFrame = writable(null);
 
 //: Why the enlarged preview has no picture, or `null` while it streams.
 export const enlargedError = writable(null);
