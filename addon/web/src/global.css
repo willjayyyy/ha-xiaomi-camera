@@ -473,11 +473,17 @@
     box-shadow: var(--lift); padding: var(--s3);
   }
   .chip-panel[hidden] { display: none; }
-  /* The chip's options size to their own labels rather than stretching to
-     equal thirds: "Camera's rate" is much longer than "2", and an
-     equal-flex row would squash the long label until it wrapped. */
-  .chip-panel .seg { margin-top: var(--s1); }
-  .chip-panel .seg button { flex: 0 1 auto; }
+  /* The chip's options are standalone pills, not a segmented track: this
+     panel floats on a picture, where a second sunken container reads as a
+     box someone forgot to close. Each option is its own bordered pill, the
+     one in effect filled with the accent. */
+  .chip-panel .seg {
+    margin-top: var(--s1); background: none; padding: 0; min-height: 0; gap: var(--s2);
+  }
+  .chip-panel .seg button { flex: 0 1 auto; background: var(--surface); border: 1px solid var(--hairline); }
+  .chip-panel .seg button[aria-pressed="true"] {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
   .chip-label { display: block; font-size: 12px; color: var(--ink-3); margin: var(--s2) 0 0; }
   .chip-label:first-child { margin-top: 0; }
   /* Gated on a real pointer, same reasoning as `.preview .controls` above:
