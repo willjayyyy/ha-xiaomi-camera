@@ -93,9 +93,18 @@
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 24px;
     padding: 44px 36px 36px; box-shadow: var(--lift);
   }
-  /* The language switcher lives on the card, top right -- a normal place
-     for it, not a stray sibling floating beside the box. */
-  .signin-lang { position: absolute; top: var(--s4); right: var(--s4); }
+  /* The language switcher lives on the card, top right -- a normal place for
+     it, not a stray sibling floating beside the box. Rendered as one pill
+     with both options inside, so the pair never reads as split. */
+  .signin-lang {
+    position: absolute; top: var(--s4); right: var(--s4);
+    display: flex; gap: var(--s1);
+    background: var(--sunken); border-radius: var(--r-pill); padding: 2px;
+  }
+  .signin-lang .lang button { border-radius: var(--r-pill); }
+  .signin-lang .lang button[aria-pressed="true"] {
+    background: var(--surface); color: var(--accent); box-shadow: var(--lift);
+  }
   .signin-mark {
     width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
     background: var(--accent-wash); color: var(--accent);
@@ -415,13 +424,12 @@
     margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
   }
   .setting-choices { padding: 0 var(--s4) var(--s4); }
-  /* The defaults sheet's choices hug their labels rather than stretching to
-     fill the sheet's width. Its rows carry no "Follow default" option, so a
-     two-option field would otherwise paint two enormous buttons; the camera
-     sheet's rows (which do prepend "Follow default") have three or four and
-     stay full width -- this only touches the defaults. */
-  .defaults-sheet .seg { width: max-content; max-width: 100%; }
-  .defaults-sheet .seg button { flex: 0 1 auto; min-width: 88px; }
+  /* The defaults sheet's choices span the full row like the camera sheet's,
+     but its fields carry no "Follow default" option, so a two-option control
+     would otherwise paint two enormous buttons. Cap the buttons at a
+     reasonable width and centre them in the full-width track. */
+  .defaults-sheet .seg { justify-content: center; }
+  .defaults-sheet .seg button { flex: 1 1 0; max-width: 120px; }
   /* The sheet's Save button: settings are applied together, one request to
      the add-on for however many fields changed. Full width, a step the eye
      lands on at the bottom of the sheet. */

@@ -50,15 +50,18 @@
   // setup step, not one.
   let blocked = $derived(
     camera.publishable
-      ? camera.stream_error
-        // A compat camera keeps its path (and its entity) when the credential
-        // is gone, so it can still report "not signed in" -- which is the
-        // actual cause, not the stream it cannot build. That is a prompt to
-        // sign in again, not an error to stare at.
-        ? !$addonInfo.compat_ready && camera.settings?.path === "compat"
+      ? camera.settings?.path === "compat"
+        // A compat camera's blocked state is a pure function of the
+        // credential: missing it, prompt to sign in; present it, play. The
+        // stream error from before the credential existed is stale the
+        // moment it exists again, so it cannot gate the card -- a live
+        // failure is reported by the preview instead of a stale snapshot.
+        ? !$addonInfo.compat_ready
           ? { reason: "pathCompatNoAuth", icon: false, action: "compat-signin", label: "compatConnect" }
-          : { text: camera.stream_error, icon: true, action: camera.support === "full" ? "path-official" : null, label: "switchToOfficial" }
-        : null
+          : null
+        : camera.stream_error
+          ? { text: camera.stream_error, icon: true, action: camera.support === "full" ? "path-official" : null, label: "switchToOfficial" }
+          : null
       : $addonInfo.compat_ready
         // The official path is refused for this model; the disabled option
         // in the connection row says that on its own, so the card shows only

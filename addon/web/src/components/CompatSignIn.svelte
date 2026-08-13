@@ -97,6 +97,25 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ path: "compat" }),
       });
+      if (response.ok) {
+        // The switch committed; the card becomes playable from this store
+        // state, not from a slow re-fetch of every camera. The full
+        // `loadCameras` below still runs to reconcile everything else, but
+        // nothing on the page waits on it.
+        cameras.update((list) =>
+          list.map((cam) =>
+            cam.did === c.did
+              ? {
+                  ...cam,
+                  publishable: true,
+                  stream_error: null,
+                  settings: { ...(cam.settings ?? {}), path: "compat" },
+                  override: { ...(cam.override ?? {}), path: "compat" },
+                }
+              : cam
+          )
+        );
+      }
       // A camera that fails to switch reports it on its own card; the rest
       // still switch.
     }
