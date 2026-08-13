@@ -64,7 +64,7 @@
 </script>
 
 <span class="setting-group-label">{t("defaultsHeading")}</span>
-<div class="settings-list">
+<div class="settings-list defaults-sheet">
   {#each SETTINGS_FIELDS as field (field.key)}
     <SettingRow
       {field}

@@ -88,10 +88,14 @@
     padding: 20px;
   }
   .signin-card {
+    position: relative;
     width: 100%; max-width: 400px; text-align: center;
     background: var(--surface); border: 1px solid var(--hairline); border-radius: 24px;
     padding: 44px 36px 36px; box-shadow: var(--lift);
   }
+  /* The language switcher lives on the card, top right -- a normal place
+     for it, not a stray sibling floating beside the box. */
+  .signin-lang { position: absolute; top: var(--s4); right: var(--s4); }
   .signin-mark {
     width: 64px; height: 64px; margin: 0 auto 24px; border-radius: 22px;
     background: var(--accent-wash); color: var(--accent);
@@ -290,6 +294,9 @@
     display: block; margin-bottom: var(--s2);
     font-size: .82rem; font-weight: 500; color: var(--ink-2);
   }
+  /* A form's action buttons sit on the right, the primary last -- the
+     browser-native prompt does the same, so this needs no explaining. */
+  .compat-actions { justify-content: flex-end; }
   /* The captcha is a button: tapping it asks for a fresh one. */
   .compat-captcha {
     display: block; width: 100%; max-width: 300px; margin: 0 auto var(--s4);
@@ -408,13 +415,13 @@
     margin-left: var(--s2); color: var(--ink-2); font-size: .8rem; flex: none;
   }
   .setting-choices { padding: 0 var(--s4) var(--s4); }
-  /* The choices hug their labels rather than stretching to fill the sheet's
-     width: with two options a full-width segmented control paints two huge
-     buttons, while the camera sheet's (which prepend "Follow default") has
-     three or four. One button size on every sheet -- the camera's, which is
-     the populated one. */
-  .setting-choices .seg { width: max-content; max-width: 100%; }
-  .setting-choices .seg button { flex: 0 1 auto; min-width: 88px; }
+  /* The defaults sheet's choices hug their labels rather than stretching to
+     fill the sheet's width. Its rows carry no "Follow default" option, so a
+     two-option field would otherwise paint two enormous buttons; the camera
+     sheet's rows (which do prepend "Follow default") have three or four and
+     stay full width -- this only touches the defaults. */
+  .defaults-sheet .seg { width: max-content; max-width: 100%; }
+  .defaults-sheet .seg button { flex: 0 1 auto; min-width: 88px; }
   /* The sheet's Save button: settings are applied together, one request to
      the add-on for however many fields changed. Full width, a step the eye
      lands on at the bottom of the sheet. */

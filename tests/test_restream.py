@@ -633,6 +633,9 @@ class TestGo2rtcSpawnArguments:
         monkeypatch.setattr(restream, "_STATE_PATH", state_path)
         monkeypatch.setattr(restream, "_CONFIG_PATH", config_path)
         monkeypatch.setattr(restream, "_STOP_TIMEOUT", 0.05)
+        # This test is about the spawn arguments, not go2rtc's readiness --
+        # skip the start-up wait so `async_start` returns immediately.
+        monkeypatch.setattr(restream, "_STARTUP_READY_ATTEMPTS", 0)
 
         captured: list[str] = []
 

@@ -40,6 +40,10 @@ class Go2rtcApi:
     def _base(self) -> str:
         return f"http://{LOOPBACK}:{GO2RTC_API_PORT}/api/streams"
 
+    async def ready(self) -> bool:
+        """Whether go2rtc is answering its API at all."""
+        return await self._call("GET", self._base)
+
     async def set_stream(self, name: str, src: str) -> bool:
         """Point a stream at a source. ``False`` means: restart instead.
 

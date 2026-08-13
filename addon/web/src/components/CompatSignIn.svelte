@@ -147,7 +147,7 @@
   {/if}
 
   <p class="signin-error" hidden={!error}>{error}</p>
-  <div class="row">
+  <div class="row compat-actions">
     <button type="button" class="ghost" onclick={cancel}>{t("cancel")}</button>
     <button type="submit" class="primary" disabled={busy}>{t("signIn")}</button>
   </div>

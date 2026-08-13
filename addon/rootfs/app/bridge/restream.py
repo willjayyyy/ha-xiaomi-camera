@@ -91,6 +91,14 @@ _OWNER_READ_WRITE = 0o600
 #: short enough that a transient failure self-heals before anyone notices.
 _RESTART_DELAY_SECONDS = 5.0
 
+#: How long to wait for go2rtc to answer its API after starting it. It boots
+#: in a fraction of a second; this is a margin, not a deadline the design
+#: leans on -- a longer wait would only delay every start-up by its full
+#: length. The start contract is "go2rtc is up", so callers that read from
+#: it (compat_ready) never race the boot.
+_STARTUP_READY_ATTEMPTS = 20
+_STARTUP_READY_INTERVAL = 0.25
+
 #: How long to wait for a stopped go2rtc to report its exit, applied after the
 #: polite signal and again after the fatal one. See the same constant in
 #: `bridge.stills`: killing a process guarantees it dies, not that its exit
@@ -782,6 +790,18 @@ class Restreamer:
     async def async_start(self) -> None:
         if self._supervisor is None:
             self._supervisor = asyncio.create_task(self._supervise())
+        # The start contract is "go2rtc is up": wait until it answers its API,
+        # so a caller that reads from it (compat_ready) never races the boot
+        # and reads a credential that is actually there as absent.
+        for _ in range(_STARTUP_READY_ATTEMPTS):
+            if await self._api.ready():
+                return
+            await asyncio.sleep(_STARTUP_READY_INTERVAL)
+        _LOGGER.error(
+            "go2rtc did not answer its API after %.1fs; compatibility mode "
+            "will read as not signed in until a later refresh",
+            _STARTUP_READY_ATTEMPTS * _STARTUP_READY_INTERVAL,
+        )
 
     async def async_restart(self) -> None:
         await self._async_terminate()

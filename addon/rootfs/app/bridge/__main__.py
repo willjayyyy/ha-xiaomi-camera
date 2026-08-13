@@ -147,6 +147,14 @@ class Bridge:
 
     async def async_start(self) -> None:
         await self._api.async_start()
+
+        # go2rtc is a subprocess this bridge starts, so at start-up it is not
+        # up yet -- and `compat_ready` is read from it. `Restreamer.async_start`
+        # does not return until go2rtc answers its API, so the read below
+        # never races the boot and reports a credential that persisted as
+        # missing.
+        await self._restreamer.async_start()
+
         self._discovery_uuid = await async_announce()
 
         # Compatibility mode's credential lives in go2rtc, independent of

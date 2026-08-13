@@ -76,7 +76,7 @@ _SCALE = {
     "48px",
     "56px",
     "64px",  # sign-in mark diameter
-    "88px",  # settings-row segmented button minimum width (one size per sheet)
+    "88px",  # defaults-sheet segmented button min width (camera sheet stays full width)
     "300px",  # camera grid minimum column width
     "400px",  # sign-in card max-width
     "420px",  # settings sheet max-width
