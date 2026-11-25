@@ -33,6 +33,7 @@ hassio_api: true
 # Credentials and cached device state live in /data, which Supervisor persists
 # across add-on restarts and updates.
 options:
+  cloud_server: cn
   access_mode: local
   rtsp_username: ""
   rtsp_password: ""
@@ -40,6 +41,7 @@ options:
   web_password: ""
 
 schema:
+  cloud_server: list(cn|i2)
   # local: bind to loopback only. Home Assistant reaches the streams because it
   #        shares the host network namespace; nothing else on the LAN can.
   # lan:   expose to the local network for external NVRs. Requires credentials.

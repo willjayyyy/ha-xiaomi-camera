@@ -1,5 +1,8 @@
 ---
 configuration:
+  cloud_server:
+    name: 小米云区域
+    description: 选择小米家庭使用的区域（cn 为中国，i2 为印度）。更改后重启加载项。
   access_mode:
     name: 画面访问范围
     description: >-

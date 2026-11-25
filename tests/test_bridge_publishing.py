@@ -24,7 +24,19 @@ from types import SimpleNamespace
 
 from bridge.__main__ import Bridge
 from bridge.cameras import CameraDescription
+from bridge.config import AccessMode, Options
 from bridge.paths import VideoPath
+
+
+def test_bridge_uses_configured_cloud_region() -> None:
+    options = Options(
+        access_mode=AccessMode.LOCAL,
+        rtsp_username="",
+        rtsp_password="",
+        log_level="info",
+        cloud_server="i2",
+    )
+    assert Bridge(options)._account.cloud_server == "i2"
 
 
 def _description(did: str, support: str) -> CameraDescription:
@@ -189,11 +201,11 @@ async def test_compat_urls_are_fetched_only_when_a_camera_needs_them(
 
     restreamer2 = _FakeRestreamer()
     bridge2 = _bridge_with(_FakeRegistry(), restreamer2, _OneCompat())
-    bridge2._account.cloud_server = "cn"
+    bridge2._account.cloud_server = "i2"
 
     await bridge2.async_refresh()
 
-    assert calls == ["cn"]
+    assert calls == ["i2"]
 
 
 async def test_the_keyframe_hint_is_unknown_for_a_camera_off_the_official_path() -> (

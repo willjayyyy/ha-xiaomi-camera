@@ -28,7 +28,7 @@ from .config import (
     data_is_ephemeral,
     load_options,
 )
-from .const import CACHE_DIR, DATA_DIR, DEFAULT_CLOUD_SERVER, SETTINGS_FILE
+from .const import CACHE_DIR, DATA_DIR, SETTINGS_FILE
 from .discovery import async_announce, async_withdraw
 from .paths import VideoPath
 from .redact import install as install_redaction
@@ -92,7 +92,7 @@ class Bridge:
         #: Compared by identity so an unlink/relink cycle rebuilds them.
         self._bound_client = None
         self._store = CredentialStore()
-        self._account = AccountManager(self._store, cloud_server=DEFAULT_CLOUD_SERVER)
+        self._account = AccountManager(self._store, cloud_server=options.cloud_server)
         self._registry: CameraRegistry | None = None
         self._sessions: SessionManager | None = None
         self._restreamer = Restreamer(options)

@@ -25,6 +25,16 @@ from bridge.config import (
 _ADDON_DIR = Path(__file__).resolve().parent.parent / "addon"
 
 
+def test_cloud_region_defaults_and_india(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("XIAOMI_CAMERA_CLOUD_SERVER", raising=False)
+    assert load_options(write_options(tmp_path)).cloud_server == "cn"
+    assert load_options(write_options(tmp_path, cloud_server="i2")).cloud_server == "i2"
+    with pytest.raises(ValueError, match="cloud_server"):
+        load_options(write_options(tmp_path, cloud_server="invalid"))
+    monkeypatch.setenv("XIAOMI_CAMERA_CLOUD_SERVER", "i2")
+    assert load_options(write_options(tmp_path, cloud_server="cn")).cloud_server == "i2"
+
+
 def write_options(tmp_path: Path, **overrides: object) -> Path:
     payload = {
         "access_mode": "local",
