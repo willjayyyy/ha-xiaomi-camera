@@ -1,5 +1,8 @@
 ---
 configuration:
+  cloud_server:
+    name: Xiaomi cloud region
+    description: Select the region used in the Xiaomi Home app (cn for China, i2 for India). Restart the add-on after changing it.
   access_mode:
     name: Stream access
     description: >-

@@ -17,7 +17,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from .const import ALL_INTERFACES, DATA_DIR, LOOPBACK, OPTIONS_FILE
+from .const import (
+    ALL_INTERFACES,
+    DATA_DIR,
+    DEFAULT_CLOUD_SERVER,
+    LOOPBACK,
+    OPTIONS_FILE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -116,6 +122,7 @@ class Options:
     log_level: str
     web_password: str = ""
     supervised: bool = True
+    cloud_server: str = DEFAULT_CLOUD_SERVER
 
     @property
     def bind_address(self) -> str:
@@ -188,6 +195,7 @@ _DEFAULTS: dict[str, object] = {
     "rtsp_password": "",
     "log_level": "info",
     "web_password": "",
+    "cloud_server": DEFAULT_CLOUD_SERVER,
 }
 
 
@@ -256,6 +264,9 @@ def load_options(
             LOG_LEVELS, raw["log_level"], "log_level", ", ".join(LOG_LEVELS)
         ),
         web_password=str(raw["web_password"] or ""),
+        cloud_server=_choice(
+            {"cn", "i2"}, raw["cloud_server"], "cloud_server", "cn or i2"
+        ),
         supervised=is_supervised(file_path) if supervised is None else supervised,
     )
     options.validate()

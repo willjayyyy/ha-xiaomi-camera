@@ -65,6 +65,10 @@ After signing in, Xiaomi redirects your browser to an address that **will not
 open**. A blank page or an error there is expected. Copy the full address from
 the address bar and paste it into the add-on page to complete sign-in.
 
+For an India-region Xiaomi account, set the add-on's Xiaomi cloud region to
+`i2` in its configuration and restart the add-on. Existing installations default
+to `cn` (China).
+
 ## Choosing streams
 
 Each camera can publish several versions of the same picture. Pick per camera
@@ -246,7 +250,9 @@ uninstall the add-on, which clears it along with the add-on's other data.
   codec is whatever the camera sends, known only once a session starts. Every
   other variant is re-encoded to its named codec, and only while something is
   watching.
-- Only Xiaomi's China account region has been tested.
+- India-region discovery and compatibility-mode streaming have also been tested
+  with a Mi Home Security Camera Basic 1080P (mijia.camera.v3); other devices and
+  regions may behave differently.
 - No two-way audio, no pan/tilt control, no SD-card playback.
 
 ## Troubleshooting
